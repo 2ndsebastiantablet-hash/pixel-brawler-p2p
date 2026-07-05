@@ -1,0 +1,23 @@
+{
+  "name": "pixel-brawler-p2p",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && vitest run",
+    "test": "vitest run",
+    "worker:dev": "wrangler dev -c wrangler.toml --local --port 8787",
+    "worker:deploy": "wrangler deploy -c wrangler.toml"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.107.0"
+  }
+}
