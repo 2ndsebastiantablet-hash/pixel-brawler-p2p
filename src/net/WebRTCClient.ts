@@ -7,6 +7,7 @@ import {
 } from "./NetTypes";
 import { HostOfferCoordinator } from "./OfferCoordinator";
 import { SignalingClient } from "./SignalingClient";
+import type { PlayerProfile } from "../ui/Profile";
 
 export type ConnectionStatus =
   | "Offline"
@@ -20,10 +21,14 @@ interface WebRTCHandlers {
   onStatus: (status: ConnectionStatus) => void;
   onRemoteState: (state: PlayerNetState) => void;
   onPeerLeft: (peerId: string) => void;
+  onLobby: (message: Extract<SignalMessage, { type: "lobby" }>) => void;
+  onKicked: (reason: string) => void;
+  onBanned: (reason: string) => void;
+  onServerClosed: (reason: string) => void;
 }
 
 export class WebRTCClient {
-  readonly peerId = crypto.randomUUID();
+  readonly peerId = createPeerId();
   private peerConnection: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
   private signalingSocket: WebSocket | null = null;
@@ -33,6 +38,7 @@ export class WebRTCClient {
 
   constructor(
     private readonly signaling: SignalingClient,
+    private readonly profile: PlayerProfile,
     private readonly handlers: WebRTCHandlers,
   ) {}
 
@@ -40,12 +46,7 @@ export class WebRTCClient {
     this.isHost = true;
     this.hostOfferCoordinator.reset();
     this.handlers.onStatus("Waiting for peer");
-    this.createPeerConnection();
-    this.dataChannel = this.peerConnection?.createDataChannel("player-state", {
-      ordered: false,
-      maxRetransmits: 0,
-    }) ?? null;
-    this.configureDataChannel();
+    this.createHostPeerConnection();
     await this.connectSignaling(roomCode);
   }
 
@@ -62,6 +63,19 @@ export class WebRTCClient {
     }
   }
 
+  kickPeer(peerId: string): void {
+    this.sendSignal({ type: "kick", targetPeerId: peerId, reason: "Kicked by host" });
+  }
+
+  banPeer(clientId: string): void {
+    this.sendSignal({ type: "ban", targetClientId: clientId, reason: "Banned by host" });
+  }
+
+  closeServer(): void {
+    this.sendSignal({ type: "server-closed", reason: "Server closed by host" });
+    this.close();
+  }
+
   close(): void {
     this.dataChannel?.close();
     this.peerConnection?.close();
@@ -75,8 +89,19 @@ export class WebRTCClient {
     this.handlers.onStatus("Offline");
   }
 
+  private createHostPeerConnection(): void {
+    this.createPeerConnection();
+    this.dataChannel = this.peerConnection?.createDataChannel("player-state", {
+      ordered: false,
+      maxRetransmits: 0,
+    }) ?? null;
+    this.configureDataChannel();
+  }
+
   private createPeerConnection(): void {
+    this.dataChannel?.close();
     this.peerConnection?.close();
+    this.dataChannel = null;
     this.peerConnection = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -113,7 +138,11 @@ export class WebRTCClient {
       console.info("WebRTC data channel open");
       this.handlers.onStatus("Connected");
     });
-    this.dataChannel.addEventListener("close", () => this.handlers.onStatus("Disconnected / failed"));
+    this.dataChannel.addEventListener("close", () => {
+      if (this.signalingSocket?.readyState === WebSocket.OPEN) {
+        this.handlers.onStatus("Disconnected / failed");
+      }
+    });
     this.dataChannel.addEventListener("message", (event) => {
       try {
         const packet = JSON.parse(String(event.data));
@@ -127,7 +156,7 @@ export class WebRTCClient {
   }
 
   private async connectSignaling(roomCode: string): Promise<void> {
-    this.signalingSocket = this.signaling.connect(roomCode, this.peerId, (message) => {
+    this.signalingSocket = this.signaling.connect(roomCode, this.peerId, this.profile, (message) => {
       void this.handleSignal(message);
     });
 
@@ -159,6 +188,29 @@ export class WebRTCClient {
   }
 
   private async handleSignal(message: SignalMessage): Promise<void> {
+    if (message.type === "kick") {
+      if (!message.targetPeerId || message.targetPeerId === this.peerId || message.targetClientId === this.profile.clientId) {
+        const reason = message.reason ?? "Kicked by host";
+        this.close();
+        this.handlers.onKicked(reason);
+      }
+      return;
+    }
+    if (message.type === "ban") {
+      if (!message.targetClientId || message.targetClientId === this.profile.clientId || message.targetPeerId === this.peerId) {
+        const reason = message.reason ?? "Banned by host";
+        this.close();
+        this.handlers.onBanned(reason);
+      }
+      return;
+    }
+    if (message.type === "server-closed") {
+      const reason = message.reason ?? "Server closed";
+      this.close();
+      this.handlers.onServerClosed(reason);
+      return;
+    }
+
     if (!this.peerConnection) {
       return;
     }
@@ -178,6 +230,7 @@ export class WebRTCClient {
         await this.addIce(message.candidate);
       } else if (message.type === "lobby") {
         const peerCount = message.peers.length;
+        this.handlers.onLobby(message);
         this.handlers.onStatus(peerCount >= 2 ? "Connecting" : "Waiting for peer");
         if (this.hostOfferCoordinator.shouldCreateOffer(this.isHost, peerCount)) {
           await this.createAndSendOffer();
@@ -185,7 +238,12 @@ export class WebRTCClient {
       } else if (message.type === "peer-left") {
         this.hostOfferCoordinator.reset();
         this.handlers.onPeerLeft(message.peerId);
-        this.handlers.onStatus("Disconnected / failed");
+        if (this.isHost) {
+          this.createHostPeerConnection();
+          this.handlers.onStatus("Waiting for peer");
+        } else {
+          this.handlers.onStatus("Disconnected / failed");
+        }
       } else if (message.type === "error") {
         console.warn("Signaling error:", message.message);
         this.handlers.onStatus("Disconnected / failed");
@@ -217,4 +275,11 @@ export class WebRTCClient {
       this.signalingSocket.send(JSON.stringify(message));
     }
   }
+}
+
+function createPeerId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `peer-${Math.random().toString(36).slice(2, 12)}`;
 }

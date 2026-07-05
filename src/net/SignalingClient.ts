@@ -1,18 +1,30 @@
 import type { RoomSummary, SignalMessage } from "./NetTypes";
+import type { PlayerProfile } from "../ui/Profile";
 
-interface CreateRoomResponse {
+export interface CreateRoomOptions {
+  visibility: "private" | "public";
+  serverName?: string;
+  hostName: string;
+  hostClientId: string;
+  bannedClientIds: string[];
+}
+
+export interface CreateRoomResponse {
   roomCode: string;
   visibility: "private" | "public";
+  serverName: string;
+  hostName: string;
+  hostClientId: string;
 }
 
 export class SignalingClient {
   constructor(private readonly baseUrl = getDefaultSignalingUrl()) {}
 
-  async createRoom(visibility: "private" | "public"): Promise<CreateRoomResponse> {
+  async createRoom(options: CreateRoomOptions): Promise<CreateRoomResponse> {
     const response = await fetch(`${this.baseUrl}/rooms`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ visibility }),
+      body: JSON.stringify(options),
     });
     if (!response.ok) {
       throw new Error(`Room creation failed: ${response.status} ${response.statusText}`);
@@ -29,9 +41,17 @@ export class SignalingClient {
     return payload.rooms;
   }
 
-  connect(roomCode: string, peerId: string, onMessage: (message: SignalMessage) => void): WebSocket {
+  connect(
+    roomCode: string,
+    peerId: string,
+    profile: PlayerProfile,
+    onMessage: (message: SignalMessage) => void,
+  ): WebSocket {
     const url = new URL(`${toWsBase(this.baseUrl)}/rooms/${encodeURIComponent(roomCode)}/ws`);
     url.searchParams.set("peer", peerId);
+    url.searchParams.set("clientId", profile.clientId);
+    url.searchParams.set("name", profile.name);
+    url.searchParams.set("color", profile.color);
     const socket = new WebSocket(url);
 
     socket.addEventListener("message", (event) => {

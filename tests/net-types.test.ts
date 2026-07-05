@@ -10,7 +10,9 @@ describe("network player packets", () => {
   it("round-trips compact player state packets", () => {
     const state: PlayerNetState = {
       id: "peer-a",
-      label: "P2",
+      clientId: "client-a",
+      name: "Azure",
+      color: "#00d8ff",
       x: 12.345,
       y: 87.654,
       velocityX: 456.7,
@@ -18,13 +20,30 @@ describe("network player packets", () => {
       facing: -1,
       grounded: false,
       sliding: true,
+      action: "airDive",
       sequence: 42,
       sentAt: 1000,
     };
 
     const packet = encodePlayerStatePacket(state);
     expect(packet.t).toBe("s");
-    expect(Object.keys(packet).sort()).toEqual(["f", "g", "id", "l", "seq", "sl", "t", "ts", "vx", "vy", "x", "y"]);
+    expect(Object.keys(packet).sort()).toEqual([
+      "a",
+      "c",
+      "cid",
+      "f",
+      "g",
+      "id",
+      "n",
+      "seq",
+      "sl",
+      "t",
+      "ts",
+      "vx",
+      "vy",
+      "x",
+      "y",
+    ]);
 
     expect(decodePlayerStatePacket(packet)).toEqual({
       ...state,
@@ -38,7 +57,9 @@ describe("network player packets", () => {
   it("interpolates remote state toward the newest packet", () => {
     const current: PlayerNetState = {
       id: "peer-a",
-      label: "P2",
+      clientId: "client-a",
+      name: "Azure",
+      color: "#00d8ff",
       x: 0,
       y: 10,
       velocityX: 0,
@@ -46,6 +67,7 @@ describe("network player packets", () => {
       facing: 1,
       grounded: true,
       sliding: false,
+      action: "idle",
       sequence: 1,
       sentAt: 1000,
     };

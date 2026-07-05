@@ -26,6 +26,7 @@ export class InputController {
       right: this.held.has("KeyD"),
       up: this.held.has("KeyW"),
       down: this.held.has("KeyS"),
+      downPressed: this.pressed.has("KeyS"),
       jumpPressed: this.pressed.has("Space"),
       jumpHeld: this.held.has("Space"),
       dashPressed: this.pressed.has("ShiftLeft") || this.pressed.has("ShiftRight"),

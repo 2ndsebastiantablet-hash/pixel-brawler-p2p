@@ -11,6 +11,7 @@ const neutralInput: InputFrame = {
   right: false,
   up: false,
   down: false,
+  downPressed: false,
   jumpPressed: false,
   jumpHeld: false,
   dashPressed: false,
@@ -87,5 +88,66 @@ describe("player physics", () => {
     expect(sliding.sliding).toBe(true);
     expect(sliding.slideTimer).toBeGreaterThan(0);
     expect(sliding.velocityX).toBe(DEFAULT_PHYSICS.slideSpeed);
+  });
+
+  it("prioritizes S plus Shift on the ground as a longer low slide", () => {
+    const player = createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height);
+
+    const lowSliding = stepPlayer(player, { ...neutralInput, down: true, downPressed: true, dashPressed: true }, 1 / 60);
+
+    expect(lowSliding.action).toBe("lowSlide");
+    expect(lowSliding.sliding).toBe(true);
+    expect(lowSliding.slideTimer).toBe(DEFAULT_PHYSICS.lowSlideDuration);
+    expect(lowSliding.velocityX).toBe(DEFAULT_PHYSICS.lowSlideSpeed);
+  });
+
+  it("ducks on the ground with S and slows horizontal movement", () => {
+    const player = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      velocityX: DEFAULT_PHYSICS.maxRunSpeed,
+    };
+
+    const ducking = stepPlayer(player, { ...neutralInput, down: true, right: true }, 1 / 60);
+
+    expect(ducking.action).toBe("duck");
+    expect(ducking.ducking).toBe(true);
+    expect(ducking.velocityX).toBeLessThan(DEFAULT_PHYSICS.maxRunSpeed);
+  });
+
+  it("uses Shift in the air as a quick diagonal air dive", () => {
+    const airborne = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 120),
+      grounded: false,
+      velocityY: 0,
+      jumpsUsed: 1,
+    };
+
+    const diving = stepPlayer(airborne, { ...neutralInput, right: true, dashPressed: true }, 1 / 60);
+
+    expect(diving.action).toBe("airDive");
+    expect(diving.airDiving).toBe(true);
+    expect(diving.airDiveUsed).toBe(true);
+    expect(diving.velocityX).toBeGreaterThan(DEFAULT_PHYSICS.maxRunSpeed);
+    expect(diving.velocityY).toBe(DEFAULT_PHYSICS.airDiveVelocityY);
+  });
+
+  it("uses S in the air as a ground slam and recovers on landing", () => {
+    const airborne = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 12),
+      grounded: false,
+      velocityY: 0,
+      jumpsUsed: 1,
+    };
+
+    const slamming = stepPlayer(airborne, { ...neutralInput, down: true, downPressed: true }, 1 / 60);
+    expect(slamming.action).toBe("groundSlam");
+    expect(slamming.groundSlamming).toBe(true);
+    expect(slamming.velocityY).toBe(DEFAULT_PHYSICS.groundSlamVelocity);
+
+    const landed = stepPlayer(slamming, neutralInput, 1 / 30);
+    expect(landed.grounded).toBe(true);
+    expect(landed.action).toBe("slamLanding");
+    expect(landed.justSlamLanded).toBe(true);
+    expect(landed.slamRecoveryTimer).toBeGreaterThan(0);
   });
 });
