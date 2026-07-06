@@ -1,9 +1,9 @@
 import type { Facing, PlayerAction } from "../game/Physics";
 import type { StatusEffectId } from "../game/combat/StatusEffects";
 import type { WeaponId } from "../game/combat/Weapon";
-import { MAX_ROOM_PLAYERS } from "./RoomConfig";
+import { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS } from "./RoomConfig";
 
-export { MAX_ROOM_PLAYERS };
+export { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS };
 
 export interface PlayerNetState {
   id: string;
@@ -24,6 +24,7 @@ export interface PlayerNetState {
   hp?: number;
   statuses?: StatusEffectId[];
   respawnTimer?: number;
+  lastActivityAt?: number;
 }
 
 export interface PlayerStatePacket {
@@ -46,6 +47,7 @@ export interface PlayerStatePacket {
   hp?: number;
   st?: StatusEffectId[];
   ko?: number;
+  act?: number;
 }
 
 export interface CombatEventPacket {
@@ -78,6 +80,7 @@ export type SignalMessage =
   | { type: "kick"; targetPeerId?: string; targetClientId?: string; reason?: string }
   | { type: "ban"; targetPeerId?: string; targetClientId?: string; reason?: string }
   | { type: "server-closed"; reason?: string }
+  | { type: "afk-warning"; message: string }
   | { type: "error"; message: string };
 
 export interface PeerInfo {
@@ -119,6 +122,7 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(typeof state.hp === "number" ? { hp: round(state.hp, 1) } : {}),
     ...(state.statuses ? { st: state.statuses } : {}),
     ...(typeof state.respawnTimer === "number" ? { ko: round(state.respawnTimer, 2) } : {}),
+    ...(typeof state.lastActivityAt === "number" ? { act: Math.round(state.lastActivityAt) } : {}),
   };
 }
 
@@ -146,6 +150,7 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.hp === "number" ? { hp: packet.hp } : {}),
     ...(packet.st ? { statuses: packet.st } : {}),
     ...(typeof packet.ko === "number" ? { respawnTimer: packet.ko } : {}),
+    ...(typeof packet.act === "number" ? { lastActivityAt: packet.act } : {}),
   };
 }
 
@@ -173,7 +178,8 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.w === undefined || typeof value.w === "string") &&
     (value.hp === undefined || typeof value.hp === "number") &&
     (value.st === undefined || (Array.isArray(value.st) && value.st.every((item) => typeof item === "string"))) &&
-    (value.ko === undefined || typeof value.ko === "number")
+    (value.ko === undefined || typeof value.ko === "number") &&
+    (value.act === undefined || typeof value.act === "number")
   );
 }
 

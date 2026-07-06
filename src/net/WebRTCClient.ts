@@ -28,13 +28,15 @@ interface WebRTCHandlers {
   onKicked: (reason: string) => void;
   onBanned: (reason: string) => void;
   onServerClosed: (reason: string) => void;
+  onAfkWarning: (message: string) => void;
 }
 
 export class WebRTCClient {
   readonly peerId = createPeerId();
   private signalingSocket: WebSocket | null = null;
   private isHost = false;
-  private manuallyClosing = false;
+  private readonly manuallyClosingSockets = new WeakSet<WebSocket>();
+  private connecting = false;
 
   constructor(
     private readonly signaling: SignalingClient,
@@ -80,36 +82,74 @@ export class WebRTCClient {
   }
 
   close(): void {
-    this.manuallyClosing = true;
-    this.signalingSocket?.close();
+    if (this.signalingSocket) {
+      this.manuallyClosingSockets.add(this.signalingSocket);
+      this.signalingSocket.close();
+    }
     this.signalingSocket = null;
     this.isHost = false;
+    this.connecting = false;
     this.handlers.onStatus("Offline");
   }
 
   private async connectSignaling(roomCode: string): Promise<void> {
-    this.signalingSocket = this.signaling.connect(roomCode, this.peerId, this.profile, (message) => {
+    this.connecting = true;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const socketUrl = this.signaling.roomWebSocketUrl(roomCode, this.peerId, this.profile);
+      try {
+        await this.openSignalingSocket(roomCode);
+        this.connecting = false;
+        return;
+      } catch (error) {
+        console.warn(`Could not connect to signaling server at ${socketUrl} (attempt ${attempt + 1}/2)`, error);
+        this.cleanupFailedSocket();
+        if (attempt === 0) {
+          await delay(450);
+        }
+      }
+    }
+    this.connecting = false;
+    throw new Error("Could not connect to signaling server. Try refreshing or rejoining.");
+  }
+
+  private async openSignalingSocket(roomCode: string): Promise<void> {
+    const socket = this.signaling.connect(roomCode, this.peerId, this.profile, (message) => {
       void this.handleSignal(message);
     });
+    this.signalingSocket = socket;
 
-    this.signalingSocket.addEventListener("close", () => {
-      if (this.manuallyClosing) {
-        this.manuallyClosing = false;
+    socket.addEventListener("close", () => {
+      if (this.manuallyClosingSockets.has(socket)) {
         return;
       }
-      this.handlers.onStatus("Disconnected / failed");
+      if (!this.connecting) {
+        this.handlers.onStatus("Disconnected / failed");
+      }
     });
-    this.signalingSocket.addEventListener("error", () => this.handlers.onStatus("Disconnected / failed"));
+    socket.addEventListener("error", () => {
+      if (!this.connecting) {
+        this.handlers.onStatus("Disconnected / failed");
+      }
+    });
 
     await new Promise<void>((resolve, reject) => {
-      const socket = this.signalingSocket;
-      if (!socket) {
-        reject(new Error("Signaling socket missing"));
-        return;
-      }
       socket.addEventListener("open", () => resolve(), { once: true });
-      socket.addEventListener("error", () => reject(new Error("Signaling socket failed")), { once: true });
+      socket.addEventListener("error", () => reject(new Error("Could not connect to signaling server. Try refreshing or rejoining.")), { once: true });
+      socket.addEventListener("close", () => {
+        if (socket.readyState !== WebSocket.OPEN) {
+          reject(new Error("Could not connect to signaling server. Try refreshing or rejoining."));
+        }
+      }, { once: true });
     });
+  }
+
+  private cleanupFailedSocket(): void {
+    const socket = this.signalingSocket;
+    this.signalingSocket = null;
+    if (socket && socket.readyState !== WebSocket.CLOSED) {
+      this.manuallyClosingSockets.add(socket);
+      socket.close();
+    }
   }
 
   private async handleSignal(message: SignalMessage): Promise<void> {
@@ -133,6 +173,10 @@ export class WebRTCClient {
       const reason = message.reason ?? "Server closed";
       this.close();
       this.handlers.onServerClosed(reason);
+      return;
+    }
+    if (message.type === "afk-warning") {
+      this.handlers.onAfkWarning(message.message);
       return;
     }
 
@@ -165,6 +209,10 @@ export class WebRTCClient {
       this.signalingSocket.send(JSON.stringify(message));
     }
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function createPeerId(): string {

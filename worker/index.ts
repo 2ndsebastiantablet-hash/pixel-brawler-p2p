@@ -51,7 +51,10 @@ async function hydratePublicRooms(rooms: PublicRoomSummary[], env: Env): Promise
   const hydrated = await Promise.all(
     rooms.map(async (room) => {
       const liveRoom = await env.ROOMS.getByName(room.code).snapshot();
-      return liveRoom ?? room;
+      if (!liveRoom) {
+        await directory(env).removeRoom(room.code);
+      }
+      return liveRoom;
     }),
   );
   return hydrated.filter((room): room is PublicRoomSummary => Boolean(room));

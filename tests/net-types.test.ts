@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AFK_KICK_MS,
+  AFK_WARNING_MS,
   MAX_ROOM_PLAYERS,
   decodePlayerStatePacket,
   encodePlayerStatePacket,
@@ -8,10 +10,20 @@ import {
   type CombatEventPacket,
   type PlayerNetState,
 } from "../src/net/NetTypes";
+import { resolveSignalingBaseUrl, toWsBase } from "../src/net/SignalingClient";
 
 describe("network player packets", () => {
   it("uses ten player rooms for public and private sessions", () => {
     expect(MAX_ROOM_PLAYERS).toBe(10);
+    expect(AFK_WARNING_MS).toBe(5 * 60 * 1000);
+    expect(AFK_KICK_MS).toBe(6 * 60 * 1000);
+  });
+
+  it("uses the deployed Worker URL on Pages when no env override is configured", () => {
+    expect(resolveSignalingBaseUrl(undefined, "https://pixel-brawler-p2p.pages.dev")).toBe("https://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev");
+    expect(resolveSignalingBaseUrl(undefined, "http://127.0.0.1:5173")).toBe("http://localhost:8787");
+    expect(resolveSignalingBaseUrl("https://example.com/", "https://pixel-brawler-p2p.pages.dev")).toBe("https://example.com");
+    expect(toWsBase("https://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev")).toBe("wss://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev");
   });
 
   it("round-trips compact player state packets", () => {
@@ -141,5 +153,30 @@ describe("network player packets", () => {
 
     expect(isSignalDataMessage({ type: "data", from: "peer-a", packet: hit })).toBe(true);
     expect(isSignalDataMessage({ type: "data", from: "peer-a", packet: { ...hit, targetId: 42 } })).toBe(false);
+  });
+
+  it("accepts AFK warning and activity signal messages", () => {
+    expect(isSignalDataMessage({
+      type: "data",
+      from: "peer-a",
+      packet: {
+        t: "s",
+        id: "peer-a",
+        cid: "client-a",
+        n: "Azure",
+        c: "#00d8ff",
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        f: 1,
+        g: 1,
+        sl: 0,
+        a: "idle",
+        seq: 1,
+        ts: 1000,
+        act: 1000,
+      },
+    })).toBe(true);
   });
 });

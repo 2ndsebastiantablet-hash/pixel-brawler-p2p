@@ -272,6 +272,7 @@ export class Game {
         hp: localCombatant?.hp,
         statuses: localCombatant?.statuses.map((status) => status.id),
         respawnTimer: localCombatant?.respawnTimer,
+        lastActivityAt: Date.now(),
       }));
     }
   }

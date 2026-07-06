@@ -1,4 +1,5 @@
 import type { RoomSummary, SignalMessage } from "./NetTypes";
+import { DEPLOYED_SIGNALING_URL } from "./RoomConfig";
 import type { PlayerProfile } from "../ui/Profile";
 
 export interface CreateRoomOptions {
@@ -47,12 +48,7 @@ export class SignalingClient {
     profile: PlayerProfile,
     onMessage: (message: SignalMessage) => void,
   ): WebSocket {
-    const url = new URL(`${toWsBase(this.baseUrl)}/rooms/${encodeURIComponent(roomCode)}/ws`);
-    url.searchParams.set("peer", peerId);
-    url.searchParams.set("clientId", profile.clientId);
-    url.searchParams.set("name", profile.name);
-    url.searchParams.set("color", profile.color);
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(this.roomWebSocketUrl(roomCode, peerId, profile));
 
     socket.addEventListener("message", (event) => {
       try {
@@ -64,14 +60,34 @@ export class SignalingClient {
 
     return socket;
   }
+
+  roomWebSocketUrl(roomCode: string, peerId: string, profile: PlayerProfile): string {
+    const url = new URL(`${toWsBase(this.baseUrl)}/rooms/${encodeURIComponent(roomCode)}/ws`);
+    url.searchParams.set("peer", peerId);
+    url.searchParams.set("clientId", profile.clientId);
+    url.searchParams.set("name", profile.name);
+    url.searchParams.set("color", profile.color);
+    return url.toString();
+  }
 }
 
 function getDefaultSignalingUrl(): string {
   const configured = import.meta.env.VITE_SIGNALING_URL as string | undefined;
-  return configured?.replace(/\/$/, "") || "http://localhost:8787";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return resolveSignalingBaseUrl(configured, origin);
 }
 
-function toWsBase(baseUrl: string): string {
+export function resolveSignalingBaseUrl(configured: string | undefined, pageOrigin: string): string {
+  if (configured?.trim()) {
+    return configured.replace(/\/$/, "");
+  }
+  if (pageOrigin.startsWith("https://") && !pageOrigin.includes("localhost") && !pageOrigin.includes("127.0.0.1")) {
+    return DEPLOYED_SIGNALING_URL;
+  }
+  return "http://localhost:8787";
+}
+
+export function toWsBase(baseUrl: string): string {
   if (baseUrl.startsWith("https://")) {
     return baseUrl.replace("https://", "wss://");
   }

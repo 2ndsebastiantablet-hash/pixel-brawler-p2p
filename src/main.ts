@@ -191,6 +191,7 @@ function createRtcClient(nextProfile: PlayerProfile): WebRTCClient {
     onKicked: (reason) => returnToMain(reason, false),
     onBanned: (reason) => returnToMain(reason, false),
     onServerClosed: (reason) => returnToMain(reason, false),
+    onAfkWarning: (message) => ui.setStatus(message),
   });
 }
 

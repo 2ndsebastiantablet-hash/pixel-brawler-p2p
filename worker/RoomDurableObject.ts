@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
-import { MAX_ROOM_PLAYERS } from "../src/net/RoomConfig";
+import { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS } from "../src/net/RoomConfig";
 
 export interface RoomMeta {
   code: string;
@@ -31,11 +31,16 @@ interface PeerSession {
   color: string;
   isHost: boolean;
   socket: WebSocket;
+  lastActivityAt: number;
+  afkWarningSent: boolean;
 }
 
 const roomTtlMs = 1000 * 60 * 60;
+const afkAlarmIntervalMs = 30 * 1000;
 
-type DurableObjectEnv = Record<string, unknown>;
+interface DurableObjectEnv extends Record<string, unknown> {
+  ROOM_DIRECTORY?: DurableObjectNamespace<RoomDirectoryDurableObject>;
+}
 
 export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
   private meta: RoomMeta | null = null;
@@ -99,13 +104,19 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       return json({ error: "Room is full" }, 409);
     }
 
+    const duplicateSessions = [...this.sessions.values()].filter((session) => session.clientId === clientId || session.peerId === peerId);
+    for (const duplicate of duplicateSessions) {
+      await this.removeSession(duplicate, { type: "kick", reason: "Rejoined from another tab" });
+    }
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
     server.accept();
-    const session: PeerSession = { peerId, clientId, name, color, isHost, socket: server };
+    const session: PeerSession = { peerId, clientId, name, color, isHost, socket: server, lastActivityAt: Date.now(), afkWarningSent: false };
     this.sessions.set(server, session);
     this.broadcastLobby();
+    await this.scheduleAfkAlarm();
 
     server.addEventListener("message", (event) => {
       void this.handleMessage(session, event.data);
@@ -128,6 +139,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
     try {
       const message = JSON.parse(rawData) as Record<string, unknown>;
       const type = String(message.type);
+      this.markActivity(sender);
 
       if (["offer", "answer", "ice"].includes(type)) {
         const relayed = JSON.stringify({ ...message, from: sender.peerId });
@@ -192,7 +204,11 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
     for (const peer of this.sessions.values()) {
       safeSend(peer.socket, leftMessage);
     }
-    this.broadcastLobby();
+    if (this.sessions.size === 0) {
+      await this.closeRoom("Room empty");
+    } else {
+      this.broadcastLobby();
+    }
   }
 
   private async closeSession(socket: WebSocket): Promise<void> {
@@ -210,7 +226,11 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
     for (const peer of this.sessions.values()) {
       safeSend(peer.socket, leftMessage);
     }
-    this.broadcastLobby();
+    if (this.sessions.size === 0) {
+      await this.closeRoom("Room empty");
+    } else {
+      this.broadcastLobby();
+    }
   }
 
   private async closeRoom(reason: string): Promise<void> {
@@ -220,6 +240,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
 
     this.meta = { ...this.meta, closed: true };
     await this.ctx.storage.put("meta", this.meta);
+    await this.removeFromDirectory();
     const message = JSON.stringify({ type: "server-closed", reason });
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
@@ -254,6 +275,48 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       safeSend(session.socket, lobbyMessage);
     }
   }
+
+  async alarm(): Promise<void> {
+    if (!this.meta || this.meta.closed || this.sessions.size === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    for (const session of [...this.sessions.values()]) {
+      const idleMs = now - session.lastActivityAt;
+      if (idleMs >= AFK_KICK_MS) {
+        if (session.isHost) {
+          await this.closeRoom("Host left. Server closed.");
+          return;
+        }
+        await this.removeSession(session, { type: "kick", reason: "You were kicked for being AFK." });
+        continue;
+      }
+      if (!session.afkWarningSent && idleMs >= AFK_WARNING_MS) {
+        session.afkWarningSent = true;
+        safeSend(session.socket, JSON.stringify({ type: "afk-warning", message: "You will be kicked for AFK soon." }));
+      }
+    }
+
+    if (this.sessions.size > 0) {
+      await this.scheduleAfkAlarm();
+    }
+  }
+
+  private markActivity(session: PeerSession): void {
+    session.lastActivityAt = Date.now();
+    session.afkWarningSent = false;
+  }
+
+  private async scheduleAfkAlarm(): Promise<void> {
+    await this.ctx.storage.setAlarm(Date.now() + afkAlarmIntervalMs);
+  }
+
+  private async removeFromDirectory(): Promise<void> {
+    if (this.meta?.visibility === "public" && this.env.ROOM_DIRECTORY) {
+      await this.env.ROOM_DIRECTORY.getByName("public-room-directory").removeRoom(this.meta.code);
+    }
+  }
 }
 
 function isRelayPacket(value: unknown): boolean {
@@ -267,6 +330,10 @@ function isRelayPacket(value: unknown): boolean {
 export class RoomDirectoryDurableObject extends DurableObject<DurableObjectEnv> {
   async addRoom(room: PublicRoomSummary): Promise<void> {
     await this.ctx.storage.put(`room:${room.code}`, room);
+  }
+
+  async removeRoom(code: string): Promise<void> {
+    await this.ctx.storage.delete(`room:${code}`);
   }
 
   async listRooms(): Promise<PublicRoomSummary[]> {
