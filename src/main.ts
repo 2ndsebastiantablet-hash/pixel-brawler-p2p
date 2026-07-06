@@ -20,6 +20,9 @@ const game = new Game(root, {
   onLocalState: (packet) => {
     rtc?.sendPlayerState(packet);
   },
+  onCombatEvent: (packet) => {
+    rtc?.sendCombatEvent(packet);
+  },
 });
 game.setShowNames(profile.showNames);
 
@@ -173,6 +176,7 @@ function createRtcClient(nextProfile: PlayerProfile): WebRTCClient {
   return new WebRTCClient(signaling, nextProfile, {
     onStatus: (status: ConnectionStatus) => ui.setStatus(status),
     onRemoteState: (state) => game.setRemoteState(state),
+    onCombatEvent: (event) => game.applyCombatEvent(event),
     onPeerLeft: (peerId) => {
       game.removeRemote(peerId);
       if (currentSession) {

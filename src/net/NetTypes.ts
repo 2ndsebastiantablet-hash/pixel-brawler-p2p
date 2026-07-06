@@ -35,6 +35,20 @@ export interface PlayerStatePacket {
   ts: number;
 }
 
+export interface CombatEventPacket {
+  t: "c";
+  id: string;
+  ownerId: string;
+  weaponId: string;
+  action: "primary" | "secondary" | "throw" | "reload" | "hit" | "equip";
+  x: number;
+  y: number;
+  ax: number;
+  ay: number;
+  label: string;
+  ts: number;
+}
+
 export type SignalMessage =
   | { type: "offer"; sdp: RTCSessionDescriptionInit; from?: string }
   | { type: "answer"; sdp: RTCSessionDescriptionInit; from?: string }
@@ -126,6 +140,31 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.sl === 0 || value.sl === 1) &&
     isPlayerAction(value.a) &&
     typeof value.seq === "number" &&
+    typeof value.ts === "number"
+  );
+}
+
+export function isCombatEventPacket(packet: unknown): packet is CombatEventPacket {
+  if (!packet || typeof packet !== "object") {
+    return false;
+  }
+  const value = packet as Partial<CombatEventPacket>;
+  return (
+    value.t === "c" &&
+    typeof value.id === "string" &&
+    typeof value.ownerId === "string" &&
+    typeof value.weaponId === "string" &&
+    (value.action === "primary" ||
+      value.action === "secondary" ||
+      value.action === "throw" ||
+      value.action === "reload" ||
+      value.action === "hit" ||
+      value.action === "equip") &&
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.ax === "number" &&
+    typeof value.ay === "number" &&
+    typeof value.label === "string" &&
     typeof value.ts === "number"
   );
 }

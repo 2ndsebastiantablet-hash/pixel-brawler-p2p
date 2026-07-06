@@ -11,6 +11,8 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
 - Compact in-game HUD for private room codes, public server names, and Offline Test.
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
+- Prototype combat system with 100 HP, hitstun, invulnerability flash, damage numbers, knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, and an offline training dummy.
+- Test loadout with pistol, whip, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, teleport ball, lightning rod, and sledgehammer.
 - WebRTC DataChannel state replication at a compact tick rate.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, and WebRTC offer/answer/ICE relay.
 
@@ -27,6 +29,29 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - `S` in air: Ground slam.
 - `N`: Toggle player names.
 - `Escape`: Server info / leave menu.
+- Mouse move: Aim crosshair.
+- Left mouse: Primary fire / swing / use.
+- Right mouse: Secondary, throw, or weapon special.
+- `R`: Reload weapons that use ammo.
+- `1`-`9`: Equip from the first nine test loadout slots.
+- `Q` / `E`: Previous / next weapon, including slots 10-12.
+- `F`: Pick up nearby dropped weapon.
+- `G`: Drop / throw current weapon.
+
+## Prototype Weapons
+
+- Pistol: 20-shot tap-fire sidearm with reload timing, slide shots, air recoil, close-shot knockback, and pistol throw.
+- Whip: Long narrow melee control weapon with tip stun, low trip, double-hit pull, latch-style mobility hooks, and disarm prototype hooks.
+- Slingshot: 10-stone arcing projectile weapon with charge, ricochet, scatter pebbles, head bonk, and skip-shot utility.
+- Laser Blaster: Charge weapon with heat, vent burst, air hover behavior, charge thresholds, and overcharge risk hooks.
+- Revolver: 6-shot high-knockback sidearm with fan fire, quickdraw, last-bullet bonus, perfect reload, and ricochet hooks.
+- Minigun: Heavy pressure weapon with spin/hold firing, overheat hooks, suppression, recoil, and pre-spin behavior.
+- Sniper: Long-range high-damage weapon with steady aim, upper-body bonus, stillness bonus, piercing, wall mark, and no-scope hooks.
+- Knife: Fast close weapon with combo hooks, backstab, air stall, dash stab, parry hook, bleed, and throw.
+- Machete: Medium melee arc with heavy chop, crouch slash, air chop, brush-cut combo, and weak projectile clash hooks.
+- Teleport Ball: Utility projectile that marks teleport movement, cancel hooks, direct-hit acceleration, arrival burst, pull, and fakeout behavior.
+- Lightning Rod: Risk/reward shock weapon with self-strike empowerment hooks, electric zones, chain shock, storm timing, and throw lightning.
+- Sledge Hammer: Slow heavy weapon with charged slam, shockwave, shove, air drop, recoil bounce, armor-frame hook, and stagger.
 
 ## Requirements
 
@@ -52,7 +77,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. Press **Play**, choose a name/color, then use **Offline Test** for local movement.
+Open the printed local URL, usually `http://localhost:5173`. Press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows an armory strip along the bottom of the screen. Use `1`-`9` and `Q`/`E` to equip all 12 prototype weapons, then attack with the mouse.
 
 ## Run the signaling Worker locally
 
@@ -73,6 +98,7 @@ The Worker runs at `http://localhost:8787` by default. The front end uses that U
 5. Private rooms show a room code at the top of the game screen. Public rooms show the server name at the top right.
 6. In window two, press **Play**, set name/color, choose **Join**, then enter the private room code or refresh and join a public server.
 7. Press `Escape` in game to view players, leave, or host-manage the server.
+8. Prototype combat events are also sent over the WebRTC DataChannel, so remote players should see attack/projectile effects. Hit validation is still client-predicted prototype logic.
 
 If the peers do not connect, check both browser consoles and the Worker terminal. The current WebRTC setup uses a public STUN server and may need TURN later for restrictive networks.
 
@@ -98,6 +124,8 @@ VITE_SIGNALING_URL=https://<your-worker-name>.<your-subdomain>.workers.dev
 
 Then redeploy Pages so the front end points at the deployed signaling Worker.
 
+Cloudflare Pages will auto-deploy when `main` is pushed if the Pages project is connected to this repository and auto deploys are enabled.
+
 ## Cloudflare Worker deployment
 
 The Worker and Durable Object config live in `wrangler.toml`.
@@ -116,6 +144,8 @@ npm run worker:deploy
 
 Wrangler will create the Durable Object classes declared in the `v1` migration on first deploy. The npm scripts pass `-c wrangler.toml` explicitly so Wrangler does not pick up a parent directory config when this repo sits inside another workspace.
 
+If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This combat update keeps combat packets on the WebRTC DataChannel and does not require a new Durable Object migration.
+
 ## Useful scripts
 
 ```bash
@@ -130,7 +160,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- No final attacks, hitboxes, combat rules, matchmaking, cosmetics, or polished art yet.
-- Networking uses simple state replication, not rollback netcode.
+- Combat is a playable prototype, not final balance. Weapon mastery mechanics are represented as first-pass systems, hooks, and readable effects rather than final competitive tuning.
+- Networking uses simple state replication and prototype combat event mirroring, not rollback netcode or authoritative hit validation.
 - Public room entries are short-lived development records hydrated from live Durable Objects when listed.
 - TURN is not configured, so some restrictive networks may fail peer connection.

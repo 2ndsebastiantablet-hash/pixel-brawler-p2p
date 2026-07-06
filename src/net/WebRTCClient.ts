@@ -1,6 +1,8 @@
 import {
   decodePlayerStatePacket,
+  isCombatEventPacket,
   isStatePacket,
+  type CombatEventPacket,
   type PlayerNetState,
   type PlayerStatePacket,
   type SignalMessage,
@@ -20,6 +22,7 @@ export type ConnectionStatus =
 interface WebRTCHandlers {
   onStatus: (status: ConnectionStatus) => void;
   onRemoteState: (state: PlayerNetState) => void;
+  onCombatEvent: (event: CombatEventPacket) => void;
   onPeerLeft: (peerId: string) => void;
   onLobby: (message: Extract<SignalMessage, { type: "lobby" }>) => void;
   onKicked: (reason: string) => void;
@@ -58,6 +61,12 @@ export class WebRTCClient {
   }
 
   sendPlayerState(packet: PlayerStatePacket): void {
+    if (this.dataChannel?.readyState === "open") {
+      this.dataChannel.send(JSON.stringify(packet));
+    }
+  }
+
+  sendCombatEvent(packet: CombatEventPacket): void {
     if (this.dataChannel?.readyState === "open") {
       this.dataChannel.send(JSON.stringify(packet));
     }
@@ -148,6 +157,8 @@ export class WebRTCClient {
         const packet = JSON.parse(String(event.data));
         if (isStatePacket(packet)) {
           this.handlers.onRemoteState(decodePlayerStatePacket(packet));
+        } else if (isCombatEventPacket(packet)) {
+          this.handlers.onCombatEvent(packet);
         }
       } catch (error) {
         console.warn("Ignored malformed data channel packet", error);

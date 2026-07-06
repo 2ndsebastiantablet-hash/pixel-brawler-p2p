@@ -36,6 +36,7 @@ button {
 .game-canvas {
   position: fixed;
   inset: 0;
+  z-index: 0;
   display: block;
   width: 100vw;
   height: 100vh;
@@ -301,6 +302,65 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.combat-hud-panel {
+  position: fixed;
+  top: 62px;
+  right: 14px;
+  z-index: 26;
+  display: grid;
+  grid-template-columns: minmax(230px, 330px);
+  gap: 10px;
+  justify-content: end;
+  pointer-events: none;
+}
+
+.combat-hud-card,
+.armory-strip {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(8, 9, 13, 0.78);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+}
+
+.combat-hud-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.combat-hud-card strong,
+.combat-hud-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combat-hud-card strong {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.combat-hud-card span,
+.armory-strip span {
+  color: #bec2cf;
+  font-size: 12px;
+}
+
+.armory-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  max-height: 104px;
+  overflow: hidden;
+  padding: 9px 10px;
+}
+
+.armory-strip .is-equipped {
+  color: #ffd84d;
+  font-weight: 900;
+}
+
 .pause-panel {
   width: min(500px, calc(100vw - 32px));
 }
@@ -344,6 +404,10 @@ button:focus-visible {
   }
 
   .game-hud {
+    grid-template-columns: 1fr;
+  }
+
+  .combat-hud-panel {
     grid-template-columns: 1fr;
   }
 
