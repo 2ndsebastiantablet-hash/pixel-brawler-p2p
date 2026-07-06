@@ -21,6 +21,10 @@ export interface Projectile {
   label: string;
   color: string;
   trailColor: string;
+  originX?: number;
+  originY?: number;
+  teleportsOwner?: boolean;
+  pulseTimer?: number;
   status?: string;
   hits: string[];
 }

@@ -4,9 +4,9 @@ export const whip: WeaponDefinition = {
   id: "whip",
   name: "Whip",
   kind: "melee",
-  description: "Long narrow control weapon with tip stun and quick double-hit pull.",
-  primary: { damage: 7, cooldown: 0.38, range: 132, knockback: 150, stun: 0.16, radius: 12 },
-  secondary: { damage: 5, cooldown: 0.55, range: 150, knockback: 70, stun: 0.2, radius: 10 },
+  description: "Very long control weapon with tip cracks, low trips, air stall, and a pull only after fast repeated hits.",
+  primary: { damage: 7, cooldown: 0.34, range: 286, knockback: 170, stun: 0.16, radius: 16 },
+  secondary: { damage: 5, cooldown: 0.48, range: 304, knockback: 90, stun: 0.24, radius: 13, status: "tripped" },
   throw: { damage: 5, stun: 0.16, speed: 360, knockback: 120 },
-  mastery: ["Double whip pull", "Tip crack", "Low trip", "Air latch", "Disarm chance prototype", "Whip cancel"],
+  mastery: ["Long curved arc", "Tip sweet spot", "Double-hit pull", "Low trip", "Air stall"],
 };

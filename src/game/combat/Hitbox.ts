@@ -1,9 +1,10 @@
 import type { Vec2 } from "./Damage";
+import type { WeaponId } from "./Weapon";
 
 export interface Hitbox {
   id: string;
   ownerId: string;
-  weaponId: string;
+  weaponId: WeaponId;
   x: number;
   y: number;
   width: number;
@@ -17,6 +18,9 @@ export interface Hitbox {
   color: string;
   pull?: Vec2;
   status?: string;
+  sweetSpot?: "tip" | "body";
+  lowTrip?: boolean;
+  heavy?: boolean;
   hits: string[];
 }
 

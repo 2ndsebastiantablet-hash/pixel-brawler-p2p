@@ -1,11 +1,13 @@
 import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
-import { DEFAULT_PHYSICS } from "./Physics";
+import { DEFAULT_PHYSICS, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
+import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./combat/WeaponRegistry";
+import { playSound } from "../audio/SoundSystem";
 import {
   encodePlayerStatePacket,
   interpolateRemoteState,
@@ -26,6 +28,12 @@ interface LandingBurst {
   y: number;
   age: number;
   color: string;
+}
+
+interface AttackVisual {
+  weaponId: WeaponId;
+  kind: "primary" | "secondary" | "throw" | "reload";
+  timer: number;
 }
 
 interface GameOptions {
@@ -51,7 +59,11 @@ export class Game {
   private showNames = true;
   private shakeTimer = 0;
   private primaryHeldMs = 0;
+  private secondaryHeldMs = 0;
+  private footstepTimer = 0;
   private lastAim = { x: 1, y: 0 };
+  private lastMouse = { x: 0, y: 0 };
+  private attackVisual: AttackVisual | null = null;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -142,6 +154,9 @@ export class Game {
     this.combatHud.hidden = false;
     this.shakeTimer = 0;
     this.primaryHeldMs = 0;
+    this.secondaryHeldMs = 0;
+    this.footstepTimer = 0;
+    this.attackVisual = null;
     this.running = true;
     this.lastTime = performance.now();
     cancelAnimationFrame(this.animationFrame);
@@ -163,8 +178,14 @@ export class Game {
   private update(dt: number, time: number): void {
     const movementInput = this.input.consumeFrame();
     const combatInput = this.input.consumeCombatFrame();
+    this.lastMouse = { x: combatInput.mouseX, y: combatInput.mouseY };
     this.lastAim = this.getAim(combatInput);
+    const previousState = { ...this.localPlayer.state };
     this.localPlayer.update(movementInput, dt);
+    if (this.combat.getPlayerInventory().equippedWeapon === "sledgehammer" && !this.localPlayer.state.sliding && !this.localPlayer.state.airDiving && !this.localPlayer.state.groundSlamming) {
+      this.localPlayer.state.velocityX *= 0.86;
+    }
+    this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.handleCombatInput(combatInput, dt, time);
 
@@ -188,13 +209,6 @@ export class Game {
       }
     }
 
-    this.camera.follow(
-      this.localPlayer.state.x + this.localPlayer.state.width / 2,
-      this.localPlayer.state.y + this.localPlayer.state.height / 2,
-      this.canvas.width,
-      this.canvas.height,
-    );
-
     for (const remote of this.remotes.values()) {
       remote.current = interpolateRemoteState(remote.current, remote.target, Math.min(dt * 12, 1));
       remote.player.advanceAnimation(dt);
@@ -205,6 +219,21 @@ export class Game {
     for (const event of this.combat.consumeEvents()) {
       this.options.onCombatEvent(event);
     }
+    for (const sound of this.combat.consumeSounds()) {
+      playSound(sound);
+    }
+    if (this.attackVisual) {
+      this.attackVisual.timer = Math.max(0, this.attackVisual.timer - dt);
+      if (this.attackVisual.timer === 0) {
+        this.attackVisual = null;
+      }
+    }
+    this.camera.follow(
+      this.localPlayer.state.x + this.localPlayer.state.width / 2,
+      this.localPlayer.state.y + this.localPlayer.state.height / 2,
+      this.canvas.width,
+      this.canvas.height,
+    );
     this.renderCombatHud();
 
     this.sendAccumulator += dt;
@@ -233,6 +262,7 @@ export class Game {
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
     }
     this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+    this.drawLocalWeapon(ctx);
     this.drawLocalHealth(ctx);
     this.drawCrosshair(ctx);
     ctx.restore();
@@ -263,7 +293,16 @@ export class Game {
     if (input.primaryHeld) {
       this.primaryHeldMs += dt * 1000;
     } else {
-      this.primaryHeldMs = 0;
+      if (!input.primaryReleased) {
+        this.primaryHeldMs = 0;
+      }
+    }
+    if (input.secondaryHeld) {
+      this.secondaryHeldMs += dt * 1000;
+    } else {
+      if (!input.secondaryReleased) {
+        this.secondaryHeldMs = 0;
+      }
     }
 
     const charge = this.combat.getPlayerInventory().charge[equipped];
@@ -286,37 +325,89 @@ export class Game {
           isNewPress: true,
         });
       }
-    } else if (equipped === "minigun") {
+    } else if (equipped === "sledgehammer") {
       if (input.primaryHeld) {
-        this.combat.usePrimary({
+        this.attackVisual = { weaponId: "sledgehammer", kind: "primary", timer: 0.12 };
+      }
+      if (input.primaryReleased) {
+        this.recordAttack(this.combat.usePrimary({
           ownerId: this.localPlayer.state.id,
           player: this.localPlayer.state,
           aim,
           now: time,
           heldMs: this.primaryHeldMs,
           isNewPress: true,
-        });
+        }), "primary");
       }
     } else if (input.primaryPressed) {
-      this.combat.usePrimary({
+      this.recordAttack(this.combat.usePrimary({
         ownerId: this.localPlayer.state.id,
         player: this.localPlayer.state,
         aim,
         now: time,
         heldMs: this.primaryHeldMs,
         isNewPress: true,
-      });
+      }), "primary");
     }
 
-    if (input.secondaryPressed || (equipped === "lightning-rod" && input.secondaryReleased)) {
-      this.combat.useSecondary({
+    if (input.secondaryPressed || (equipped === "lightning-rod" && input.secondaryHeld && this.secondaryHeldMs < dt * 1000 + 1)) {
+      this.recordAttack(this.combat.useSecondary({
         ownerId: this.localPlayer.state.id,
         player: this.localPlayer.state,
         aim,
         now: time,
-        heldMs: 0,
+        heldMs: this.secondaryHeldMs,
         isNewPress: true,
-      });
+      }), "secondary");
+    }
+
+    if (input.primaryReleased) {
+      this.primaryHeldMs = 0;
+    }
+    if (input.secondaryReleased) {
+      this.secondaryHeldMs = 0;
+    }
+  }
+
+  private recordAttack(result: WeaponUseResult, kind: AttackVisual["kind"]): void {
+    if (result.kind === "blocked") {
+      return;
+    }
+    this.attackVisual = {
+      weaponId: result.weaponId,
+      kind,
+      timer: result.kind === "dry-fire" ? 0.12 : result.weaponId === "sledgehammer" ? 0.34 : 0.22,
+    };
+    if (result.weaponId === "sledgehammer") {
+      this.shakeTimer = Math.max(this.shakeTimer, kind === "primary" ? 0.12 : 0.06);
+    }
+  }
+
+  private playMovementFeedback(previous: PlayerPhysicsState, current: PlayerPhysicsState, dt: number): void {
+    this.footstepTimer = Math.max(0, this.footstepTimer - dt);
+    if (!previous.grounded && current.grounded) {
+      playSound(current.justSlamLanded ? "ground-slam-impact" : "landing");
+    }
+    if (!previous.sliding && current.sliding) {
+      playSound(current.lowSliding ? "low-slide" : "dash");
+    }
+    if (!previous.ducking && current.ducking) {
+      playSound("duck");
+    }
+    if (!previous.groundSlamming && current.groundSlamming) {
+      playSound("ground-slam-start");
+    }
+    if (!previous.airDiving && current.airDiving) {
+      playSound("dive-start");
+    }
+    if (previous.grounded && !current.grounded && current.velocityY < 0) {
+      playSound(current.jumpsUsed > 1 ? "double-jump" : "jump");
+    } else if (previous.jumpsUsed === 1 && current.jumpsUsed === 2 && current.velocityY < 0) {
+      playSound("double-jump");
+    }
+    if (current.grounded && current.action === "run" && Math.abs(current.velocityX) > 180 && this.footstepTimer === 0) {
+      playSound("footstep");
+      this.footstepTimer = 0.18;
     }
   }
 
@@ -336,6 +427,87 @@ export class Game {
       return { x: this.localPlayer.state.facing, y: 0 };
     }
     return { x: x / length, y: y / length };
+  }
+
+  private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
+    const weaponId = this.combat.getPlayerInventory().equippedWeapon;
+    const state = this.localPlayer.state;
+    const aim = this.lastAim;
+    const centerX = state.x + state.width / 2 - this.camera.x;
+    const centerY = state.y + 24 - this.camera.y;
+    const facing = Math.sign(aim.x || state.facing) || 1;
+    const active = this.attackVisual?.weaponId === weaponId ? this.attackVisual.timer : 0;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = colorForWeapon(weaponId);
+
+    if (weaponId === "pistol") {
+      const kick = active > 0 ? 8 : 0;
+      const x = Math.round(centerX + aim.x * (18 - kick));
+      const y = Math.round(centerY + aim.y * 8);
+      this.pixelRect(ctx, x, y - 4, facing * 24, 8);
+      this.pixelRect(ctx, x + facing * 7, y + 3, facing * 8, 9);
+      this.pixelRect(ctx, x + facing * 22, y - 2, facing * 8, 4);
+      if (active > 0) {
+        ctx.fillStyle = "#fff4a8";
+        this.pixelRect(ctx, x + facing * 31, y - 5, facing * 12, 10);
+        this.pixelRect(ctx, x + facing * 43, y - 2, facing * 9, 4);
+      }
+    } else if (weaponId === "whip") {
+      const reach = active > 0 ? 286 : 78;
+      const segments = active > 0 ? 12 : 4;
+      for (let index = 1; index <= segments; index += 1) {
+        const t = index / segments;
+        const curve = Math.sin(t * Math.PI) * 46 * (aim.y >= 0 ? 1 : -1);
+        const x = centerX + aim.x * reach * t;
+        const y = centerY + aim.y * reach * 0.38 * t + curve;
+        const size = index === segments ? 10 : Math.max(3, 8 - index * 0.35);
+        ctx.fillRect(Math.round(x - size / 2), Math.round(y - size / 2), Math.round(size), Math.round(size));
+      }
+      if (active > 0) {
+        ctx.fillStyle = "#ffffff";
+        const tipX = centerX + aim.x * reach;
+        const tipY = centerY + aim.y * reach * 0.38;
+        ctx.fillRect(Math.round(tipX - 5), Math.round(tipY - 5), 10, 10);
+      }
+    } else if (weaponId === "teleport-ball") {
+      const x = Math.round(centerX + aim.x * 22);
+      const y = Math.round(centerY + aim.y * 14);
+      ctx.fillRect(x - 8, y - 8, 16, 16);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 3, y - 3, 6, 6);
+    } else if (weaponId === "lightning-rod") {
+      const x = Math.round(centerX + aim.x * 20);
+      const y = Math.round(centerY + aim.y * 15);
+      this.pixelRect(ctx, x, y - 4, facing * 38, 6);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x + facing * 32, y - 12, facing * 8, 20);
+      const lightning = this.combat.getLightningState(state.id);
+      if (lightning.empoweredTimer > 0 || lightning.charging) {
+        ctx.fillStyle = "rgba(255, 216, 77, 0.75)";
+        for (let index = 0; index < 5; index += 1) {
+          const offset = Math.sin(performance.now() * 0.012 + index) * 12;
+          ctx.fillRect(Math.round(centerX - 22 + index * 10), Math.round(centerY - 28 + offset), 4, 10);
+        }
+      }
+    } else if (weaponId === "sledgehammer") {
+      const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
+      const lift = active > 0 || charge > 0.2 ? -34 - charge * 18 : -8;
+      const x = Math.round(centerX + facing * 17);
+      const y = Math.round(centerY + lift);
+      ctx.fillStyle = "#b8bfd7";
+      this.pixelRect(ctx, x, y, facing * 46, 7);
+      ctx.fillStyle = "#ff8f3d";
+      this.pixelRect(ctx, x + facing * 35, y - 16, facing * 24, 26);
+      this.pixelRect(ctx, x + facing * 31, y - 10, facing * 32, 8);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(255, 143, 61, 0.6)";
+        for (let index = 0; index < 6; index += 1) {
+          ctx.fillRect(Math.round(centerX + facing * (20 + index * 13)), Math.round(centerY + 22 + index * 2), 10, 6);
+        }
+      }
+    }
+    ctx.restore();
   }
 
   private drawCombatEntities(ctx: CanvasRenderingContext2D): void {
@@ -394,8 +566,28 @@ export class Game {
   private drawProjectile(ctx: CanvasRenderingContext2D, projectile: Projectile): void {
     const x = Math.round(projectile.x - this.camera.x);
     const y = Math.round(projectile.y - this.camera.y);
+    if (projectile.weaponId === "teleport-ball") {
+      const pulse = 1 + Math.sin(performance.now() * 0.012) * 0.25;
+      ctx.fillStyle = "rgba(176, 150, 255, 0.28)";
+      ctx.fillRect(x - Math.round(18 * pulse), y - Math.round(18 * pulse), Math.round(36 * pulse), Math.round(36 * pulse));
+      ctx.fillStyle = projectile.color;
+      ctx.fillRect(x - 10, y - 10, 20, 20);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 4, y - 4, 8, 8);
+      return;
+    }
+    if (projectile.id.startsWith("throw")) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(projectile.age * 8);
+      ctx.fillStyle = projectile.color;
+      ctx.fillRect(-12, -4, 24, 8);
+      ctx.fillRect(3, -10, 8, 20);
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = projectile.trailColor;
-    ctx.fillRect(Math.round(x - projectile.vx * 0.018), Math.round(y - projectile.vy * 0.018), 10, 3);
+    ctx.fillRect(Math.round(x - projectile.vx * 0.018), Math.round(y - projectile.vy * 0.018), Math.max(12, projectile.radius * 4), 3);
     ctx.fillStyle = projectile.color;
     ctx.fillRect(x - projectile.radius, y - projectile.radius, projectile.radius * 2, projectile.radius * 2);
   }
@@ -403,9 +595,25 @@ export class Game {
   private drawDroppedWeapon(ctx: CanvasRenderingContext2D, dropped: DroppedWeapon): void {
     const x = Math.round(dropped.x - this.camera.x);
     const y = Math.round(dropped.y - this.camera.y);
-    ctx.fillStyle = dropped.pickupable ? "#ffd84d" : "#ffffff";
-    ctx.fillRect(x - 10, y - 3, 20, 6);
-    ctx.fillRect(x + 4, y - 7, 5, 5);
+    ctx.fillStyle = dropped.pickupable ? colorForWeapon(dropped.weaponId) : "#ffffff";
+    if (dropped.weaponId === "sledgehammer") {
+      ctx.fillRect(x - 16, y - 3, 28, 6);
+      ctx.fillRect(x + 8, y - 12, 14, 20);
+    } else if (dropped.weaponId === "whip") {
+      for (let index = 0; index < 6; index += 1) {
+        ctx.fillRect(x - 18 + index * 7, y + Math.sin(index) * 4, 6, 5);
+      }
+    } else if (dropped.weaponId === "lightning-rod") {
+      ctx.fillRect(x - 18, y - 3, 36, 6);
+      ctx.fillRect(x + 10, y - 10, 6, 16);
+    } else if (dropped.weaponId === "teleport-ball") {
+      ctx.fillRect(x - 8, y - 8, 16, 16);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 3, y - 3, 6, 6);
+    } else {
+      ctx.fillRect(x - 12, y - 4, 24, 8);
+      ctx.fillRect(x + 3, y + 3, 7, 9);
+    }
     if (dropped.pickupable) {
       ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.textAlign = "center";
@@ -427,8 +635,27 @@ export class Game {
     if (effect.kind === "shockwave") {
       const radius = Math.round(14 + progress * 46);
       ctx.strokeRect(x - radius, y - 5, radius * 2, 10);
+    } else if (effect.kind === "slam") {
+      const radius = Math.round(18 + progress * 72);
+      ctx.fillRect(x - radius, y + 16, radius * 2, 8);
+      ctx.fillRect(x - radius / 2, y - 14, 10, 18);
+      ctx.fillRect(x + radius / 2, y - 18, 10, 22);
+    } else if (effect.kind === "muzzle") {
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(x - 8, y - 8, 16, 16);
+      ctx.fillRect(tx - 5, ty - 5, 10, 10);
     } else if (effect.kind === "spark" || effect.kind === "dry-fire" || effect.kind === "pickup") {
       ctx.fillRect(x - 6, y - 6, 12, 12);
+    } else if (effect.kind === "trip" || effect.kind === "stomp" || effect.kind === "stun") {
+      ctx.fillRect(x - 12, y - 6, 24, 6);
+      ctx.fillRect(x - 8, y - 18 - progress * 8, 16, 8);
+      ctx.fillRect(x - 18, y - 14, 6, 6);
+      ctx.fillRect(x + 12, y - 14, 6, 6);
+    } else if (effect.kind === "aura") {
+      const radius = Math.round(18 + Math.sin(performance.now() * 0.018) * 5);
+      ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+      ctx.fillRect(x - 2, y - radius - 12, 4, 12);
+      ctx.fillRect(x + radius - 2, y - 2, 4, 12);
     } else if (effect.kind === "lightning") {
       ctx.beginPath();
       ctx.moveTo(x, y - 70);
@@ -436,6 +663,18 @@ export class Game {
       ctx.lineTo(x - 8, y - 12);
       ctx.lineTo(x, y);
       ctx.stroke();
+    } else if (effect.kind === "teleport") {
+      const radius = Math.round(10 + progress * 36);
+      ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+      ctx.fillRect(x - 5, y - 5, 10, 10);
+    } else if (effect.kind === "whip-pull") {
+      const segments = 8;
+      for (let index = 0; index <= segments; index += 1) {
+        const t = index / segments;
+        const px = x + (tx - x) * t;
+        const py = y + (ty - y) * t + Math.sin(t * Math.PI) * 22;
+        ctx.fillRect(Math.round(px - 4), Math.round(py - 4), 8, 8);
+      }
     } else {
       ctx.beginPath();
       ctx.moveTo(x, y);
@@ -463,12 +702,8 @@ export class Game {
   }
 
   private drawCrosshair(ctx: CanvasRenderingContext2D): void {
-    const equipped = weaponRegistry.get(this.combat.getPlayerInventory().equippedWeapon);
-    const aim = this.lastAim;
-    const centerX = this.localPlayer.state.x + this.localPlayer.state.width / 2 - this.camera.x;
-    const centerY = this.localPlayer.state.y + this.localPlayer.state.height / 2 - this.camera.y;
-    const x = Math.round(centerX + aim.x * Math.min(220, equipped.primary.range));
-    const y = Math.round(centerY + aim.y * Math.min(220, equipped.primary.range));
+    const x = Math.round(this.lastMouse.x);
+    const y = Math.round(this.lastMouse.y);
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -489,15 +724,32 @@ export class Game {
     const ammo = inventory.ammo[weapon.id];
     const charge = inventory.charge[weapon.id];
     const local = this.combat.getCombatant(this.localPlayer.state.id);
-    const ammoText = ammo ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? " Reloading" : ""}` : "No ammo";
+    const teleport = this.combat.getTeleportState(this.localPlayer.state.id);
+    const lightning = this.combat.getLightningState(this.localPlayer.state.id);
+    const ammoText = ammo
+      ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
+      : "No ammo";
     const status = local?.statuses.map((item) => item.label).join(", ") || "No status";
     const chargeText = charge ? `Charge ${charge.charge.toFixed(1)} / ${charge.maxCharge}s · Heat ${Math.round(charge.heat * 100)}%` : status;
+    const special = [
+      teleport.pending ? `Teleport ${teleport.timer.toFixed(1)}s · Right click cancel` : "",
+      lightning.charging ? `Lightning in ${lightning.chargeTimer.toFixed(1)}s` : "",
+      lightning.empoweredTimer > 0 ? `Empowered ${lightning.empoweredTimer.toFixed(1)}s` : "",
+      lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
+    ].filter(Boolean).join(" · ");
+    const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
+    const weaponNumber = WEAPON_IDS.includes(weapon.id as (typeof WEAPON_IDS)[number])
+      ? WEAPON_IDS.indexOf(weapon.id as (typeof WEAPON_IDS)[number]) + 1
+      : 1;
     const armory = WEAPON_IDS.map((id, index) => `<span class="${id === weapon.id ? "is-equipped" : ""}">${index + 1}:${weaponRegistry.get(id).name}</span>`).join("");
     this.combatHud.innerHTML = `
       <div class="combat-hud-card">
-        <strong>${WEAPON_IDS.indexOf(weapon.id) + 1}. ${weapon.name}</strong>
+        <strong>${weaponNumber}. ${weapon.name}</strong>
+        <span>${hpText}</span>
         <span>${ammoText}</span>
         <span>${chargeText}</span>
+        ${special ? `<span>${special}</span>` : ""}
+        <span>${weaponHelper(weapon.id)}</span>
       </div>
       ${this.offlineMode ? `<div class="armory-strip">${armory}</div>` : ""}
     `;
@@ -573,6 +825,16 @@ export class Game {
     this.drawBackdrop(this.context);
   }
 
+  private pixelRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+    let nextX = x;
+    let nextWidth = width;
+    if (nextWidth < 0) {
+      nextX += nextWidth;
+      nextWidth = Math.abs(nextWidth);
+    }
+    ctx.fillRect(Math.round(nextX), Math.round(y), Math.round(nextWidth), Math.round(height));
+  }
+
   private readonly resize = (): void => {
     const width = Math.max(320, window.innerWidth);
     const height = Math.max(320, window.innerHeight);
@@ -585,4 +847,37 @@ export class Game {
       this.renderEmpty();
     }
   };
+}
+
+function colorForWeapon(id: WeaponId): string {
+  switch (id) {
+    case "whip":
+      return "#f65bd8";
+    case "teleport-ball":
+      return "#b096ff";
+    case "lightning-rod":
+      return "#ffd84d";
+    case "sledgehammer":
+      return "#ff8f3d";
+    case "pistol":
+    default:
+      return "#ffffff";
+  }
+}
+
+function weaponHelper(id: WeaponId): string {
+  switch (id) {
+    case "pistol":
+      return "Tap shots · R reload/perfect · Right throw";
+    case "whip":
+      return "Long arc · Tip cracks · 2 quick hits pull";
+    case "teleport-ball":
+      return "Left throw · 3s teleport · Right cancel";
+    case "lightning-rod":
+      return "Left poke · Hold/right raise · Touch shocks";
+    case "sledgehammer":
+      return "Hold left charge · Air drop · Right shove";
+    default:
+      return "";
+  }
 }

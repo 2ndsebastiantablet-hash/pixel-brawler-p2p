@@ -15,6 +15,14 @@ import { whip } from "./weapons/Whip";
 export const WEAPON_IDS = [
   "pistol",
   "whip",
+  "teleport-ball",
+  "lightning-rod",
+  "sledgehammer",
+] as const satisfies readonly WeaponId[];
+
+const ALL_WEAPON_IDS = [
+  "pistol",
+  "whip",
   "slingshot",
   "laser-blaster",
   "revolver",
@@ -60,7 +68,7 @@ class WeaponRegistry {
   }
 
   all(): WeaponDefinition[] {
-    return WEAPON_IDS.map((id) => this.get(id));
+    return ALL_WEAPON_IDS.map((id) => this.get(id));
   }
 }
 
@@ -81,6 +89,7 @@ export function createDefaultInventory(): WeaponInventoryState {
         reloadTimer: 0,
         perfectWindow: 0,
         perfectShots: 0,
+        perfectQueued: false,
       };
     }
     if (weapon.charge) {

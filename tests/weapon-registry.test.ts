@@ -2,17 +2,10 @@ import { describe, expect, it } from "vitest";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "../src/game/combat/WeaponRegistry";
 
 describe("weapon registry", () => {
-  it("registers the complete prototype weapon set with mastery hooks", () => {
+  it("enables only the first polished weapon slice", () => {
     expect(WEAPON_IDS).toEqual([
       "pistol",
       "whip",
-      "slingshot",
-      "laser-blaster",
-      "revolver",
-      "minigun",
-      "sniper",
-      "knife",
-      "machete",
       "teleport-ball",
       "lightning-rod",
       "sledgehammer",
@@ -30,13 +23,13 @@ describe("weapon registry", () => {
     }
   });
 
-  it("creates a test inventory with all 12 weapons and pistol equipped first", () => {
+  it("creates a test inventory with only the enabled weapons and pistol equipped first", () => {
     const inventory = createDefaultInventory();
 
     expect(inventory.equippedWeapon).toBe("pistol");
     expect(inventory.weaponInventory).toEqual(WEAPON_IDS);
     expect(inventory.ammo.pistol?.magazine).toBe(20);
-    expect(inventory.ammo["slingshot"]?.magazine).toBe(10);
-    expect(inventory.charge["laser-blaster"]?.maxCharge).toBe(40);
+    expect(inventory.ammo["slingshot"]).toBeUndefined();
+    expect(inventory.charge["laser-blaster"]).toBeUndefined();
   });
 });

@@ -11,8 +11,10 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
 - Compact in-game HUD for private room codes, public server names, and Offline Test.
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
-- Prototype combat system with 100 HP, hitstun, invulnerability flash, damage numbers, knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, and an offline training dummy.
-- Test loadout with pistol, whip, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, teleport ball, lightning rod, and sledgehammer.
+- Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
+- Five enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, and sledgehammer. The older unfinished weapons are registered for compatibility but hidden from the armory/loadout.
+- Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
+- Procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, and heavy hammer attacks.
 - WebRTC DataChannel state replication at a compact tick rate.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, and WebRTC offer/answer/ICE relay.
 
@@ -33,25 +35,30 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - Left mouse: Primary fire / swing / use.
 - Right mouse: Secondary, throw, or weapon special.
 - `R`: Reload weapons that use ammo.
-- `1`-`9`: Equip from the first nine test loadout slots.
-- `Q` / `E`: Previous / next weapon, including slots 10-12.
+- `1`-`5`: Equip from the enabled test loadout slots.
+- `Q` / `E`: Previous / next weapon.
 - `F`: Pick up nearby dropped weapon.
 - `G`: Drop / throw current weapon.
 
-## Prototype Weapons
+## Enabled Weapons
 
-- Pistol: 20-shot tap-fire sidearm with reload timing, slide shots, air recoil, close-shot knockback, and pistol throw.
-- Whip: Long narrow melee control weapon with tip stun, low trip, double-hit pull, latch-style mobility hooks, and disarm prototype hooks.
-- Slingshot: 10-stone arcing projectile weapon with charge, ricochet, scatter pebbles, head bonk, and skip-shot utility.
-- Laser Blaster: Charge weapon with heat, vent burst, air hover behavior, charge thresholds, and overcharge risk hooks.
-- Revolver: 6-shot high-knockback sidearm with fan fire, quickdraw, last-bullet bonus, perfect reload, and ricochet hooks.
-- Minigun: Heavy pressure weapon with spin/hold firing, overheat hooks, suppression, recoil, and pre-spin behavior.
-- Sniper: Long-range high-damage weapon with steady aim, upper-body bonus, stillness bonus, piercing, wall mark, and no-scope hooks.
-- Knife: Fast close weapon with combo hooks, backstab, air stall, dash stab, parry hook, bleed, and throw.
-- Machete: Medium melee arc with heavy chop, crouch slash, air chop, brush-cut combo, and weak projectile clash hooks.
-- Teleport Ball: Utility projectile that marks teleport movement, cancel hooks, direct-hit acceleration, arrival burst, pull, and fakeout behavior.
-- Lightning Rod: Risk/reward shock weapon with self-strike empowerment hooks, electric zones, chain shock, storm timing, and throw lightning.
-- Sledge Hammer: Slow heavy weapon with charged slam, shockwave, shove, air drop, recoil bounce, armor-frame hook, and stagger.
+- Pistol: 20-shot tap-fire sidearm. Left click fires one bullet for 10 damage, `R` reloads, a late `R` press during reload grants three perfect shots, air shots recoil the player, slide shots get extra speed/knockback, close shots knock harder, and right click throws the pistol as a pickup object.
+- Whip: Very long mouse-aimed control weapon. The body hit deals light damage, the tip sweet spot adds stun/knockback, low/duck whip trips, air whip stalls slightly, and the same target is pulled only after two quick whip hits inside the combo window.
+- Teleporting Ball: Left click throws an arcing marker. After three seconds the player teleports to the ball unless right click cancels it. Direct hits deal small damage and speed up the teleport. Arrival creates a small burst that damages and knocks enemies away.
+- Lightning Rod: Left click pokes with shock. Right click raises the rod and calls lightning after a short delay, slightly damaging the player but granting empowered movement and a visible electric aura. Touching an empowered player shocks and briefly stuns targets on a per-target cooldown. Thrown rods shock on hit or landing.
+- Sledgehammer: Heavy slow weapon with a large pixel hammer. Holding left click charges an overhead slam, full charge creates a shockwave, air attacks pull downward, right click shoves, and heavy impacts add recovery, screen shake, sound, big damage, and knockback.
+
+## Movement Combat
+
+- Slide Trip: Ground `Shift` slide trips enemies on contact, dealing light damage, upward pop, knockback, and short stun.
+- Low Slide Trip: `S` + `Shift` slides longer and trips harder with stronger pop and stun.
+- Head Stomp: Landing on a target's head with downward velocity deals small damage, stuns/squashes the target briefly, and bounces the stomping player upward.
+- Air Dive Hit: `Shift` in air dives into targets for damage, knockback, and about one second of stun.
+- Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a small shockwave.
+
+## Loading Screen And Sound
+
+The first screen shows a recreated keyboard layout with keycaps, labels, mouse controls, and a continue button. The game uses procedural Web Audio sounds generated in code; there are no copyrighted external sound assets. Volume constants live in `src/audio/SoundSystem.ts`, and repeated sounds such as footsteps and shock pulses are rate-limited.
 
 ## Requirements
 
@@ -77,7 +84,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. Press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows an armory strip along the bottom of the screen. Use `1`-`9` and `Q`/`E` to equip all 12 prototype weapons, then attack with the mouse.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the five-weapon armory strip along the bottom of the screen. Use `1`-`5` and `Q`/`E` to equip the enabled weapons, then attack with the mouse.
 
 ## Run the signaling Worker locally
 
@@ -160,7 +167,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable prototype, not final balance. Weapon mastery mechanics are represented as first-pass systems, hooks, and readable effects rather than final competitive tuning.
-- Networking uses simple state replication and prototype combat event mirroring, not rollback netcode or authoritative hit validation.
+- Combat is a playable vertical slice for the first five weapons, not final balance.
+- Offline Test is the main combat-quality target for this update. Multiplayer still uses simple state replication and prototype combat event mirroring, not rollback netcode or authoritative hit validation, so remote players can see movement/attack effects but combat authority is not final.
 - Public room entries are short-lived development records hydrated from live Durable Objects when listed.
 - TURN is not configured, so some restrictive networks may fail peer connection.

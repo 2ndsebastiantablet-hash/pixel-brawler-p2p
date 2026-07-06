@@ -81,6 +81,14 @@ button {
   text-align: center;
 }
 
+.controls-panel {
+  width: min(760px, calc(100vw - 32px));
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  text-align: center;
+}
+
 .game-title {
   color: #ffffff;
   font-size: 42px;
@@ -122,6 +130,75 @@ button {
   color: #dfe1eb;
   font-size: 13px;
   font-weight: 700;
+}
+
+.keyboard-map {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.key-help {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.055);
+  text-align: left;
+}
+
+.key-help.wide-key {
+  grid-column: span 2;
+}
+
+.keycap,
+.mouse-icon {
+  display: inline-grid;
+  place-items: center;
+  min-width: 42px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-bottom-color: rgba(0, 0, 0, 0.5);
+  border-radius: 6px;
+  color: #090a0f;
+  background: #f8f8ff;
+  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.key-help strong,
+.mouse-map strong {
+  min-width: 0;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.mouse-map {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mouse-map div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(31, 216, 255, 0.08);
+  text-align: left;
 }
 
 .text-input {
@@ -401,6 +478,15 @@ button:focus-visible {
 
   .color-grid {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .keyboard-map,
+  .mouse-map {
+    grid-template-columns: 1fr;
+  }
+
+  .key-help.wide-key {
+    grid-column: auto;
   }
 
   .game-hud {

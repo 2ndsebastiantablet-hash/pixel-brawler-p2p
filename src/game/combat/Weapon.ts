@@ -81,6 +81,7 @@ export interface WeaponAmmoState {
   reloadTimer: number;
   perfectWindow: number;
   perfectShots: number;
+  perfectQueued: boolean;
 }
 
 export interface WeaponChargeState {

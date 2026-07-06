@@ -111,6 +111,9 @@ export class InputController {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    if (isUiEditingTarget(event.target)) {
+      return;
+    }
     if (!trackedKeys.has(event.code)) {
       return;
     }
@@ -122,6 +125,9 @@ export class InputController {
   };
 
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
+    if (isUiEditingTarget(event.target)) {
+      return;
+    }
     if (!trackedKeys.has(event.code)) {
       return;
     }
@@ -136,18 +142,27 @@ export class InputController {
   };
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
+    if (isUiTarget(event.target)) {
+      return;
+    }
     event.preventDefault();
     this.mouseHeld.add(event.button);
     this.mousePressed.add(event.button);
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
+    if (isUiTarget(event.target)) {
+      return;
+    }
     event.preventDefault();
     this.mouseHeld.delete(event.button);
     this.mouseReleased.add(event.button);
   };
 
   private readonly handleContextMenu = (event: MouseEvent): void => {
+    if (isUiTarget(event.target)) {
+      return;
+    }
     event.preventDefault();
   };
 
@@ -173,4 +188,14 @@ function getPressedSlot(pressed: Set<string>): number | null {
     }
   }
   return null;
+}
+
+function isUiEditingTarget(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  return Boolean(element?.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function isUiTarget(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  return Boolean(element?.closest("input, textarea, select, button, .menu-overlay, .pause-overlay"));
 }

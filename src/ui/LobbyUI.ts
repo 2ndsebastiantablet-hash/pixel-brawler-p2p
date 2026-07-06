@@ -5,6 +5,7 @@ import {
   savePlayerProfile,
   type PlayerProfile,
 } from "./Profile";
+import { playSound } from "../audio/SoundSystem";
 
 export interface SessionView {
   mode: "offline" | "private" | "public";
@@ -28,7 +29,7 @@ interface LobbyActions {
   banPeer: (peer: PeerInfo) => void;
 }
 
-type MenuScreen = "main" | "setup" | "host" | "join" | "game";
+type MenuScreen = "controls" | "main" | "setup" | "host" | "join" | "game";
 
 export class LobbyUI {
   private readonly menu = document.createElement("section");
@@ -54,7 +55,9 @@ export class LobbyUI {
     this.hud.hidden = true;
     this.pause.hidden = true;
     parent.append(this.menu, this.hud, this.pause);
-    this.showMain();
+    this.menu.addEventListener("pointerover", this.handleMenuHover);
+    this.menu.addEventListener("click", this.handleMenuClick);
+    this.showControls();
   }
 
   getProfile(): PlayerProfile {
@@ -240,6 +243,70 @@ export class LobbyUI {
     this.profile = savePlayerProfile({ ...this.profile, showNames: show });
     return this.profile;
   }
+
+  showControls(): void {
+    this.screen = "controls";
+    this.session = null;
+    this.pauseOpen = false;
+    this.menu.hidden = false;
+    this.hud.hidden = true;
+    this.pause.hidden = true;
+
+    const panel = document.createElement("div");
+    panel.className = "menu-panel controls-panel";
+    panel.innerHTML = `
+      <div class="game-title">pixel-brawler-p2p</div>
+      <p class="game-subtitle">Controls</p>
+      <div class="keyboard-map" aria-label="Keyboard controls">
+        ${controlKey("A", "Move left")}
+        ${controlKey("D", "Move right")}
+        ${controlKey("Space", "Jump / Double Jump", "wide-key")}
+        ${controlKey("Shift", "Dash / Slide / Air Dive", "wide-key")}
+        ${controlKey("S", "Duck / Low Slide / Ground Slam")}
+        ${controlKey("R", "Reload / Recall / Cancel")}
+        ${controlKey("F", "Pick Up")}
+        ${controlKey("G", "Drop")}
+        ${controlKey("Q", "Previous Weapon")}
+        ${controlKey("E", "Next Weapon")}
+        ${controlKey("N", "Toggle Names")}
+        ${controlKey("Esc", "Server Info / Leave", "wide-key")}
+      </div>
+      <div class="mouse-map">
+        <div><span class="mouse-icon">Mouse</span><strong>Aim</strong></div>
+        <div><span class="mouse-icon">Left</span><strong>Primary Weapon Use</strong></div>
+        <div><span class="mouse-icon">Right</span><strong>Secondary Weapon Use</strong></div>
+      </div>
+      <button type="button" class="primary-action" data-continue>Continue</button>
+      <p class="menu-status">Press any key or click to continue.</p>
+    `;
+    this.menu.replaceChildren(panel);
+    const continueToMenu = (): void => {
+      window.removeEventListener("keydown", handleAnyKey);
+      playSound("loading-continue");
+      this.showMain();
+    };
+    const handleAnyKey = (event: KeyboardEvent): void => {
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']")) {
+        return;
+      }
+      event.preventDefault();
+      continueToMenu();
+    };
+    requireElement(panel, "[data-continue]").addEventListener("click", continueToMenu, { once: true });
+    window.addEventListener("keydown", handleAnyKey, { once: true });
+  }
+
+  private readonly handleMenuHover = (event: Event): void => {
+    if (event.target instanceof HTMLElement && event.target.closest("button")) {
+      playSound("menu-hover");
+    }
+  };
+
+  private readonly handleMenuClick = (event: Event): void => {
+    if (event.target instanceof HTMLElement && event.target.closest("button")) {
+      playSound("menu-click");
+    }
+  };
 
   togglePause(session: SessionView, localClientId: string): void {
     if (this.pauseOpen) {
@@ -452,6 +519,15 @@ function createChip(text: string, tone = ""): HTMLElement {
   chip.className = `hud-chip${tone ? ` ${tone}` : ""}`;
   chip.textContent = text;
   return chip;
+}
+
+function controlKey(key: string, label: string, extraClass = ""): string {
+  return `
+    <div class="key-help ${extraClass}">
+      <span class="keycap">${key}</span>
+      <strong>${label}</strong>
+    </div>
+  `;
 }
 
 function localPeerFromSession(session: SessionView, profile: PlayerProfile): PeerInfo {
