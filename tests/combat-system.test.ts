@@ -201,6 +201,85 @@ describe("combat system", () => {
     expect(shooter.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - shooter.height);
   });
 
+  it("registers remote players as real combat targets for projectiles and body attacks", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const shooter = { ...playerState, id: "peer-a", x: 0 };
+    combat.syncLocalPlayer(shooter, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 120,
+      y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.usePrimary({ ownerId: "peer-a", player: shooter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.09, [shooter]);
+
+    expect(combat.getCombatant("peer-b")?.hp).toBeLessThan(100);
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", ownerId: "peer-a", targetId: "peer-b", damage: expect.any(Number) }),
+    ]));
+    const remoteAfterShot = combat.getCombatant("peer-b");
+    if (remoteAfterShot) {
+      remoteAfterShot.invulnerable = 0;
+      remoteAfterShot.hp = 100;
+      remoteAfterShot.x = 120;
+      remoteAfterShot.y = DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height;
+      remoteAfterShot.velocityX = 0;
+      remoteAfterShot.velocityY = 0;
+    }
+
+    const slider = {
+      ...shooter,
+      x: 84,
+      y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height,
+      sliding: true,
+      action: "slide" as const,
+      velocityX: 620,
+      facing: 1 as const,
+    };
+    combat.syncLocalPlayer(slider, "Host", "#18dff5");
+    combat.update(1 / 60, [slider]);
+    expect(combat.getCombatant("peer-b")?.statuses.some((status) => status.id === "tripped")).toBe(true);
+  });
+
+  it("applies remote hit packets to the local player without echoing a new hit packet", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const local = { ...playerState, id: "peer-b" };
+    combat.syncLocalPlayer(local, "Guest", "#ff6f91");
+
+    combat.applyRemoteEvent({
+      t: "c",
+      id: "hit-from-peer-a",
+      ownerId: "peer-a",
+      weaponId: "sniper",
+      action: "hit",
+      x: local.x + 10,
+      y: local.y + 36,
+      ax: 1,
+      ay: 0,
+      label: "Sniper",
+      ts: 500,
+      targetId: "peer-b",
+      damage: 80,
+      kx: 640,
+      ky: -180,
+      stun: 0.5,
+      status: "legShotSlow",
+    });
+
+    expect(combat.getCombatant("peer-b")?.hp).toBe(20);
+    expect(combat.getCombatant("peer-b")?.statuses.some((status) => status.id === "legShotSlow")).toBe(true);
+    expect(combat.consumeEvents().some((event) => event.id === "hit-from-peer-a")).toBe(false);
+  });
+
   it("only pulls with the whip after two quick hits on the same target", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());

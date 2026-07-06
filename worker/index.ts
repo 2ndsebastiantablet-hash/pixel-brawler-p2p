@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { RoomDirectoryDurableObject, RoomDurableObject, type PublicRoomSummary } from "./RoomDurableObject";
+import { MAX_ROOM_PLAYERS } from "../src/net/RoomConfig";
 
 export { RoomDirectoryDurableObject, RoomDurableObject };
 
@@ -95,6 +96,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
       hostName,
       createdAt,
       peers: 0,
+      maxPeers: MAX_ROOM_PLAYERS,
     };
     await directory(env).addRoom(summary);
   }

@@ -1,3 +1,5 @@
+import type { WeaponId } from "./Weapon";
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -11,6 +13,8 @@ export interface DamageRequest {
   stun: number;
   label: string;
   status?: string;
+  weaponId?: WeaponId;
+  emitEvent?: boolean;
 }
 
 export interface DamageResult {

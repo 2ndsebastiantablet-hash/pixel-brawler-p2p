@@ -1,4 +1,9 @@
 import type { Facing, PlayerAction } from "../game/Physics";
+import type { StatusEffectId } from "../game/combat/StatusEffects";
+import type { WeaponId } from "../game/combat/Weapon";
+import { MAX_ROOM_PLAYERS } from "./RoomConfig";
+
+export { MAX_ROOM_PLAYERS };
 
 export interface PlayerNetState {
   id: string;
@@ -15,6 +20,10 @@ export interface PlayerNetState {
   action: PlayerAction;
   sequence: number;
   sentAt: number;
+  weaponId?: WeaponId;
+  hp?: number;
+  statuses?: StatusEffectId[];
+  respawnTimer?: number;
 }
 
 export interface PlayerStatePacket {
@@ -33,6 +42,10 @@ export interface PlayerStatePacket {
   a: PlayerAction;
   seq: number;
   ts: number;
+  w?: WeaponId;
+  hp?: number;
+  st?: StatusEffectId[];
+  ko?: number;
 }
 
 export interface CombatEventPacket {
@@ -47,12 +60,19 @@ export interface CombatEventPacket {
   ay: number;
   label: string;
   ts: number;
+  targetId?: string;
+  damage?: number;
+  kx?: number;
+  ky?: number;
+  stun?: number;
+  status?: string;
 }
 
 export type SignalMessage =
   | { type: "offer"; sdp: RTCSessionDescriptionInit; from?: string }
   | { type: "answer"; sdp: RTCSessionDescriptionInit; from?: string }
   | { type: "ice"; candidate: RTCIceCandidateInit; from?: string }
+  | { type: "data"; from?: string; packet: PlayerStatePacket | CombatEventPacket }
   | { type: "lobby"; roomCode: string; visibility: "private" | "public"; serverName: string; hostName: string; hostClientId: string; peers: PeerInfo[] }
   | { type: "peer-left"; peerId: string }
   | { type: "kick"; targetPeerId?: string; targetClientId?: string; reason?: string }
@@ -75,6 +95,7 @@ export interface RoomSummary {
   hostName: string;
   createdAt: number;
   peers: number;
+  maxPeers?: number;
 }
 
 export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacket {
@@ -94,6 +115,10 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     a: state.action,
     seq: state.sequence,
     ts: state.sentAt,
+    ...(state.weaponId ? { w: state.weaponId } : {}),
+    ...(typeof state.hp === "number" ? { hp: round(state.hp, 1) } : {}),
+    ...(state.statuses ? { st: state.statuses } : {}),
+    ...(typeof state.respawnTimer === "number" ? { ko: round(state.respawnTimer, 2) } : {}),
   };
 }
 
@@ -117,6 +142,10 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     action: packet.a,
     sequence: packet.seq,
     sentAt: packet.ts,
+    ...(packet.w ? { weaponId: packet.w } : {}),
+    ...(typeof packet.hp === "number" ? { hp: packet.hp } : {}),
+    ...(packet.st ? { statuses: packet.st } : {}),
+    ...(typeof packet.ko === "number" ? { respawnTimer: packet.ko } : {}),
   };
 }
 
@@ -140,7 +169,11 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.sl === 0 || value.sl === 1) &&
     isPlayerAction(value.a) &&
     typeof value.seq === "number" &&
-    typeof value.ts === "number"
+    typeof value.ts === "number" &&
+    (value.w === undefined || typeof value.w === "string") &&
+    (value.hp === undefined || typeof value.hp === "number") &&
+    (value.st === undefined || (Array.isArray(value.st) && value.st.every((item) => typeof item === "string"))) &&
+    (value.ko === undefined || typeof value.ko === "number")
   );
 }
 
@@ -165,8 +198,22 @@ export function isCombatEventPacket(packet: unknown): packet is CombatEventPacke
     typeof value.ax === "number" &&
     typeof value.ay === "number" &&
     typeof value.label === "string" &&
-    typeof value.ts === "number"
+    typeof value.ts === "number" &&
+    (value.targetId === undefined || typeof value.targetId === "string") &&
+    (value.damage === undefined || typeof value.damage === "number") &&
+    (value.kx === undefined || typeof value.kx === "number") &&
+    (value.ky === undefined || typeof value.ky === "number") &&
+    (value.stun === undefined || typeof value.stun === "number") &&
+    (value.status === undefined || typeof value.status === "string")
   );
+}
+
+export function isSignalDataMessage(message: unknown): message is Extract<SignalMessage, { type: "data" }> {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const value = message as Partial<Extract<SignalMessage, { type: "data" }>>;
+  return value.type === "data" && (isStatePacket(value.packet) || isCombatEventPacket(value.packet));
 }
 
 export function interpolateRemoteState(

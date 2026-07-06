@@ -1,7 +1,7 @@
 import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
-import { DEFAULT_PHYSICS, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
+import { DEFAULT_PHYSICS, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
@@ -140,10 +140,14 @@ export class Game {
 
   removeRemote(peerId: string): void {
     this.remotes.delete(peerId);
+    this.combat.removeCombatant(peerId);
   }
 
   applyCombatEvent(event: NetCombatEventPacket): void {
     this.combat.applyRemoteEvent(event as CombatEventPacket);
+    if (event.action === "hit" && event.targetId === this.localPlayer.state.id) {
+      this.applyCombatantKnockbackToLocal();
+    }
     this.remoteCombatEvents.push(event as CombatEventPacket);
   }
 
@@ -181,8 +185,9 @@ export class Game {
     const combatInput = this.input.consumeCombatFrame();
     this.lastMouse = { x: combatInput.mouseX, y: combatInput.mouseY };
     this.lastAim = this.getAim(combatInput);
+    const lockedOut = (this.combat.getCombatant(this.localPlayer.state.id)?.respawnTimer ?? 0) > 0;
     const previousState = { ...this.localPlayer.state };
-    this.localPlayer.update(movementInput, dt, this.getWeightedPhysics());
+    this.localPlayer.update(lockedOut ? neutralInput() : movementInput, dt, this.getWeightedPhysics());
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.handleCombatInput(combatInput, dt, time);
@@ -216,8 +221,26 @@ export class Game {
       remote.player.advanceAnimation(dt);
       remote.player.applyNetState(remote.current);
     }
+    this.resolveRemotePlayerCollisions();
+    for (const remote of this.remotes.values()) {
+      this.combat.syncRemotePlayer({
+        id: remote.player.state.id,
+        name: remote.player.name,
+        color: remote.player.color,
+        x: remote.player.state.x,
+        y: remote.player.state.y,
+        width: remote.player.state.width,
+        height: remote.player.state.height,
+        velocityX: remote.player.state.velocityX,
+        velocityY: remote.player.state.velocityY,
+        hp: remote.current.hp,
+        statuses: remote.current.statuses,
+        respawnTimer: remote.current.respawnTimer,
+      });
+    }
 
     this.combat.update(dt, [this.localPlayer.state]);
+    this.applyLocalRespawnState();
     for (const event of this.combat.consumeEvents()) {
       this.options.onCombatEvent(event);
     }
@@ -242,7 +265,14 @@ export class Game {
     this.sendAccumulator += dt;
     if (this.sendAccumulator >= 1 / 20) {
       this.sendAccumulator = 0;
-      this.options.onLocalState(encodePlayerStatePacket(this.localPlayer.toNetState(time)));
+      const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+      this.options.onLocalState(encodePlayerStatePacket({
+        ...this.localPlayer.toNetState(time),
+        weaponId: this.combat.getPlayerInventory().equippedWeapon,
+        hp: localCombatant?.hp,
+        statuses: localCombatant?.statuses.map((status) => status.id),
+        respawnTimer: localCombatant?.respawnTimer,
+      }));
     }
   }
 
@@ -263,6 +293,7 @@ export class Game {
     this.drawCombatEntities(ctx);
     for (const remote of this.remotes.values()) {
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
@@ -513,6 +544,55 @@ export class Game {
     }
   }
 
+  private resolveRemotePlayerCollisions(): void {
+    for (const remote of this.remotes.values()) {
+      const local = this.localPlayer.state;
+      const other = remote.player.state;
+      if (!rectsOverlap(local, other)) {
+        continue;
+      }
+      const localCenter = local.x + local.width / 2;
+      const otherCenter = other.x + other.width / 2;
+      const overlapX = Math.min(local.x + local.width, other.x + other.width) - Math.max(local.x, other.x);
+      if (overlapX <= 0 || overlapX > Math.min(local.width, other.width) + 8) {
+        continue;
+      }
+      const direction = localCenter <= otherCenter ? -1 : 1;
+      const localPush = Math.min(10, overlapX * 0.56);
+      const remotePush = Math.min(6, overlapX * 0.24);
+      local.x += direction * localPush;
+      local.velocityX += direction * 58;
+      other.x -= direction * remotePush;
+      remote.current = { ...remote.current, x: other.x, velocityX: other.velocityX };
+    }
+  }
+
+  private applyCombatantKnockbackToLocal(): void {
+    const combatant = this.combat.getCombatant(this.localPlayer.state.id);
+    if (!combatant) {
+      return;
+    }
+    this.localPlayer.state.velocityX = combatant.velocityX;
+    this.localPlayer.state.velocityY = combatant.velocityY;
+  }
+
+  private applyLocalRespawnState(): void {
+    const combatant = this.combat.getCombatant(this.localPlayer.state.id);
+    if (!combatant || combatant.respawnTimer <= 0) {
+      return;
+    }
+    this.localPlayer.state.x = combatant.x;
+    this.localPlayer.state.y = combatant.y;
+    this.localPlayer.state.velocityX = 0;
+    this.localPlayer.state.velocityY = 0;
+    this.localPlayer.state.grounded = true;
+    this.localPlayer.state.sliding = false;
+    this.localPlayer.state.lowSliding = false;
+    this.localPlayer.state.airDiving = false;
+    this.localPlayer.state.groundSlamming = false;
+    this.localPlayer.state.action = "idle";
+  }
+
   private getAim(input: ReturnType<InputController["consumeCombatFrame"]>): { x: number; y: number } {
     const worldMouse = {
       x: input.mouseX + this.camera.x,
@@ -716,7 +796,7 @@ export class Game {
   private drawCombatEntities(ctx: CanvasRenderingContext2D): void {
     const snapshot = this.combat.getSnapshot();
     for (const combatant of snapshot.combatants) {
-      if (combatant.id !== this.localPlayer.state.id) {
+      if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id)) {
         this.drawCombatant(ctx, combatant);
       }
     }
@@ -977,6 +1057,16 @@ export class Game {
     this.drawHealthBar(ctx, x, y, 46, local.hp, local.maxHp);
   }
 
+  private drawRemoteHealth(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
+    const combatant = this.combat.getCombatant(remote.player.state.id);
+    if (!combatant) {
+      return;
+    }
+    const x = Math.round(remote.player.state.x - this.camera.x - 7);
+    const y = Math.round(remote.player.state.y - this.camera.y - 12);
+    this.drawHealthBar(ctx, x, y, 46, combatant.hp, combatant.maxHp);
+  }
+
   private drawCrosshair(ctx: CanvasRenderingContext2D): void {
     const x = Math.round(this.lastMouse.x);
     const y = Math.round(this.lastMouse.y);
@@ -1222,4 +1312,24 @@ function weaponHelper(id: WeaponId): string {
     default:
       return "";
   }
+}
+
+function rectsOverlap(a: PlayerPhysicsState, b: PlayerPhysicsState): boolean {
+  return a.x < b.x + b.width
+    && a.x + a.width > b.x
+    && a.y < b.y + b.height
+    && a.y + a.height > b.y;
+}
+
+function neutralInput(): InputFrame {
+  return {
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+    downPressed: false,
+    jumpPressed: false,
+    jumpHeld: false,
+    dashPressed: false,
+  };
 }

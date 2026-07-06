@@ -1,4 +1,5 @@
 import type { PeerInfo, RoomSummary } from "../net/NetTypes";
+import { MAX_ROOM_PLAYERS } from "../net/RoomConfig";
 import type { ConnectionStatus } from "../net/WebRTCClient";
 import {
   PLAYER_COLORS,
@@ -384,9 +385,9 @@ export class LobbyUI {
     if (this.session.mode === "offline") {
       left.append(createChip("Offline Test"));
     } else if (this.session.mode === "private") {
-      left.append(createChip(`Room ${this.session.roomCode ?? "-"}`));
+      left.append(createChip(`Room ${this.session.roomCode ?? "-"} ${this.session.peers.length}/${MAX_ROOM_PLAYERS}`));
     } else {
-      right.append(createChip(this.session.serverName || "Public Server"));
+      right.append(createChip(`${this.session.serverName || "Public Server"} ${this.session.peers.length}/${MAX_ROOM_PLAYERS}`));
     }
 
     if (this.status !== "Offline") {
@@ -414,12 +415,14 @@ export class LobbyUI {
       const title = document.createElement("strong");
       title.textContent = room.serverName || room.code;
       const meta = document.createElement("span");
-      meta.textContent = `${room.hostName || "Host"} - ${room.peers}/2 players`;
+      const maxPeers = room.maxPeers ?? MAX_ROOM_PLAYERS;
+      meta.textContent = `${room.hostName || "Host"} - ${room.peers}/${maxPeers} players`;
       text.append(title, meta);
 
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = "Join";
+      button.textContent = room.peers >= maxPeers ? "Full" : "Join";
+      button.disabled = room.peers >= maxPeers;
       button.addEventListener("click", () => this.actions.joinRoom(this.profile, room.code));
 
       row.append(text, button);
@@ -546,9 +549,9 @@ function getSessionLabel(session: SessionView): string {
     return `${session.hostName || "Offline Test"}`;
   }
   if (session.mode === "private") {
-    return `Room ${session.roomCode ?? "-"}`;
+    return `Room ${session.roomCode ?? "-"} - ${session.peers.length}/${MAX_ROOM_PLAYERS} players`;
   }
-  return session.serverName || "Public Server";
+  return `${session.serverName || "Public Server"} - ${session.peers.length}/${MAX_ROOM_PLAYERS} players`;
 }
 
 function defaultServerName(name: string): string {

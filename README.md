@@ -1,6 +1,6 @@
 # pixel-brawler-p2p
 
-A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedural chunky stick-figure fighters, peer-to-peer WebRTC movement sync, and Cloudflare Worker + Durable Object signaling.
+A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedural chunky stick-figure fighters, multiplayer room state sync, and Cloudflare Worker + Durable Object signaling.
 
 ## What is included
 
@@ -11,16 +11,17 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
 - Compact in-game HUD for private room codes, public server names, and Offline Test.
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
+- Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
 - Ten enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, and sniper. Knife and machete remain registered for compatibility but hidden from the armory/loadout.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
 - Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots. Volume constants are fed from the central combat tuning file.
-- WebRTC DataChannel state replication at a compact tick rate.
-- Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, and WebRTC offer/answer/ICE relay.
+- Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, melee hits, slide trips, stomps, dives, and ground-slam interactions.
+- Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, and room-broadcast state/combat packets.
 
-The Worker handles signaling and room management only. Gameplay simulation remains peer-to-peer and client-owned for now. Future rollback, prediction, and deterministic input sync should replace the current simple state replication in `src/net/WebRTCClient.ts` and `src/game/Game.ts`.
+The Worker handles room membership and relays compact state/combat packets to all other players in the room. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
 
 ## Controls
 
@@ -122,9 +123,10 @@ The Worker runs at `http://localhost:8787` by default. The front end uses that U
 5. Private rooms show a room code at the top of the game screen. Public rooms show the server name at the top right.
 6. In window two, press **Play**, set name/color, choose **Join**, then enter the private room code or refresh and join a public server.
 7. Press `Escape` in game to view players, leave, or host-manage the server.
-8. Prototype combat events are also sent over the WebRTC DataChannel, so remote players should see attack/projectile effects. Hit validation is still client-predicted prototype logic.
+8. Shoot, whip, hammer, slide, stomp, dive, and ground slam the other player. Remote players should take HP damage, knockback, hitstun/status effects, damage numbers, KO, and respawn.
+9. Open more windows to test room capacity. Public and private rooms allow up to 10 players, public rows show `1/10`, `2/10`, and so on, and joining is blocked only once the room reaches `10/10`.
 
-If the peers do not connect, check both browser consoles and the Worker terminal. The current WebRTC setup uses a public STUN server and may need TURN later for restrictive networks.
+If players do not appear or combat packets do not apply, check both browser consoles and the Worker terminal. The current prototype uses the room WebSocket relay for state and combat sync, so it does not require TURN for the gameplay packet path.
 
 ## Host Kick And Ban
 
@@ -168,7 +170,7 @@ npm run worker:deploy
 
 Wrangler will create the Durable Object classes declared in the `v1` migration on first deploy. The npm scripts pass `-c wrangler.toml` explicitly so Wrangler does not pick up a parent directory config when this repo sits inside another workspace.
 
-If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This combat update keeps combat packets on the WebRTC DataChannel and does not require a new Durable Object migration.
+If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This multiplayer combat update changes the Worker relay behavior but does not require a new Durable Object migration.
 
 ## Useful scripts
 
@@ -185,6 +187,7 @@ npm run worker:deploy
 ## Current limitations
 
 - Combat is a playable ten-weapon vertical slice, not final balance.
-- Offline Test is the main combat-quality target for this update. Multiplayer still uses simple state replication and prototype combat event mirroring, not rollback netcode or authoritative hit validation, so remote players can see movement/attack effects but combat authority is not final.
+- Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
+- The room WebSocket relay supports up to 10 players. It is intentionally simple and may need rate limiting, host validation, or server authority before serious competitive play.
 - Public room entries are short-lived development records hydrated from live Durable Objects when listed.
-- TURN is not configured, so some restrictive networks may fail peer connection.
+- WebRTC offer/answer types remain in the protocol for compatibility, but gameplay state and combat currently use the Durable Object room relay.

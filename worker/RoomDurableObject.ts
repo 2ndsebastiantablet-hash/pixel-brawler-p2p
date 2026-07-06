@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
+import { MAX_ROOM_PLAYERS } from "../src/net/RoomConfig";
 
 export interface RoomMeta {
   code: string;
@@ -20,6 +21,7 @@ export interface PublicRoomSummary {
   hostName: string;
   createdAt: number;
   peers: number;
+  maxPeers?: number;
 }
 
 interface PeerSession {
@@ -64,6 +66,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       hostName: this.meta.hostName,
       createdAt: this.meta.createdAt,
       peers: this.sessions.size,
+      maxPeers: MAX_ROOM_PLAYERS,
     };
   }
 
@@ -92,7 +95,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
     if (!isHost && this.meta.bannedClientIds.includes(clientId)) {
       return json({ error: "Banned from this host" }, 403);
     }
-    if (this.sessions.size >= 2) {
+    if (this.sessions.size >= MAX_ROOM_PLAYERS) {
       return json({ error: "Room is full" }, 409);
     }
 
@@ -128,6 +131,16 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
 
       if (["offer", "answer", "ice"].includes(type)) {
         const relayed = JSON.stringify({ ...message, from: sender.peerId });
+        for (const session of this.sessions.values()) {
+          if (session.peerId !== sender.peerId) {
+            safeSend(session.socket, relayed);
+          }
+        }
+        return;
+      }
+
+      if (type === "data" && isRelayPacket(message.packet)) {
+        const relayed = JSON.stringify({ type: "data", from: sender.peerId, packet: message.packet });
         for (const session of this.sessions.values()) {
           if (session.peerId !== sender.peerId) {
             safeSend(session.socket, relayed);
@@ -241,6 +254,14 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       safeSend(session.socket, lobbyMessage);
     }
   }
+}
+
+function isRelayPacket(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const packet = value as { t?: unknown };
+  return packet.t === "s" || packet.t === "c";
 }
 
 export class RoomDirectoryDurableObject extends DurableObject<DurableObjectEnv> {

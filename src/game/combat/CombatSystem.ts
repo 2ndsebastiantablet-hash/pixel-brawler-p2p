@@ -93,6 +93,12 @@ export interface CombatEventPacket {
   ay: number;
   label: string;
   ts: number;
+  targetId?: string;
+  damage?: number;
+  kx?: number;
+  ky?: number;
+  stun?: number;
+  status?: string;
 }
 
 interface CombatOptions {
@@ -138,6 +144,7 @@ export class CombatSystem {
   private readonly damageNumbers: DamageNumber[] = [];
   private readonly effects: CombatEffect[] = [];
   private readonly recentEvents: CombatEventPacket[] = [];
+  private readonly appliedRemoteEvents = new Set<string>();
   private readonly sounds: SoundId[] = [];
   private readonly pendingTeleports = new Map<string, PendingTeleport>();
   private readonly lightning = new Map<string, LightningState>();
@@ -155,6 +162,7 @@ export class CombatSystem {
     this.damageNumbers.length = 0;
     this.effects.length = 0;
     this.recentEvents.length = 0;
+    this.appliedRemoteEvents.clear();
     this.sounds.length = 0;
     this.pendingTeleports.clear();
     this.lightning.clear();
@@ -208,6 +216,48 @@ export class CombatSystem {
     };
     this.combatants.set(dummy.id, dummy);
     return dummy;
+  }
+
+  syncRemotePlayer(player: {
+    id: string;
+    name: string;
+    color: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    velocityX: number;
+    velocityY: number;
+    hp?: number;
+    statuses?: StatusEffectId[];
+    respawnTimer?: number;
+  }): Combatant {
+    const existing = this.combatants.get(player.id);
+    const next: Combatant = {
+      id: player.id,
+      name: player.name,
+      x: player.x,
+      y: player.y,
+      width: player.width,
+      height: player.height,
+      spawnX: existing?.spawnX ?? player.x,
+      spawnY: existing?.spawnY ?? player.y,
+      hp: player.hp ?? existing?.hp ?? maxHp,
+      maxHp,
+      velocityX: player.velocityX,
+      velocityY: player.velocityY,
+      hitstun: existing?.hitstun ?? 0,
+      invulnerable: existing?.invulnerable ?? 0,
+      respawnTimer: player.respawnTimer ?? existing?.respawnTimer ?? 0,
+      color: player.color,
+      statuses: player.statuses ? player.statuses.map((status) => createStatus(status)) : existing?.statuses ?? [],
+    };
+    this.combatants.set(player.id, next);
+    return next;
+  }
+
+  removeCombatant(id: string): void {
+    this.combatants.delete(id);
   }
 
   getCombatant(id: string): Combatant | undefined {
@@ -379,6 +429,25 @@ export class CombatSystem {
       color: request.damage >= 25 ? "#ffd84d" : "#ffffff",
     });
     this.addEffect("spark", target.x + target.width / 2, target.y + 18, target.x + target.width / 2, target.y + 18, "#ffffff", request.label);
+    if (request.emitEvent !== false && request.sourceId !== "status") {
+      this.recentEvents.push(this.createEvent(
+        request.sourceId,
+        request.weaponId ?? this.inventory.equippedWeapon,
+        "hit",
+        { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+        normalize(request.knockback),
+        request.label,
+        performanceNow(),
+        {
+          targetId: target.id,
+          damage,
+          kx: request.knockback.x,
+          ky: request.knockback.y,
+          stun: request.stun,
+          status: request.status,
+        },
+      ));
+    }
 
     if (target.hp <= 0) {
       target.respawnTimer = respawnDelay;
@@ -491,6 +560,28 @@ export class CombatSystem {
 
   applyRemoteEvent(event: CombatEventPacket): void {
     const weapon = weaponRegistry.get(event.weaponId);
+    if (event.action === "hit" && event.targetId && typeof event.damage === "number" && !this.appliedRemoteEvents.has(event.id)) {
+      const target = this.combatants.get(event.targetId);
+      if (target) {
+        this.appliedRemoteEvents.add(event.id);
+        const previousInvulnerable = target.invulnerable;
+        target.invulnerable = 0;
+        const hit = this.applyDamage({
+          sourceId: event.ownerId,
+          targetId: event.targetId,
+          damage: event.damage,
+          knockback: { x: event.kx ?? event.ax * 220, y: event.ky ?? event.ay * 160 },
+          stun: event.stun ?? 0.2,
+          label: event.label,
+          status: event.status,
+          weaponId: event.weaponId,
+          emitEvent: false,
+        });
+        if (!hit.applied) {
+          target.invulnerable = previousInvulnerable;
+        }
+      }
+    }
     this.addEffect(event.action === "reload" ? "reload" : weapon.kind === "beam" ? "laser" : weapon.kind === "melee" ? "whip" : "tracer", event.x, event.y, event.x + event.ax * weapon.primary.range, event.y + event.ay * weapon.primary.range, colorForWeapon(event.weaponId), event.label);
   }
 
@@ -1339,6 +1430,7 @@ export class CombatSystem {
             stun: closePistolShot ? projectile.stun + 0.04 : projectile.stun,
             label: projectile.label,
             status: projectile.weaponId === "lightning-rod" ? "shock" : sniperLegShot ? "legShotSlow" : projectile.status,
+            weaponId: projectile.weaponId,
           });
           if (hit.applied) {
             projectile.hits.push(target.id);
@@ -1368,7 +1460,6 @@ export class CombatSystem {
             if (projectile.weaponId === "minigun") {
               this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y, colorForWeapon(projectile.weaponId), "Suppress");
             }
-            this.recentEvents.push(this.createEvent(projectile.ownerId, projectile.weaponId, "hit", { x: projectile.x, y: projectile.y }, normalize(projectile.knockback), projectile.label, performanceNow()));
             if (projectile.weaponId === "teleport-ball") {
               continue;
             } else if (projectile.pierce <= 0) {
@@ -1417,6 +1508,7 @@ export class CombatSystem {
             stun,
             label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : hitbox.label,
             status: rodHit ? "shock" : hitbox.lowTrip ? "tripped" : hitbox.status,
+            weaponId: hitbox.weaponId,
           });
           if (hit.applied) {
             hitbox.hits.push(target.id);
@@ -1684,7 +1776,16 @@ export class CombatSystem {
     };
   }
 
-  private createEvent(ownerId: string, weaponId: WeaponId, action: CombatEventPacket["action"], origin: Vec2, aim: Vec2, label: string, now: number): CombatEventPacket {
+  private createEvent(
+    ownerId: string,
+    weaponId: WeaponId,
+    action: CombatEventPacket["action"],
+    origin: Vec2,
+    aim: Vec2,
+    label: string,
+    now: number,
+    extra: Partial<Pick<CombatEventPacket, "targetId" | "damage" | "kx" | "ky" | "stun" | "status">> = {},
+  ): CombatEventPacket {
     return {
       t: "c",
       id: this.makeId("evt"),
@@ -1697,6 +1798,7 @@ export class CombatSystem {
       ay: round(aim.y),
       label,
       ts: now,
+      ...extra,
     };
   }
 
