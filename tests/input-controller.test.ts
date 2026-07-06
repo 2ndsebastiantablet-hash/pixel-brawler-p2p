@@ -23,4 +23,14 @@ describe("input controller", () => {
     input.dispatchEvent(keyDown);
     expect(keyDown.defaultPrevented).toBe(false);
   });
+
+  it("maps 0 to the tenth weapon slot", () => {
+    controller = new InputController(window);
+
+    const keyDown = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code: "Digit0" });
+    window.dispatchEvent(keyDown);
+
+    expect(keyDown.defaultPrevented).toBe(true);
+    expect(controller.consumeCombatFrame().weaponSlotPressed).toBe(9);
+  });
 });

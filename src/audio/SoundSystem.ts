@@ -1,11 +1,11 @@
-export const MASTER_VOLUME = 0.22;
+export const MASTER_VOLUME = 0.34;
 
 export const SOUND_VOLUME = {
-  ui: 0.45,
-  movement: 0.48,
-  combat: 0.72,
-  weapon: 0.76,
-  heavy: 0.9,
+  ui: 0.55,
+  movement: 0.66,
+  combat: 0.9,
+  weapon: 0.96,
+  heavy: 1,
 } as const;
 
 export type SoundId =
@@ -50,6 +50,23 @@ export type SoundId =
   | "sledge-swing"
   | "sledge-impact"
   | "sledge-slam"
+  | "slingshot-draw"
+  | "slingshot-shot"
+  | "slingshot-scatter"
+  | "slingshot-bounce"
+  | "laser-charge"
+  | "laser-fire"
+  | "laser-vent"
+  | "laser-overcharge"
+  | "revolver-shot"
+  | "revolver-fan"
+  | "revolver-last"
+  | "minigun-spin"
+  | "minigun-fire"
+  | "minigun-overheat"
+  | "sniper-steady"
+  | "sniper-shot"
+  | "sniper-chamber"
   | "respawn";
 
 interface SoundShape {
@@ -104,6 +121,23 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "sledge-swing": { category: "heavy", frequency: 155, endFrequency: 85, duration: 0.16, noise: true, minInterval: 0.1 },
   "sledge-impact": { category: "heavy", frequency: 95, endFrequency: 38, duration: 0.22, noise: true, minInterval: 0.12 },
   "sledge-slam": { category: "heavy", frequency: 120, endFrequency: 34, duration: 0.32, noise: true, minInterval: 0.2 },
+  "slingshot-draw": { category: "weapon", frequency: 260, endFrequency: 430, duration: 0.1, type: "triangle", minInterval: 0.12 },
+  "slingshot-shot": { category: "weapon", frequency: 780, endFrequency: 160, duration: 0.09, noise: true, minInterval: 0.08 },
+  "slingshot-scatter": { category: "weapon", frequency: 560, endFrequency: 120, duration: 0.12, noise: true, minInterval: 0.12 },
+  "slingshot-bounce": { category: "combat", frequency: 340, endFrequency: 210, duration: 0.045, type: "square", minInterval: 0.06 },
+  "laser-charge": { category: "weapon", frequency: 360, endFrequency: 940, duration: 0.16, type: "sawtooth", minInterval: 0.25 },
+  "laser-fire": { category: "weapon", frequency: 1040, endFrequency: 320, duration: 0.13, type: "sawtooth", minInterval: 0.06 },
+  "laser-vent": { category: "heavy", frequency: 430, endFrequency: 90, duration: 0.2, noise: true, minInterval: 0.18 },
+  "laser-overcharge": { category: "heavy", frequency: 90, endFrequency: 980, duration: 0.36, noise: true, minInterval: 0.3 },
+  "revolver-shot": { category: "weapon", frequency: 720, endFrequency: 95, duration: 0.105, noise: true, minInterval: 0.08 },
+  "revolver-fan": { category: "weapon", frequency: 620, endFrequency: 130, duration: 0.09, noise: true, minInterval: 0.05 },
+  "revolver-last": { category: "heavy", frequency: 860, endFrequency: 70, duration: 0.16, noise: true, minInterval: 0.1 },
+  "minigun-spin": { category: "weapon", frequency: 150, endFrequency: 390, duration: 0.16, type: "sawtooth", minInterval: 0.18 },
+  "minigun-fire": { category: "weapon", frequency: 580, endFrequency: 170, duration: 0.045, noise: true, minInterval: 0.035 },
+  "minigun-overheat": { category: "heavy", frequency: 260, endFrequency: 70, duration: 0.28, noise: true, minInterval: 0.35 },
+  "sniper-steady": { category: "weapon", frequency: 220, endFrequency: 580, duration: 0.13, type: "triangle", minInterval: 0.25 },
+  "sniper-shot": { category: "heavy", frequency: 1220, endFrequency: 52, duration: 0.2, noise: true, minInterval: 0.18 },
+  "sniper-chamber": { category: "weapon", frequency: 300, endFrequency: 520, duration: 0.1, type: "square", minInterval: 0.18 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

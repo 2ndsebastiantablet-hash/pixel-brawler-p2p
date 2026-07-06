@@ -266,6 +266,7 @@ export class LobbyUI {
         ${controlKey("R", "Reload / Recall / Cancel")}
         ${controlKey("F", "Pick Up")}
         ${controlKey("G", "Drop")}
+        ${controlKey("1-0", "Weapon Slots", "wide-key")}
         ${controlKey("Q", "Previous Weapon")}
         ${controlKey("E", "Next Weapon")}
         ${controlKey("N", "Toggle Names")}

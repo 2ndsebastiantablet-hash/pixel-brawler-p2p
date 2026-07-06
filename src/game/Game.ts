@@ -1,7 +1,7 @@
 import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
-import { DEFAULT_PHYSICS, type PlayerPhysicsState } from "./Physics";
+import { DEFAULT_PHYSICS, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
@@ -181,10 +181,7 @@ export class Game {
     this.lastMouse = { x: combatInput.mouseX, y: combatInput.mouseY };
     this.lastAim = this.getAim(combatInput);
     const previousState = { ...this.localPlayer.state };
-    this.localPlayer.update(movementInput, dt);
-    if (this.combat.getPlayerInventory().equippedWeapon === "sledgehammer" && !this.localPlayer.state.sliding && !this.localPlayer.state.airDiving && !this.localPlayer.state.groundSlamming) {
-      this.localPlayer.state.velocityX *= 0.86;
-    }
+    this.localPlayer.update(movementInput, dt, this.getWeightedPhysics());
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.handleCombatInput(combatInput, dt, time);
@@ -221,6 +218,7 @@ export class Game {
     }
     for (const sound of this.combat.consumeSounds()) {
       playSound(sound);
+      this.applySoundShake(sound);
     }
     if (this.attackVisual) {
       this.attackVisual.timer = Math.max(0, this.attackVisual.timer - dt);
@@ -306,6 +304,7 @@ export class Game {
     }
 
     const charge = this.combat.getPlayerInventory().charge[equipped];
+    let secondaryHandled = false;
     if (equipped === "laser-blaster") {
       if (input.primaryPressed && charge) {
         charge.charging = true;
@@ -314,22 +313,83 @@ export class Game {
       if (input.primaryHeld && charge) {
         charge.charging = true;
       }
+      if (input.primaryHeld && charge && charge.charge >= charge.maxCharge) {
+        this.recordAttack(this.combat.triggerLaserOvercharge(this.localPlayer.state.id, this.localPlayer.state, time), "primary");
+      }
       if ((input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) && charge) {
         charge.charging = false;
-        this.combat.usePrimary({
+        this.recordAttack(this.combat.usePrimary({
           ownerId: this.localPlayer.state.id,
           player: this.localPlayer.state,
           aim,
           now: time,
           heldMs: this.primaryHeldMs,
           isNewPress: true,
-        });
+        }), "primary");
+      }
+    } else if (equipped === "slingshot") {
+      if (input.primaryHeld) {
+        this.attackVisual = { weaponId: "slingshot", kind: "primary", timer: 0.12 };
+      }
+      if (input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: true,
+        }), "primary");
       }
     } else if (equipped === "sledgehammer") {
       if (input.primaryHeld) {
         this.attackVisual = { weaponId: "sledgehammer", kind: "primary", timer: 0.12 };
       }
       if (input.primaryReleased) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: true,
+        }), "primary");
+      }
+    } else if (equipped === "minigun") {
+      if (input.secondaryHeld || input.secondaryPressed) {
+        this.recordAttack(this.combat.useSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.secondaryHeldMs,
+          isNewPress: input.secondaryPressed,
+        }), "secondary");
+        secondaryHandled = true;
+      }
+      if (input.primaryHeld || input.primaryPressed) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: input.primaryPressed,
+        }), "primary");
+      }
+    } else if (equipped === "sniper") {
+      if (input.secondaryHeld || input.secondaryPressed) {
+        this.recordAttack(this.combat.useSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.secondaryHeldMs,
+          isNewPress: input.secondaryPressed,
+        }), "secondary");
+        secondaryHandled = true;
+      }
+      if (input.primaryPressed) {
         this.recordAttack(this.combat.usePrimary({
           ownerId: this.localPlayer.state.id,
           player: this.localPlayer.state,
@@ -350,7 +410,7 @@ export class Game {
       }), "primary");
     }
 
-    if (input.secondaryPressed || (equipped === "lightning-rod" && input.secondaryHeld && this.secondaryHeldMs < dt * 1000 + 1)) {
+    if (!secondaryHandled && (input.secondaryPressed || (equipped === "lightning-rod" && input.secondaryHeld && this.secondaryHeldMs < dt * 1000 + 1))) {
       this.recordAttack(this.combat.useSecondary({
         ownerId: this.localPlayer.state.id,
         player: this.localPlayer.state,
@@ -379,7 +439,32 @@ export class Game {
       timer: result.kind === "dry-fire" ? 0.12 : result.weaponId === "sledgehammer" ? 0.34 : 0.22,
     };
     if (result.weaponId === "sledgehammer") {
-      this.shakeTimer = Math.max(this.shakeTimer, kind === "primary" ? 0.12 : 0.06);
+      this.shakeTimer = Math.max(this.shakeTimer, kind === "primary" ? 0.22 : 0.08);
+    }
+    if (result.weaponId === "sniper" && result.kind === "fired") {
+      this.shakeTimer = Math.max(this.shakeTimer, 0.12);
+    }
+    if (result.weaponId === "laser-blaster" && result.label === "Overcharge") {
+      this.shakeTimer = Math.max(this.shakeTimer, 0.24);
+    }
+  }
+
+  private applySoundShake(sound: Parameters<typeof playSound>[0]): void {
+    switch (sound) {
+      case "sledge-slam":
+      case "sledge-impact":
+      case "ground-slam-impact":
+      case "laser-overcharge":
+        this.shakeTimer = Math.max(this.shakeTimer, 0.22);
+        break;
+      case "lightning-strike":
+      case "sniper-shot":
+        this.shakeTimer = Math.max(this.shakeTimer, 0.14);
+        break;
+      case "revolver-last":
+      case "minigun-overheat":
+        this.shakeTimer = Math.max(this.shakeTimer, 0.1);
+        break;
     }
   }
 
@@ -427,6 +512,21 @@ export class Game {
       return { x: this.localPlayer.state.facing, y: 0 };
     }
     return { x: x / length, y: y / length };
+  }
+
+  private getWeightedPhysics(): PhysicsConfig {
+    const weapon = weaponRegistry.get(this.combat.getPlayerInventory().equippedWeapon);
+    const weight = weapon.weight;
+    return {
+      ...DEFAULT_PHYSICS,
+      maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier,
+      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier,
+      airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier,
+      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier,
+      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier,
+      slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier,
+      lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier,
+    };
   }
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
@@ -489,6 +589,82 @@ export class Game {
           const offset = Math.sin(performance.now() * 0.012 + index) * 12;
           ctx.fillRect(Math.round(centerX - 22 + index * 10), Math.round(centerY - 28 + offset), 4, 10);
         }
+      }
+    } else if (weaponId === "slingshot") {
+      const charge = Math.min(this.primaryHeldMs / 850, 1);
+      const x = Math.round(centerX + facing * 18);
+      const y = Math.round(centerY - 1);
+      ctx.fillStyle = "#8b5a2b";
+      this.pixelRect(ctx, x, y - 16, facing * 6, 32);
+      this.pixelRect(ctx, x, y - 16, facing * 20, 6);
+      this.pixelRect(ctx, x, y + 10, facing * 20, 6);
+      ctx.fillStyle = "#7cff6b";
+      ctx.strokeStyle = "#7cff6b";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x + facing * 20, y - 12);
+      ctx.lineTo(x - facing * Math.round(10 + charge * 24), y);
+      ctx.lineTo(x + facing * 20, y + 12);
+      ctx.stroke();
+      ctx.fillRect(x - facing * Math.round(13 + charge * 24) - 4, y - 4, 8, 8);
+    } else if (weaponId === "laser-blaster") {
+      const runtime = this.combat.getWeaponRuntimeState("laser-blaster");
+      const heat = runtime.heat;
+      const x = Math.round(centerX + facing * 14);
+      const y = Math.round(centerY - 3);
+      ctx.fillStyle = "#24435f";
+      this.pixelRect(ctx, x, y - 7, facing * 34, 14);
+      ctx.fillStyle = "#5ad7ff";
+      this.pixelRect(ctx, x + facing * 28, y - 4, facing * 18, 8);
+      ctx.fillStyle = heat > 0.6 ? "#ff6f91" : "#d6f2ff";
+      this.pixelRect(ctx, x + facing * 8, y - 10, facing * 12, 4);
+      if (runtime.charging || active > 0) {
+        ctx.fillStyle = "rgba(90, 215, 255, 0.55)";
+        this.pixelRect(ctx, x + facing * 48, y - 8, facing * Math.round(22 + runtime.charge), 16);
+      }
+    } else if (weaponId === "revolver") {
+      const x = Math.round(centerX + facing * 16);
+      const y = Math.round(centerY - 2);
+      ctx.fillStyle = "#ffd0a6";
+      this.pixelRect(ctx, x, y - 5, facing * 28, 10);
+      ctx.fillStyle = "#8a6f55";
+      this.pixelRect(ctx, x + facing * 7, y - 10, facing * 12, 20);
+      ctx.fillStyle = "#d6f2ff";
+      this.pixelRect(ctx, x + facing * 29, y - 3, facing * 12, 6);
+      if (active > 0) {
+        ctx.fillStyle = "#fff4a8";
+        this.pixelRect(ctx, x + facing * 42, y - 7, facing * 18, 14);
+      }
+    } else if (weaponId === "minigun") {
+      const runtime = this.combat.getWeaponRuntimeState("minigun");
+      const x = Math.round(centerX + facing * 10);
+      const y = Math.round(centerY + 1);
+      ctx.fillStyle = "#56606f";
+      this.pixelRect(ctx, x, y - 11, facing * 34, 6);
+      this.pixelRect(ctx, x, y - 2, facing * 38, 6);
+      this.pixelRect(ctx, x, y + 7, facing * 34, 6);
+      ctx.fillStyle = "#ffcf5a";
+      this.pixelRect(ctx, x - facing * 8, y - 8, facing * 16, 20);
+      if (runtime.spin > 0.25 || active > 0) {
+        ctx.fillStyle = runtime.heat > 0.75 ? "#ff6f91" : "#fff4a8";
+        for (let index = 0; index < 3; index += 1) {
+          this.pixelRect(ctx, x + facing * (42 + index * 7), y - 9 + index * 7, facing * Math.round(8 + runtime.spin * 12), 4);
+        }
+      }
+    } else if (weaponId === "sniper") {
+      const runtime = this.combat.getWeaponRuntimeState("sniper");
+      const x = Math.round(centerX + facing * 6);
+      const y = Math.round(centerY - 6);
+      ctx.fillStyle = "#d6f2ff";
+      this.pixelRect(ctx, x, y - 3, facing * 68, 6);
+      ctx.fillStyle = "#516172";
+      this.pixelRect(ctx, x + facing * 20, y - 14, facing * 18, 8);
+      this.pixelRect(ctx, x - facing * 10, y + 2, facing * 20, 11);
+      ctx.fillStyle = runtime.steady > 0.9 ? "#7cff6b" : "#ffffff";
+      this.pixelRect(ctx, x + facing * 64, y - 5, facing * 14, 10);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(214, 242, 255, 0.7)";
+        this.pixelRect(ctx, x + facing * 80, y - 4, facing * 34, 8);
       }
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
@@ -586,6 +762,45 @@ export class Game {
       ctx.restore();
       return;
     }
+    if (projectile.weaponId === "slingshot") {
+      ctx.fillStyle = "rgba(124, 255, 107, 0.45)";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.02), Math.round(y - projectile.vy * 0.02), 10, 4);
+      ctx.fillStyle = "#8b5a2b";
+      ctx.fillRect(x - 5, y - 5, 10, 10);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 2, y - 2, 4, 4);
+      return;
+    }
+    if (projectile.weaponId === "laser-blaster") {
+      ctx.fillStyle = "rgba(90, 215, 255, 0.35)";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.04), y - 6, Math.round(Math.max(32, Math.abs(projectile.vx) * 0.04)), 12);
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillRect(x - 8, y - 4, 16, 8);
+      ctx.fillStyle = "#5ad7ff";
+      ctx.fillRect(x - 4, y - 8, 8, 16);
+      return;
+    }
+    if (projectile.weaponId === "revolver") {
+      ctx.fillStyle = "#ffd0a6";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.026), y - 2, 30, 4);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 4, y - 3, 8, 6);
+      return;
+    }
+    if (projectile.weaponId === "minigun") {
+      ctx.fillStyle = "#ffcf5a";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.018), y - 2, 22, 3);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(x - 3, y - 3, 6, 6);
+      return;
+    }
+    if (projectile.weaponId === "sniper") {
+      ctx.fillStyle = "rgba(214, 242, 255, 0.58)";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.08), y - 1, 110, 2);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 5, y - 4, 10, 8);
+      return;
+    }
     ctx.fillStyle = projectile.trailColor;
     ctx.fillRect(Math.round(x - projectile.vx * 0.018), Math.round(y - projectile.vy * 0.018), Math.max(12, projectile.radius * 4), 3);
     ctx.fillStyle = projectile.color;
@@ -610,6 +825,32 @@ export class Game {
       ctx.fillRect(x - 8, y - 8, 16, 16);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(x - 3, y - 3, 6, 6);
+    } else if (dropped.weaponId === "slingshot") {
+      ctx.fillStyle = "#8b5a2b";
+      ctx.fillRect(x - 4, y - 13, 6, 26);
+      ctx.fillRect(x - 3, y - 13, 19, 5);
+      ctx.fillRect(x - 3, y + 8, 19, 5);
+      ctx.fillStyle = "#7cff6b";
+      ctx.fillRect(x + 13, y - 9, 4, 18);
+    } else if (dropped.weaponId === "laser-blaster") {
+      ctx.fillRect(x - 16, y - 7, 32, 14);
+      ctx.fillStyle = "#5ad7ff";
+      ctx.fillRect(x + 12, y - 4, 16, 8);
+      ctx.fillRect(x - 6, y - 11, 12, 4);
+    } else if (dropped.weaponId === "revolver") {
+      ctx.fillRect(x - 14, y - 5, 28, 10);
+      ctx.fillRect(x - 5, y - 10, 12, 20);
+      ctx.fillRect(x + 14, y - 3, 12, 6);
+    } else if (dropped.weaponId === "minigun") {
+      ctx.fillRect(x - 18, y - 9, 34, 5);
+      ctx.fillRect(x - 18, y - 1, 38, 5);
+      ctx.fillRect(x - 18, y + 7, 34, 5);
+      ctx.fillStyle = "#ffcf5a";
+      ctx.fillRect(x - 24, y - 8, 12, 18);
+    } else if (dropped.weaponId === "sniper") {
+      ctx.fillRect(x - 30, y - 4, 60, 7);
+      ctx.fillRect(x - 6, y - 15, 18, 7);
+      ctx.fillRect(x - 25, y + 2, 18, 9);
     } else {
       ctx.fillRect(x - 12, y - 4, 24, 8);
       ctx.fillRect(x + 3, y + 3, 7, 9);
@@ -723,6 +964,7 @@ export class Game {
     const weapon = weaponRegistry.get(inventory.equippedWeapon);
     const ammo = inventory.ammo[weapon.id];
     const charge = inventory.charge[weapon.id];
+    const runtime = this.combat.getWeaponRuntimeState(weapon.id);
     const local = this.combat.getCombatant(this.localPlayer.state.id);
     const teleport = this.combat.getTeleportState(this.localPlayer.state.id);
     const lightning = this.combat.getLightningState(this.localPlayer.state.id);
@@ -730,14 +972,15 @@ export class Game {
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
     const status = local?.statuses.map((item) => item.label).join(", ") || "No status";
-    const chargeText = charge ? `Charge ${charge.charge.toFixed(1)} / ${charge.maxCharge}s · Heat ${Math.round(charge.heat * 100)}%` : status;
+    const chargeText = weaponHudDetail(weapon.id, runtime, charge?.maxCharge ?? 0, this.primaryHeldMs, status);
     const special = [
-      teleport.pending ? `Teleport ${teleport.timer.toFixed(1)}s · Right click cancel` : "",
+      teleport.pending ? `Teleport ${teleport.timer.toFixed(1)}s - right cancel` : "",
       lightning.charging ? `Lightning in ${lightning.chargeTimer.toFixed(1)}s` : "",
       lightning.empoweredTimer > 0 ? `Empowered ${lightning.empoweredTimer.toFixed(1)}s` : "",
       lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
-    ].filter(Boolean).join(" · ");
+    ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
+    const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
     const weaponNumber = WEAPON_IDS.includes(weapon.id as (typeof WEAPON_IDS)[number])
       ? WEAPON_IDS.indexOf(weapon.id as (typeof WEAPON_IDS)[number]) + 1
       : 1;
@@ -749,6 +992,7 @@ export class Game {
         <span>${ammoText}</span>
         <span>${chargeText}</span>
         ${special ? `<span>${special}</span>` : ""}
+        <span>${weightText}</span>
         <span>${weaponHelper(weapon.id)}</span>
       </div>
       ${this.offlineMode ? `<div class="armory-strip">${armory}</div>` : ""}
@@ -851,6 +1095,16 @@ export class Game {
 
 function colorForWeapon(id: WeaponId): string {
   switch (id) {
+    case "slingshot":
+      return "#7cff6b";
+    case "laser-blaster":
+      return "#5ad7ff";
+    case "revolver":
+      return "#ffd0a6";
+    case "minigun":
+      return "#ffcf5a";
+    case "sniper":
+      return "#d6f2ff";
     case "whip":
       return "#f65bd8";
     case "teleport-ball":
@@ -865,18 +1119,57 @@ function colorForWeapon(id: WeaponId): string {
   }
 }
 
+function weaponHudDetail(
+  id: WeaponId,
+  runtime: ReturnType<CombatSystem["getWeaponRuntimeState"]>,
+  maxCharge: number,
+  primaryHeldMs: number,
+  fallback: string,
+): string {
+  switch (id) {
+    case "slingshot":
+      return `Pull ${Math.round(Math.min(primaryHeldMs / 850, 1) * 100)}% - bounce/scatter`;
+    case "laser-blaster":
+      return `Charge ${runtime.charge.toFixed(1)}/${maxCharge} - Heat ${Math.round(runtime.heat * 100)}%${runtime.overheated ? " - OVERHEAT" : ""}`;
+    case "revolver":
+      return `Chamber ${runtime.chamber.toFixed(1)}s - last bullet pops`;
+    case "minigun":
+      return `Spin ${Math.round(runtime.spin * 100)}% - Heat ${Math.round(runtime.heat * 100)}%${runtime.overheated ? " - OVERHEAT" : ""}`;
+    case "sniper":
+      return `Steady ${Math.round(runtime.steady * 100)}% - Chamber ${runtime.chamber.toFixed(1)}s`;
+    case "teleport-ball":
+      return "Marker arms for 3.0s";
+    case "lightning-rod":
+      return `Rod contact shocks - Chamber ${runtime.chamber.toFixed(1)}s`;
+    case "sledgehammer":
+      return `Sledge charge ${Math.round(Math.min(primaryHeldMs / 900, 1) * 100)}% - shockwave`;
+    default:
+      return fallback;
+  }
+}
+
 function weaponHelper(id: WeaponId): string {
   switch (id) {
     case "pistol":
-      return "Tap shots · R reload/perfect · Right throw";
+      return "Tap shots - R reload/perfect - Right throw";
     case "whip":
-      return "Long arc · Tip cracks · 2 quick hits pull";
+      return "Long arc - Tip cracks - 2 quick hits pull";
     case "teleport-ball":
-      return "Left throw · 3s teleport · Right cancel";
+      return "Left throw - 3s teleport - Right cancel";
     case "lightning-rod":
-      return "Left poke · Hold/right raise · Touch shocks";
+      return "Left poke electrocutes - Hold/right raise - Touch shocks";
     case "sledgehammer":
-      return "Hold left charge · Air drop · Right shove";
+      return "Hold left charge - Air drop - Right shove";
+    case "slingshot":
+      return "Hold left draw - Right scatter - Stones ricochet";
+    case "laser-blaster":
+      return "Hold left charge - Right vent - Overcharge bursts";
+    case "revolver":
+      return "Tap shots - Right fan fire - Last bullet kicks";
+    case "minigun":
+      return "Hold left fire - Hold/right pre-spin - Heat locks";
+    case "sniper":
+      return "Hold/right steady - Left chambered shot - Pierces";
     default:
       return "";
   }

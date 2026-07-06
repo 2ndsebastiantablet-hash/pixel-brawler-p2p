@@ -18,6 +18,11 @@ export const WEAPON_IDS = [
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
+  "slingshot",
+  "laser-blaster",
+  "revolver",
+  "minigun",
+  "sniper",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [

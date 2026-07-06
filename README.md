@@ -11,10 +11,11 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
 - Compact in-game HUD for private room codes, public server names, and Offline Test.
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
-- Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
-- Five enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, and sledgehammer. The older unfinished weapons are registered for compatibility but hidden from the armory/loadout.
+- Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
+- Ten enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, and sniper. Knife and machete remain registered for compatibility but hidden from the armory/loadout.
+- Weapon weight affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
-- Procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, and heavy hammer attacks.
+- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots.
 - WebRTC DataChannel state replication at a compact tick rate.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, and WebRTC offer/answer/ICE relay.
 
@@ -35,7 +36,7 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - Left mouse: Primary fire / swing / use.
 - Right mouse: Secondary, throw, or weapon special.
 - `R`: Reload weapons that use ammo.
-- `1`-`5`: Equip from the enabled test loadout slots.
+- `1`-`9` and `0`: Equip from the enabled test loadout slots.
 - `Q` / `E`: Previous / next weapon.
 - `F`: Pick up nearby dropped weapon.
 - `G`: Drop / throw current weapon.
@@ -47,6 +48,11 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - Teleporting Ball: Left click throws an arcing marker. After three seconds the player teleports to the ball unless right click cancels it. Direct hits deal small damage and speed up the teleport. Arrival creates a small burst that damages and knocks enemies away.
 - Lightning Rod: Left click pokes with shock. Right click raises the rod and calls lightning after a short delay, slightly damaging the player but granting empowered movement and a visible electric aura. Touching an empowered player shocks and briefly stuns targets on a per-target cooldown. Thrown rods shock on hit or landing.
 - Sledgehammer: Heavy slow weapon with a large pixel hammer. Holding left click charges an overhead slam, full charge creates a shockwave, air attacks pull downward, right click shoves, and heavy impacts add recovery, screen shake, sound, big damage, and knockback.
+- Slingshot: Light arcing projectile weapon. Hold left click to stretch and release a harder charged stone, right click fires scatter pebbles, stones bounce with clack feedback, and low-slide shots skip with extra ricochet pressure.
+- Laser Blaster: Heat and charge weapon. Hold left click to build charge, release to fire a brighter piercing bolt, right click vents heat with a short radial blast, and holding too long risks an overcharge burst.
+- Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds, and the last bullet hits harder with extra kick.
+- Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, heat rises while firing, overheat locks the gun briefly, and recoil pushes the player back.
+- Sniper: Heavy precision weapon. Hold right click to steady aim, left click fires the chambered shot, steady shots deal more damage, mark targets, and pierce harder.
 
 ## Movement Combat
 
@@ -55,6 +61,7 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - Head Stomp: Landing on a target's head with downward velocity deals small damage, stuns/squashes the target briefly, and bounces the stomping player upward.
 - Air Dive Hit: `Shift` in air dives into targets for damage, knockback, and about one second of stun.
 - Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a small shockwave.
+- Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
 
 ## Loading Screen And Sound
 
@@ -84,7 +91,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the five-weapon armory strip along the bottom of the screen. Use `1`-`5` and `Q`/`E` to equip the enabled weapons, then attack with the mouse.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the ten-weapon armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons, then attack with the mouse.
 
 ## Run the signaling Worker locally
 
@@ -167,7 +174,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable vertical slice for the first five weapons, not final balance.
+- Combat is a playable ten-weapon vertical slice, not final balance.
 - Offline Test is the main combat-quality target for this update. Multiplayer still uses simple state replication and prototype combat event mirroring, not rollback netcode or authoritative hit validation, so remote players can see movement/attack effects but combat authority is not final.
 - Public room entries are short-lived development records hydrated from live Durable Objects when listed.
 - TURN is not configured, so some restrictive networks may fail peer connection.

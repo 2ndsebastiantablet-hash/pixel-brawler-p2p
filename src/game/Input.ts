@@ -22,6 +22,7 @@ const trackedKeys = new Set([
   "Digit7",
   "Digit8",
   "Digit9",
+  "Digit0",
 ]);
 
 export interface CombatInputFrame {
@@ -186,6 +187,9 @@ function getPressedSlot(pressed: Set<string>): number | null {
     if (pressed.has(`Digit${index}`)) {
       return index - 1;
     }
+  }
+  if (pressed.has("Digit0")) {
+    return 9;
   }
   return null;
 }

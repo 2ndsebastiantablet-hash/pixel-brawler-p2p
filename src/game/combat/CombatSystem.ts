@@ -5,7 +5,7 @@ import { intersectsRect } from "./Hitbox";
 import type { Projectile } from "./Projectile";
 import { projectileBounds } from "./Projectile";
 import { updateStatusEffects, upsertStatusEffect, type StatusEffect, type StatusEffectId } from "./StatusEffects";
-import type { AttackProfile, WeaponId, WeaponInventoryState, WeaponUseContext, WeaponUseResult } from "./Weapon";
+import type { AttackProfile, WeaponChargeState, WeaponId, WeaponInventoryState, WeaponUseContext, WeaponUseResult } from "./Weapon";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./WeaponRegistry";
 import type { SoundId } from "../../audio/SoundSystem";
 
@@ -115,6 +115,16 @@ interface LightningState {
   strain: number;
   pulseTimer: number;
   shockCooldowns: Map<string, number>;
+}
+
+export interface WeaponRuntimeState {
+  charge: number;
+  heat: number;
+  spin: number;
+  steady: number;
+  chamber: number;
+  charging: boolean;
+  overheated: boolean;
 }
 
 export class CombatSystem {
@@ -238,8 +248,36 @@ export class CombatSystem {
       return this.startLightningCall(context);
     }
     if (weapon.id === "laser-blaster") {
+      const charge = this.inventory.charge[weapon.id];
+      if (charge) {
+        charge.heat = Math.max(0, charge.heat - 0.42);
+        charge.charge = Math.max(0, charge.charge - 3);
+        charge.charging = false;
+      }
+      context.player.velocityX -= normalize(context.aim).x * 130;
+      context.player.velocityY -= 45;
       this.addRadialHitbox(context, weapon.secondary, "Vent");
+      this.queueSound("laser-vent");
       return { kind: "hitbox", weaponId: weapon.id, label: "Vent" };
+    }
+    if (weapon.id === "minigun") {
+      const charge = this.inventory.charge[weapon.id];
+      if (charge) {
+        charge.charging = true;
+        charge.charge = Math.min(charge.maxCharge, Math.max(charge.charge, 0.28));
+        charge.heat = Math.max(0, charge.heat - 0.015);
+      }
+      this.queueSound("minigun-spin");
+      return { kind: "utility", weaponId: weapon.id, label: "Pre-spin" };
+    }
+    if (weapon.id === "sniper") {
+      const charge = this.inventory.charge[weapon.id];
+      if (charge) {
+        charge.charging = true;
+        charge.heat = 0;
+      }
+      this.queueSound("sniper-steady");
+      return { kind: "utility", weaponId: weapon.id, label: "Steady aim" };
     }
     return this.useAttack(context, "secondary");
   }
@@ -302,16 +340,21 @@ export class CombatSystem {
       return { applied: false, remainingHp: target?.hp ?? 0 };
     }
 
+    const knockbackScale = request.label === "DOT" ? 1 : 1.18;
+    const verticalLift = request.damage >= 20 ? -26 : request.stun >= 0.3 ? -16 : 0;
     target.hp = Math.max(0, target.hp - request.damage);
-    target.velocityX += request.knockback.x;
-    target.velocityY += request.knockback.y;
-    target.hitstun = Math.max(target.hitstun, request.stun);
+    target.velocityX += request.knockback.x * knockbackScale;
+    target.velocityY += request.knockback.y * knockbackScale + verticalLift;
+    target.hitstun = Math.max(target.hitstun, request.stun * (request.label === "DOT" ? 1 : 1.08));
     target.invulnerable = Math.max(0.24, request.stun * 1.2);
     if (request.status) {
       target.statuses = upsertStatusEffect(target.statuses, createStatus(request.status as StatusEffectId));
     }
     this.queueSound("player-hit");
     this.queueSound("damage-pop");
+    if (request.damage >= 24 || Math.abs(request.knockback.x) + Math.abs(request.knockback.y) >= 560) {
+      this.queueSound("player-stunned");
+    }
     if (request.status === "tripped" || request.status === "daze") {
       this.queueSound("player-stunned");
       this.addEffect("stun", target.x + target.width / 2, target.y + 12, target.x + target.width / 2, target.y + 12, "#ffd84d", request.status === "tripped" ? "Trip" : "Stun");
@@ -391,6 +434,53 @@ export class CombatSystem {
     };
   }
 
+  getWeaponRuntimeState(id: WeaponId = this.inventory.equippedWeapon): WeaponRuntimeState {
+    const charge = this.inventory.charge[id];
+    const heat = charge?.heat ?? 0;
+    return {
+      charge: charge?.charge ?? 0,
+      heat,
+      spin: id === "minigun" ? charge?.charge ?? 0 : 0,
+      steady: id === "sniper" ? charge?.charge ?? 0 : 0,
+      chamber: this.inventory.cooldowns[id] ?? 0,
+      charging: charge?.charging ?? false,
+      overheated: heat >= 0.95,
+    };
+  }
+
+  triggerLaserOvercharge(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "laser-blaster";
+    const charge = this.inventory.charge[weaponId];
+    if (!charge || charge.heat >= 0.98 || charge.charge < charge.maxCharge) {
+      return { kind: "blocked", weaponId, label: "Overcharge blocked" };
+    }
+    charge.charge = 0;
+    charge.charging = false;
+    charge.heat = 1;
+    this.inventory.cooldowns[weaponId] = 0.85;
+    const center = this.muzzle(player);
+    this.addEffect("shockwave", center.x, center.y, center.x, center.y - 120, colorForWeapon(weaponId), "Overcharge");
+    this.applyBurstDamage(ownerId, center.x, center.y, 132, 18, 420, 0.36, "Overcharge", "shockwave");
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      const previousInvulnerable = owner.invulnerable;
+      owner.invulnerable = 0;
+      this.applyDamage({
+        sourceId: ownerId,
+        targetId: ownerId,
+        damage: 8,
+        knockback: { x: -player.facing * 160, y: -180 },
+        stun: 0.22,
+        label: "OVERCHARGE",
+        status: "daze",
+      });
+      owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
+    }
+    this.queueSound("laser-overcharge");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", center, { x: 0, y: -1 }, "Overcharge", now));
+    return { kind: "utility", weaponId, label: "Overcharge" };
+  }
+
   applyRemoteEvent(event: CombatEventPacket): void {
     const weapon = weaponRegistry.get(event.weaponId);
     this.addEffect(event.action === "reload" ? "reload" : weapon.kind === "beam" ? "laser" : weapon.kind === "melee" ? "whip" : "tracer", event.x, event.y, event.x + event.ax * weapon.primary.range, event.y + event.ay * weapon.primary.range, colorForWeapon(event.weaponId), event.label);
@@ -409,11 +499,11 @@ export class CombatSystem {
 
   private useAttack(context: WeaponUseContext, slot: "primary" | "secondary"): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
-    const profile = weapon[slot];
     const ammo = this.inventory.ammo[weapon.id];
+    const ammoBefore = ammo?.magazine ?? Number.POSITIVE_INFINITY;
     if (ammo && ammo.magazine <= 0 && ammo.reloadTimer === 0) {
       this.addEffect("dry-fire", context.player.x + context.player.width / 2, context.player.y + 20, context.player.x + context.player.width / 2 + context.aim.x * 18, context.player.y + 20 + context.aim.y * 18, "#ffffff", "Click");
-      this.queueSound(weapon.id === "pistol" ? "pistol-empty" : "weapon-drop");
+      this.queueSound(dryFireSoundFor(weapon.id));
       return { kind: "dry-fire", weaponId: weapon.id, label: "Dry fire" };
     }
     const cooldown = this.inventory.cooldowns[weapon.id] ?? 0;
@@ -423,9 +513,17 @@ export class CombatSystem {
     if (weapon.flags?.tapFire && !context.isNewPress) {
       return { kind: "blocked", weaponId: weapon.id, label: "Tap fire" };
     }
-    if (!this.consumeAmmo(weapon.id, profile.pellets ? Math.min(profile.pellets, 3) : undefined)) {
+    if (weapon.id === "minigun" && slot === "primary") {
+      const spinResult = this.prepareMinigunPrimary(context);
+      if (spinResult) {
+        return spinResult;
+      }
+    }
+
+    const profile = this.getRuntimeAttackProfile(weapon.id, slot, weapon[slot], context, ammoBefore);
+    if (!this.consumeAmmo(weapon.id, this.ammoCostForAttack(weapon.id, slot, profile, ammoBefore))) {
       this.addEffect("dry-fire", context.player.x + context.player.width / 2, context.player.y + 20, context.player.x + context.player.width / 2 + context.aim.x * 18, context.player.y + 20 + context.aim.y * 18, "#ffffff", "Click");
-      this.queueSound(weapon.id === "pistol" ? "pistol-empty" : "weapon-drop");
+      this.queueSound(dryFireSoundFor(weapon.id));
       return { kind: "dry-fire", weaponId: weapon.id, label: "Dry fire" };
     }
 
@@ -440,13 +538,10 @@ export class CombatSystem {
       this.spawnProjectiles(context, chargedProfile, slot);
       if (weapon.id === "pistol") {
         this.applyPistolRecoil(context.player, context.aim);
-        this.queueSound("pistol-shot");
         const muzzle = this.muzzle(context.player);
         this.addEffect("muzzle", muzzle.x, muzzle.y, muzzle.x + context.aim.x * 24, muzzle.y + context.aim.y * 24, "#fff4a8", "Bang");
       }
-      if (weapon.id === "teleport-ball") {
-        this.queueSound("teleport-throw");
-      }
+      this.applyProjectileWeaponFeedback(weapon.id, slot, context, ammoBefore);
       this.recentEvents.push(this.createEvent(context.ownerId, weapon.id, slot, this.muzzle(context.player), normalize(context.aim), weapon.name, context.now));
       return { kind: "fired", weaponId: weapon.id, label: weapon.name };
     }
@@ -469,14 +564,183 @@ export class CombatSystem {
     if (weapon.id === "sledgehammer" && context.heldMs >= 650) {
       this.addRadialHitbox(context, {
         ...chargedProfile,
-        damage: Math.round(chargedProfile.damage * 0.72),
-        range: 190,
-        knockback: chargedProfile.knockback * 0.7,
-        stun: Math.max(chargedProfile.stun, 0.45),
+        damage: Math.round(chargedProfile.damage * 0.86),
+        range: 280,
+        knockback: chargedProfile.knockback * 0.86,
+        stun: Math.max(chargedProfile.stun, 0.62),
       }, "Charged Slam");
     }
     this.recentEvents.push(this.createEvent(context.ownerId, weapon.id, slot, this.muzzle(context.player), normalize(context.aim), weapon.name, context.now));
     return { kind: "hitbox", weaponId: weapon.id, label: weapon.name };
+  }
+
+  private prepareMinigunPrimary(context: WeaponUseContext): WeaponUseResult | null {
+    const weaponId: WeaponId = "minigun";
+    const charge = this.inventory.charge[weaponId];
+    if (!charge) {
+      return null;
+    }
+    charge.charging = true;
+    if (charge.heat >= 0.98) {
+      charge.charge = Math.max(0, charge.charge - 0.08);
+      this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, 0.24);
+      this.addEffect("shockwave", context.player.x + context.player.width / 2, context.player.y + 24, context.player.x + context.player.width / 2, context.player.y - 20, colorForWeapon(weaponId), "Overheat");
+      this.queueSound("minigun-overheat");
+      return { kind: "blocked", weaponId, label: "Overheated" };
+    }
+    if (charge.charge < 0.9) {
+      charge.charge = Math.min(charge.maxCharge, charge.charge + 0.08);
+      this.queueSound("minigun-spin");
+      return { kind: "utility", weaponId, label: "Spinning" };
+    }
+    return null;
+  }
+
+  private getRuntimeAttackProfile(
+    weaponId: WeaponId,
+    slot: "primary" | "secondary",
+    profile: AttackProfile,
+    context: WeaponUseContext,
+    ammoBefore: number,
+  ): AttackProfile {
+    if (weaponId === "slingshot") {
+      if (slot === "primary") {
+        const charge = Math.min(Math.max(context.heldMs / 850, 0), 1);
+        return {
+          ...profile,
+          damage: Math.round(profile.damage * (1 + charge * 1.35)),
+          speed: (profile.speed ?? 620) * (1 + charge * 0.28),
+          knockback: profile.knockback * (1 + charge * 0.8),
+          stun: profile.stun + charge * 0.08,
+          radius: (profile.radius ?? 5) + charge * 2,
+          bounces: (profile.bounces ?? 0) + 1,
+        };
+      }
+      return {
+        ...profile,
+        bounces: (profile.bounces ?? 0) + (context.player.lowSliding || context.player.action === "lowSlide" ? 2 : 1),
+        knockback: profile.knockback * 1.2,
+      };
+    }
+
+    if (weaponId === "laser-blaster") {
+      const charge = this.inventory.charge[weaponId]?.charge ?? 0;
+      const chargeRatio = Math.min(charge / 12, 1);
+      return {
+        ...profile,
+        damage: Math.round(profile.damage * (1 + chargeRatio * 1.75)),
+        knockback: profile.knockback * (1 + chargeRatio * 0.55),
+        stun: profile.stun + chargeRatio * 0.08,
+        radius: (profile.radius ?? 6) + chargeRatio * 5,
+        pierce: (profile.pierce ?? 0) + (charge >= 6 ? 1 : 0) + (charge >= 12 ? 1 : 0),
+      };
+    }
+
+    if (weaponId === "revolver") {
+      if (slot === "secondary") {
+        const bullets = Number.isFinite(ammoBefore) ? Math.min(Math.max(1, ammoBefore), 6) : profile.pellets ?? 3;
+        return {
+          ...profile,
+          pellets: Math.max(2, Math.min(6, bullets)),
+          spread: 0.13 + Math.min(bullets, 6) * 0.025,
+        };
+      }
+      if (ammoBefore === 1) {
+        return {
+          ...profile,
+          damage: Math.round(profile.damage * 1.65),
+          knockback: profile.knockback * 1.42,
+          stun: profile.stun + 0.09,
+          pierce: (profile.pierce ?? 0) + 1,
+        };
+      }
+    }
+
+    if (weaponId === "minigun") {
+      const heat = this.inventory.charge[weaponId]?.heat ?? 0;
+      return {
+        ...profile,
+        spread: (profile.spread ?? 0.12) + heat * 0.12,
+        knockback: profile.knockback * (1 + heat * 0.25),
+      };
+    }
+
+    if (weaponId === "sniper") {
+      const steady = this.inventory.charge[weaponId]?.charge ?? 0;
+      return {
+        ...profile,
+        damage: profile.damage + Math.round(steady * 18),
+        knockback: profile.knockback * (1 + steady * 0.22),
+        stun: profile.stun + steady * 0.1,
+        radius: (profile.radius ?? 3) + steady * 2,
+        pierce: (profile.pierce ?? 0) + (steady > 0.85 ? 1 : 0),
+        status: steady > 0.85 ? "marked" : profile.status,
+      };
+    }
+
+    return profile;
+  }
+
+  private ammoCostForAttack(weaponId: WeaponId, slot: "primary" | "secondary", profile: AttackProfile, ammoBefore: number): number | undefined {
+    if (weaponId === "revolver" && slot === "secondary") {
+      return Number.isFinite(ammoBefore) ? Math.min(Math.max(1, ammoBefore), profile.pellets ?? 1) : profile.pellets;
+    }
+    if (profile.pellets) {
+      return Math.min(profile.pellets, weaponId === "minigun" ? 1 : 6);
+    }
+    return undefined;
+  }
+
+  private applyProjectileWeaponFeedback(weaponId: WeaponId, slot: "primary" | "secondary", context: WeaponUseContext, ammoBefore: number): void {
+    const aim = normalize(context.aim);
+    const charge = this.inventory.charge[weaponId];
+    switch (weaponId) {
+      case "pistol":
+        this.queueSound("pistol-shot");
+        break;
+      case "teleport-ball":
+        this.queueSound("teleport-throw");
+        break;
+      case "slingshot":
+        this.queueSound(slot === "secondary" ? "slingshot-scatter" : "slingshot-shot");
+        break;
+      case "laser-blaster":
+        context.player.velocityX -= aim.x * 85;
+        if (!context.player.grounded) {
+          context.player.velocityY -= 55;
+        }
+        this.queueSound("laser-fire");
+        break;
+      case "revolver":
+        this.queueSound(slot === "secondary" ? "revolver-fan" : ammoBefore === 1 ? "revolver-last" : "revolver-shot");
+        context.player.velocityX -= aim.x * (ammoBefore === 1 ? 115 : 65);
+        break;
+      case "minigun":
+        if (charge) {
+          charge.heat = Math.min(1, charge.heat + 0.04);
+          charge.charging = true;
+        }
+        context.player.velocityX -= aim.x * 26;
+        if (!context.player.grounded) {
+          context.player.velocityY = Math.min(context.player.velocityY, 130);
+        }
+        this.queueSound("minigun-fire");
+        break;
+      case "sniper":
+        if (charge) {
+          charge.charge = 0;
+          charge.charging = false;
+          charge.heat = 0.18;
+        }
+        context.player.velocityX -= aim.x * 210;
+        context.player.velocityY -= 70;
+        this.queueSound("sniper-shot");
+        this.queueSound("sniper-chamber");
+        break;
+      default:
+        this.queueSound("weapon-drop");
+        break;
+    }
   }
 
   private cancelTeleport(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
@@ -716,7 +980,7 @@ export class CombatSystem {
     const muzzle = this.muzzle(context.player);
     const pellets = Math.max(1, profile.pellets ?? 1);
     const chargeState = this.inventory.charge[weaponId];
-    const chargeMultiplier = chargeState && !chargeState.charging ? 1 + Math.min(chargeState.charge / 6, profile.chargeScale ?? 1) : 1;
+    const chargeMultiplier = weaponId === "laser-blaster" && chargeState && !chargeState.charging ? 1 + Math.min(chargeState.charge / 12, profile.chargeScale ?? 1) : 1;
     const speedBonus = context.player.sliding ? 1.18 : context.player.action === "lowSlide" ? 1.26 : 1;
 
     for (let index = 0; index < pellets; index += 1) {
@@ -740,7 +1004,7 @@ export class CombatSystem {
         gravity: profile.gravity ?? 0,
         bounces: profile.bounces ?? 0,
         pierce: profile.pierce ?? 0,
-        label: weapon.name,
+        label: projectileLabelFor(weaponId, slot),
         color: colorForWeapon(weaponId),
         trailColor: colorForWeapon(weaponId),
         originX: muzzle.x,
@@ -762,7 +1026,7 @@ export class CombatSystem {
 
     if (weaponId === "laser-blaster" && chargeState) {
       chargeState.charge = 0;
-      chargeState.heat = Math.min(1, chargeState.heat + 0.16);
+      chargeState.heat = Math.min(1, chargeState.heat + 0.18);
       chargeState.charging = false;
     }
     if (weaponId === "teleport-ball") {
@@ -897,14 +1161,7 @@ export class CombatSystem {
       }
       const charge = this.inventory.charge[id];
       if (charge) {
-        charge.heat = Math.max(0, charge.heat - dt * 0.045);
-        if (charge.charging) {
-          charge.charge += dt * Math.max(0.35, 1 - charge.heat);
-          if (charge.charge > charge.maxCharge) {
-            charge.charge = 0;
-            charge.charging = false;
-          }
-        }
+        this.updateWeaponCharge(id, charge, dt);
       }
       const combo = this.inventory.combo[id];
       if (combo) {
@@ -913,6 +1170,53 @@ export class CombatSystem {
           combo.targetId = undefined;
           combo.count = 0;
         }
+      }
+    }
+  }
+
+  private updateWeaponCharge(id: WeaponId, charge: WeaponChargeState, dt: number): void {
+    if (id === "laser-blaster") {
+      charge.heat = Math.max(0, charge.heat - dt * 0.06);
+      if (charge.charging) {
+        charge.charge = Math.min(charge.maxCharge, charge.charge + dt * 10.5 * Math.max(0.24, 1 - charge.heat * 0.6));
+        if (charge.charge > 1 && charge.charge < charge.maxCharge) {
+          this.queueSound("laser-charge");
+        }
+      }
+      return;
+    }
+
+    if (id === "minigun") {
+      if (charge.charging) {
+        charge.charge = Math.min(charge.maxCharge, charge.charge + dt * 1.6);
+      } else {
+        charge.charge = Math.max(0, charge.charge - dt * 0.28);
+      }
+      charge.heat = Math.max(0, charge.heat - dt * (charge.charging ? 0.04 : 0.18));
+      if (charge.heat >= 1) {
+        charge.charge = Math.max(0, charge.charge - dt * 0.9);
+      }
+      charge.charging = false;
+      return;
+    }
+
+    if (id === "sniper") {
+      if (charge.charging) {
+        charge.charge = Math.min(charge.maxCharge, charge.charge + dt * 1.05);
+      } else {
+        charge.charge = Math.max(0, charge.charge - dt * 0.12);
+      }
+      charge.heat = Math.max(0, charge.heat - dt * 0.12);
+      charge.charging = false;
+      return;
+    }
+
+    charge.heat = Math.max(0, charge.heat - dt * 0.045);
+    if (charge.charging) {
+      charge.charge += dt * Math.max(0.35, 1 - charge.heat);
+      if (charge.charge > charge.maxCharge) {
+        charge.charge = charge.maxCharge;
+        charge.charging = false;
       }
     }
   }
@@ -969,6 +1273,11 @@ export class CombatSystem {
         projectile.vy *= -0.45;
         projectile.vx *= 0.82;
         projectile.bounces -= 1;
+        if (projectile.weaponId === "slingshot") {
+          projectile.damage = Math.max(1, Math.round(projectile.damage * 0.8));
+          this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), "Bounce");
+          this.queueSound("slingshot-bounce");
+        }
       }
       for (const target of this.combatants.values()) {
         if (target.id === projectile.ownerId || projectile.hits.includes(target.id)) {
@@ -1002,6 +1311,15 @@ export class CombatSystem {
               this.addEffect("lightning", projectile.x, projectile.y, projectile.x, projectile.y - 110, "#ffd84d", "Rod");
               this.queueSound("lightning-strike");
             }
+            if (projectile.weaponId === "laser-blaster") {
+              this.addEffect("laser", projectile.originX ?? projectile.x, projectile.originY ?? projectile.y, projectile.x, projectile.y, colorForWeapon(projectile.weaponId), "Burn");
+            }
+            if (projectile.weaponId === "revolver" || projectile.weaponId === "sniper") {
+              this.addEffect("muzzle", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 24, projectile.y, colorForWeapon(projectile.weaponId), projectile.weaponId === "sniper" ? "Mark" : "Hit");
+            }
+            if (projectile.weaponId === "minigun") {
+              this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y, colorForWeapon(projectile.weaponId), "Suppress");
+            }
             this.recentEvents.push(this.createEvent(projectile.ownerId, projectile.weaponId, "hit", { x: projectile.x, y: projectile.y }, normalize(projectile.knockback), projectile.label, performanceNow()));
             if (projectile.weaponId === "teleport-ball") {
               continue;
@@ -1027,24 +1345,26 @@ export class CombatSystem {
         if (intersectsRect(hitbox, target)) {
           const owner = this.combatants.get(hitbox.ownerId);
           const whipHit = hitbox.weaponId === "whip";
+          const rodHit = hitbox.weaponId === "lightning-rod";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const combo = whipHit ? this.registerWhipHit(target.id) : { count: 0, pulled: false };
+          const rodEmpowered = rodHit && owner?.statuses.some((status) => status.id === "empowered");
           const pull = whipHit && combo.pulled && owner
             ? {
                 x: Math.sign((owner.x + owner.width / 2) - (target.x + target.width / 2)) * 380,
                 y: -135,
               }
             : undefined;
-          const damage = whipHit && tipHit ? hitbox.damage + 4 : hitbox.damage;
-          const stun = whipHit && tipHit ? hitbox.stun + 0.14 : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
+          const damage = whipHit && tipHit ? hitbox.damage + 4 : rodEmpowered ? hitbox.damage + 6 : hitbox.damage;
+          const stun = whipHit && tipHit ? hitbox.stun + 0.14 : rodEmpowered ? hitbox.stun + 0.12 : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
           const hit = this.applyDamage({
             sourceId: hitbox.ownerId,
             targetId: target.id,
             damage,
-            knockback: pull ?? hitbox.knockback,
+            knockback: pull ?? (rodHit ? { x: hitbox.knockback.x * 1.28, y: hitbox.knockback.y - 75 } : hitbox.knockback),
             stun,
-            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : hitbox.label,
-            status: hitbox.lowTrip ? "tripped" : hitbox.status,
+            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : hitbox.label,
+            status: rodHit ? "shock" : hitbox.lowTrip ? "tripped" : hitbox.status,
           });
           if (hit.applied) {
             hitbox.hits.push(target.id);
@@ -1054,6 +1374,10 @@ export class CombatSystem {
             }
             if (hitbox.weaponId === "sledgehammer") {
               this.queueSound("sledge-impact");
+            }
+            if (rodHit) {
+              this.queueSound("lightning-shock");
+              this.addEffect("lightning", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y - 80, colorForWeapon(hitbox.weaponId), "Zap");
             }
           }
         }
@@ -1183,9 +1507,9 @@ export class CombatSystem {
         if ((player.sliding || player.action === "slide" || player.action === "lowSlide") && intersectsRect(owner, target)) {
           const low = player.lowSliding || player.action === "lowSlide";
           this.applyBodyHit(player.id, target, low ? "low-slide" : "slide", {
-            damage: low ? 8 : 5,
-            knockback: { x: player.facing * (low ? 360 : 230), y: low ? -230 : -150 },
-            stun: low ? 0.58 : 0.36,
+            damage: low ? 11 : 7,
+            knockback: { x: player.facing * (low ? 520 : 340), y: low ? -360 : -235 },
+            stun: low ? 0.72 : 0.48,
             label: low ? "Low Slide Trip" : "Slide Trip",
             status: "tripped",
             sound: low ? "low-slide" : "player-stunned",
@@ -1239,11 +1563,11 @@ export class CombatSystem {
         if (player.justSlamLanded) {
           const centerX = owner.x + owner.width / 2;
           const targetX = target.x + target.width / 2;
-          if (Math.abs(targetX - centerX) <= 118 && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 80) {
+          if (Math.abs(targetX - centerX) <= 154 && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 90) {
             this.applyBodyHit(player.id, target, "ground-slam-wave", {
-              damage: 10,
-              knockback: { x: Math.sign(targetX - centerX || 1) * 300, y: -210 },
-              stun: 0.42,
+              damage: 13,
+              knockback: { x: Math.sign(targetX - centerX || 1) * 390, y: -285 },
+              stun: 0.52,
               label: "Slam Wave",
               status: "daze",
               sound: "ground-slam-impact",
@@ -1373,8 +1697,16 @@ function isWhipTipHit(hitbox: Hitbox, target: Combatant): boolean {
 
 function colorForWeapon(id: WeaponId): string {
   switch (id) {
+    case "slingshot":
+      return "#7cff6b";
     case "laser-blaster":
       return "#5ad7ff";
+    case "revolver":
+      return "#ffd0a6";
+    case "minigun":
+      return "#ffcf5a";
+    case "sniper":
+      return "#d6f2ff";
     case "lightning-rod":
       return "#ffd84d";
     case "teleport-ball":
@@ -1385,6 +1717,38 @@ function colorForWeapon(id: WeaponId): string {
       return "#f65bd8";
     default:
       return "#ffffff";
+  }
+}
+
+function dryFireSoundFor(id: WeaponId): SoundId {
+  switch (id) {
+    case "pistol":
+    case "revolver":
+    case "slingshot":
+    case "sniper":
+    case "minigun":
+      return "pistol-empty";
+    case "laser-blaster":
+      return "laser-vent";
+    default:
+      return "weapon-drop";
+  }
+}
+
+function projectileLabelFor(id: WeaponId, slot: "primary" | "secondary"): string {
+  switch (id) {
+    case "slingshot":
+      return slot === "secondary" ? "Scatter Pebble" : "Charged Stone";
+    case "laser-blaster":
+      return "Laser Bolt";
+    case "revolver":
+      return slot === "secondary" ? "Fan Fire" : "Revolver";
+    case "minigun":
+      return "Suppressing Round";
+    case "sniper":
+      return "Sniper Shot";
+    default:
+      return weaponRegistry.get(id).name;
   }
 }
 

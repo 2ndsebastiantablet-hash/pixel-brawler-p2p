@@ -3,6 +3,7 @@ import {
   createPlayerState,
   stepPlayer,
   type InputFrame,
+  type PhysicsConfig,
   type PlayerAction,
   type PlayerPhysicsState,
 } from "./Physics";
@@ -23,9 +24,9 @@ export class Player {
     this.state = createPlayerState(id, x, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height, name);
   }
 
-  update(input: InputFrame, dt: number): void {
+  update(input: InputFrame, dt: number, config: PhysicsConfig = DEFAULT_PHYSICS): void {
     this.animationTime += dt;
-    this.state = stepPlayer(this.state, input, dt);
+    this.state = stepPlayer(this.state, input, dt, config);
   }
 
   advanceAnimation(dt: number): void {

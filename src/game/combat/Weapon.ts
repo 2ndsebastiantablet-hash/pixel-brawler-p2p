@@ -38,6 +38,15 @@ export interface WeaponThrowDefinition {
   knockback: number;
 }
 
+export interface WeaponWeightDefinition {
+  label: "Light" | "Balanced" | "Heavy" | "Very Heavy";
+  moveSpeedMultiplier: number;
+  accelerationMultiplier: number;
+  airAccelerationMultiplier: number;
+  jumpMultiplier: number;
+  slideMultiplier: number;
+}
+
 export interface AttackProfile {
   damage: number;
   cooldown: number;
@@ -62,6 +71,7 @@ export interface WeaponDefinition {
   description: string;
   primary: AttackProfile;
   secondary: AttackProfile;
+  weight: WeaponWeightDefinition;
   ammo?: AmmoDefinition;
   charge?: ChargeDefinition;
   throw: WeaponThrowDefinition;
