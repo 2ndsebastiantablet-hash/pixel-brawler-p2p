@@ -2,11 +2,24 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_PHYSICS, createPlayerState } from "../src/game/Physics";
 import { CombatSystem } from "../src/game/combat/CombatSystem";
 import { createCustomFighter } from "../src/game/combat/Fighter";
+import { COMBAT_TUNING } from "../src/game/combat/CombatTuning";
 import { createDefaultInventory } from "../src/game/combat/WeaponRegistry";
 
 const playerState = createPlayerState("local", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height, "Tester");
 
 describe("combat system", () => {
+  it("keeps exaggerated combat feel constants in central tuning", () => {
+    expect(COMBAT_TUNING.enemyKnockbackMultiplier).toBeGreaterThanOrEqual(1.35);
+    expect(COMBAT_TUNING.selfRecoilMultiplier).toBeGreaterThanOrEqual(1.8);
+    expect(COMBAT_TUNING.headStomp.bounceForce).toBeLessThanOrEqual(-700);
+    expect(COMBAT_TUNING.groundSlam.radius).toBeGreaterThanOrEqual(170);
+    expect(COMBAT_TUNING.sledgehammer.shockwaveRadius).toBeGreaterThanOrEqual(280);
+    expect(COMBAT_TUNING.minigun.spinUpSeconds).toBe(5);
+    expect(COMBAT_TUNING.projectiles.floorY).toBe(DEFAULT_PHYSICS.groundY);
+    expect(COMBAT_TUNING.sniper.legShotSlowDuration).toBe(10);
+    expect(COMBAT_TUNING.sound.masterVolume).toBeGreaterThanOrEqual(0.45);
+  });
+
   it("creates custom fighter data ready for future body-part customization", () => {
     const fighter = createCustomFighter({
       playerName: "Rowan",
@@ -138,6 +151,54 @@ describe("combat system", () => {
 
     expect(airborne.velocityX).toBeLessThan(0);
     expect(airborne.velocityY).toBeLessThan(-80);
+  });
+
+  it("applies very visible self recoil to charged laser, revolver, minigun, and sniper shots", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+
+    const laserShooter = { ...playerState, velocityX: 0, velocityY: 0 };
+    combat.equip("laser-blaster");
+    combat.getPlayerInventory().charge["laser-blaster"]!.charge = 22;
+    combat.usePrimary({ ownerId: "local", player: laserShooter, aim: { x: 1, y: 0 }, now: 100, heldMs: 2200, isNewPress: true });
+    expect(laserShooter.velocityX).toBeLessThan(-220);
+
+    combat.getPlayerInventory().cooldowns["laser-blaster"] = 0;
+    combat.equip("revolver");
+    const revolverShooter = { ...playerState, velocityX: 0, velocityY: 0 };
+    combat.usePrimary({ ownerId: "local", player: revolverShooter, aim: { x: 1, y: 0 }, now: 200, heldMs: 0, isNewPress: true });
+    expect(revolverShooter.velocityX).toBeLessThan(-120);
+
+    combat.equip("minigun");
+    const minigunShooter = { ...playerState, velocityX: 0, velocityY: 0 };
+    combat.getPlayerInventory().charge.minigun!.charge = 1;
+    combat.usePrimary({ ownerId: "local", player: minigunShooter, aim: { x: 1, y: 0 }, now: 300, heldMs: 5000, isNewPress: false });
+    expect(minigunShooter.velocityX).toBeLessThan(-55);
+
+    combat.equip("sniper");
+    const sniperShooter = { ...playerState, grounded: false, velocityX: 0, velocityY: 0 };
+    combat.usePrimary({ ownerId: "local", player: sniperShooter, aim: { x: 1, y: 0 }, now: 400, heldMs: 0, isNewPress: true });
+    expect(sniperShooter.velocityX).toBeLessThan(-360);
+    expect(sniperShooter.velocityY).toBeLessThan(-120);
+  });
+
+  it("keeps projectiles above the floor and removes non-ricochet floor impacts", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    const shooter = { ...playerState };
+
+    combat.usePrimary({ ownerId: "local", player: shooter, aim: { x: 0.1, y: 1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.18, [shooter]);
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "pistol")).toHaveLength(0);
+
+    combat.equip("teleport-ball");
+    combat.usePrimary({ ownerId: "local", player: shooter, aim: { x: 0.2, y: 1 }, now: 300, heldMs: 0, isNewPress: true });
+    combat.update(0.55, [shooter]);
+    const marker = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "teleport-ball");
+    expect(marker).toBeDefined();
+    expect(marker!.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - marker!.radius);
+    combat.update(2.6, [shooter]);
+    expect(shooter.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - shooter.height);
   });
 
   it("only pulls with the whip after two quick hits on the same target", () => {
@@ -281,6 +342,8 @@ describe("combat system", () => {
     combat.update(1 / 60, [stomper]);
     expect(stomper.velocityY).toBeLessThan(0);
     expect(combat.getCombatant(dummy.id)?.hitstun).toBeGreaterThan(0);
+    expect(stomper.jumpsUsed).toBe(1);
+    expect(stomper.airDiveUsed).toBe(false);
 
     const diveTarget = combat.getCombatant(dummy.id);
     if (diveTarget) {
@@ -329,7 +392,7 @@ describe("combat system", () => {
     const shot = combat.getSnapshot().projectiles[0];
     expect(shot.weaponId).toBe("slingshot");
     expect(shot.damage).toBeGreaterThan(6);
-    expect(shot.bounces).toBeGreaterThanOrEqual(2);
+    expect(shot.bounces).toBe(COMBAT_TUNING.projectiles.slingshotBounces);
     expect(combat.consumeSounds()).toContain("slingshot-shot");
 
     combat.update(0.32, [player]);
@@ -348,6 +411,7 @@ describe("combat system", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     const player = { ...playerState };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
 
     combat.equip("laser-blaster");
     const laserCharge = combat.getPlayerInventory().charge["laser-blaster"]!;
@@ -379,9 +443,14 @@ describe("combat system", () => {
 
     combat.equip("minigun");
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 300, heldMs: 0, isNewPress: true });
-    combat.update(0.75, [player]);
-    expect(combat.getWeaponRuntimeState("minigun").spin).toBeGreaterThan(0.9);
-    const minigun = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 1100, heldMs: 900, isNewPress: false });
+    combat.update(4.9, [player]);
+    expect(combat.getWeaponRuntimeState("minigun").spin).toBeLessThan(1);
+    let minigun = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 5200, heldMs: 4900, isNewPress: false });
+    expect(minigun.kind).not.toBe("fired");
+    combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 5300, heldMs: 0, isNewPress: true });
+    combat.update(0.2, [player]);
+    expect(combat.getWeaponRuntimeState("minigun").spin).toBeGreaterThanOrEqual(1);
+    minigun = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 5500, heldMs: 5100, isNewPress: false });
     expect(minigun.kind).toBe("fired");
     expect(combat.getWeaponRuntimeState("minigun").heat).toBeGreaterThan(0);
 
@@ -389,11 +458,29 @@ describe("combat system", () => {
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 1200, heldMs: 0, isNewPress: true });
     combat.update(1.1, [player]);
     expect(combat.getWeaponRuntimeState("sniper").steady).toBeGreaterThan(0.9);
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(true);
     const sniper = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 2400, heldMs: 0, isNewPress: true });
     expect(sniper.kind).toBe("fired");
     const sniperShot = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "sniper");
     expect(sniperShot?.damage).toBeGreaterThan(50);
     expect(sniperShot?.pierce).toBeGreaterThanOrEqual(2);
+  });
+
+  it("slows lower-body sniper hits for ten seconds and shows pixel blood feedback", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("sniper");
+    const shooter = { ...playerState, x: 0 };
+    combat.syncLocalPlayer(shooter, "Tester", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 220, y: playerState.y });
+
+    combat.usePrimary({ ownerId: "local", player: shooter, aim: { x: 1, y: 0.1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.15, [shooter]);
+
+    expect(combat.getCombatant(dummy.id)?.statuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "legShotSlow", duration: expect.closeTo(10, 0) }),
+    ]));
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "blood")).toBe(true);
   });
 
   it("electrocutes on lightning rod contact and carries a wider sledgehammer shockwave", () => {
@@ -408,6 +495,8 @@ describe("combat system", () => {
     combat.update(1 / 60, [player]);
     expect(combat.getCombatant(rodDummy.id)?.statuses.some((status) => status.id === "shock")).toBe(true);
     expect(combat.getCombatant(rodDummy.id)?.hitstun).toBeGreaterThan(0.2);
+    combat.update(0.1, [player]);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "aura" && effect.label === "Shock Aura")).toBe(true);
 
     const target = combat.getCombatant(rodDummy.id);
     if (target) {

@@ -13,9 +13,10 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
 - Ten enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, and sniper. Knife and machete remain registered for compatibility but hidden from the armory/loadout.
-- Weapon weight affects movement speed, acceleration, air control, jump height, and slide speed.
+- Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
+- Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
-- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots.
+- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots. Volume constants are fed from the central combat tuning file.
 - WebRTC DataChannel state replication at a compact tick rate.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, and WebRTC offer/answer/ICE relay.
 
@@ -50,22 +51,31 @@ The Worker handles signaling and room management only. Gameplay simulation remai
 - Sledgehammer: Heavy slow weapon with a large pixel hammer. Holding left click charges an overhead slam, full charge creates a shockwave, air attacks pull downward, right click shoves, and heavy impacts add recovery, screen shake, sound, big damage, and knockback.
 - Slingshot: Light arcing projectile weapon. Hold left click to stretch and release a harder charged stone, right click fires scatter pebbles, stones bounce with clack feedback, and low-slide shots skip with extra ricochet pressure.
 - Laser Blaster: Heat and charge weapon. Hold left click to build charge, release to fire a brighter piercing bolt, right click vents heat with a short radial blast, and holding too long risks an overcharge burst.
+- Laser charge now scales damage, beam width, beam length, enemy knockback, self-recoil, heat, visual brightness, and shake. Heat turns the blaster red, venting cools it, and overcharge creates a small damaging particle burst.
 - Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds, and the last bullet hits harder with extra kick.
-- Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, heat rises while firing, overheat locks the gun briefly, and recoil pushes the player back.
-- Sniper: Heavy precision weapon. Hold right click to steady aim, left click fires the chambered shot, steady shots deal more damage, mark targets, and pierce harder.
+- Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, and it must spin for five seconds before firing. Heat rises while firing, overheat locks the gun briefly, the barrels glow red, and recoil pushes the player back.
+- Sniper: Heavy precision weapon. Hold right click to enter steady mode, locking movement and making the player faint/outlined and damage-resistant. Left click fires the chambered shot; steady shots deal more damage, mark targets, and pierce harder. Lower-body shots apply a 10-second leg-shot slow and show pixel blood flecks.
 
 ## Movement Combat
 
 - Slide Trip: Ground `Shift` slide trips enemies on contact, dealing light damage, upward pop, knockback, and short stun.
 - Low Slide Trip: `S` + `Shift` slides longer and trips harder with stronger pop and stun.
-- Head Stomp: Landing on a target's head with downward velocity deals small damage, stuns/squashes the target briefly, and bounces the stomping player upward.
+- Head Stomp: Landing on a target's head with downward velocity deals damage, stuns/squashes the target briefly, bounces the stomping player upward, and refreshes an aerial jump/dive option.
 - Air Dive Hit: `Shift` in air dives into targets for damage, knockback, and about one second of stun.
-- Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a small shockwave.
+- Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a tuned shockwave.
 - Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
+
+## Projectile And Status Rules
+
+- Floor Collision: Projectiles resolve against the platform floor. Non-ricochet shots impact and expire, ricochet shots have limited bounces, and safety cleanup removes anything that escapes world bounds.
+- Ricochet: Slingshot stones bounce once. Revolver crouch/low shots can ricochet once. Normal bullets do not bounce forever.
+- Teleporting Ball: The marker bounces/sticks above the floor and remains usable for the delayed teleport instead of falling into the void.
+- Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
+- No New Weapons: This update keeps the same 10 enabled weapons and does not add Knife, Machete, or any other new weapon.
 
 ## Loading Screen And Sound
 
-The first screen shows a recreated keyboard layout with keycaps, labels, mouse controls, and a continue button. The game uses procedural Web Audio sounds generated in code; there are no copyrighted external sound assets. Volume constants live in `src/audio/SoundSystem.ts`, and repeated sounds such as footsteps and shock pulses are rate-limited.
+The first screen shows a recreated keyboard layout with keycaps, labels, mouse controls, and a continue button. The game uses procedural Web Audio sounds generated in code; there are no copyrighted external sound assets. Volume constants live in `src/game/combat/CombatTuning.ts`, and repeated sounds such as footsteps, minigun fire, and shock pulses are rate-limited in `src/audio/SoundSystem.ts`.
 
 ## Requirements
 

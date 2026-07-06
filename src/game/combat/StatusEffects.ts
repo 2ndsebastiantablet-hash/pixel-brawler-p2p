@@ -5,7 +5,9 @@ export type StatusEffectId =
   | "suppressed"
   | "empowered"
   | "tripped"
-  | "marked";
+  | "marked"
+  | "steady"
+  | "legShotSlow";
 
 export interface StatusEffect {
   id: StatusEffectId;

@@ -1,12 +1,8 @@
-export const MASTER_VOLUME = 0.34;
+import { COMBAT_TUNING } from "../game/combat/CombatTuning";
 
-export const SOUND_VOLUME = {
-  ui: 0.55,
-  movement: 0.66,
-  combat: 0.9,
-  weapon: 0.96,
-  heavy: 1,
-} as const;
+export const MASTER_VOLUME = COMBAT_TUNING.sound.masterVolume;
+
+export const SOUND_VOLUME = COMBAT_TUNING.sound.categoryVolumes;
 
 export type SoundId =
   | "menu-click"

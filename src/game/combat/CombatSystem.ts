@@ -6,6 +6,7 @@ import type { Projectile } from "./Projectile";
 import { projectileBounds } from "./Projectile";
 import { updateStatusEffects, upsertStatusEffect, type StatusEffect, type StatusEffectId } from "./StatusEffects";
 import type { AttackProfile, WeaponChargeState, WeaponId, WeaponInventoryState, WeaponUseContext, WeaponUseResult } from "./Weapon";
+import { COMBAT_TUNING } from "./CombatTuning";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./WeaponRegistry";
 import type { SoundId } from "../../audio/SoundSystem";
 
@@ -59,7 +60,8 @@ export interface CombatEffect {
     | "stomp"
     | "stun"
     | "aura"
-    | "slam";
+    | "slam"
+    | "blood";
   x: number;
   y: number;
   tx: number;
@@ -250,12 +252,11 @@ export class CombatSystem {
     if (weapon.id === "laser-blaster") {
       const charge = this.inventory.charge[weapon.id];
       if (charge) {
-        charge.heat = Math.max(0, charge.heat - 0.42);
+        charge.heat = Math.max(0, charge.heat - COMBAT_TUNING.laser.ventCooling);
         charge.charge = Math.max(0, charge.charge - 3);
         charge.charging = false;
       }
-      context.player.velocityX -= normalize(context.aim).x * 130;
-      context.player.velocityY -= 45;
+      this.applySelfRecoil(context.player, context.aim, 95, 35);
       this.addRadialHitbox(context, weapon.secondary, "Vent");
       this.queueSound("laser-vent");
       return { kind: "hitbox", weaponId: weapon.id, label: "Vent" };
@@ -264,7 +265,6 @@ export class CombatSystem {
       const charge = this.inventory.charge[weapon.id];
       if (charge) {
         charge.charging = true;
-        charge.charge = Math.min(charge.maxCharge, Math.max(charge.charge, 0.28));
         charge.heat = Math.max(0, charge.heat - 0.015);
       }
       this.queueSound("minigun-spin");
@@ -276,6 +276,9 @@ export class CombatSystem {
         charge.charging = true;
         charge.heat = 0;
       }
+      context.player.velocityX = 0;
+      context.player.velocityY = 0;
+      this.applySteadyStatus(context.ownerId);
       this.queueSound("sniper-steady");
       return { kind: "utility", weaponId: weapon.id, label: "Steady aim" };
     }
@@ -340,9 +343,12 @@ export class CombatSystem {
       return { applied: false, remainingHp: target?.hp ?? 0 };
     }
 
-    const knockbackScale = request.label === "DOT" ? 1 : 1.18;
+    const steadyResist = target.statuses.some((status) => status.id === "steady") && request.sourceId !== target.id;
+    const damageScale = steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1;
+    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1);
     const verticalLift = request.damage >= 20 ? -26 : request.stun >= 0.3 ? -16 : 0;
-    target.hp = Math.max(0, target.hp - request.damage);
+    const damage = Math.max(1, Math.round(request.damage * damageScale));
+    target.hp = Math.max(0, target.hp - damage);
     target.velocityX += request.knockback.x * knockbackScale;
     target.velocityY += request.knockback.y * knockbackScale + verticalLift;
     target.hitstun = Math.max(target.hitstun, request.stun * (request.label === "DOT" ? 1 : 1.08));
@@ -367,7 +373,7 @@ export class CombatSystem {
       id: this.makeId("dmg"),
       x: target.x + target.width / 2,
       y: target.y - 10,
-      amount: request.damage,
+      amount: damage,
       age: 0,
       label: request.label,
       color: request.damage >= 25 ? "#ffd84d" : "#ffffff",
@@ -460,7 +466,9 @@ export class CombatSystem {
     this.inventory.cooldowns[weaponId] = 0.85;
     const center = this.muzzle(player);
     this.addEffect("shockwave", center.x, center.y, center.x, center.y - 120, colorForWeapon(weaponId), "Overcharge");
-    this.applyBurstDamage(ownerId, center.x, center.y, 132, 18, 420, 0.36, "Overcharge", "shockwave");
+    this.addEffect("spark", center.x - 18, center.y + 10, center.x - 58, center.y - 20, "#ff6f91", "Heat");
+    this.addEffect("spark", center.x + 18, center.y + 10, center.x + 58, center.y - 24, "#ffd84d", "Blast");
+    this.applyBurstDamage(ownerId, center.x, center.y, COMBAT_TUNING.laser.overchargeRadius, COMBAT_TUNING.laser.overchargeDamage, 520, 0.42, "Overcharge", "shockwave");
     const owner = this.combatants.get(ownerId);
     if (owner) {
       const previousInvulnerable = owner.invulnerable;
@@ -565,7 +573,7 @@ export class CombatSystem {
       this.addRadialHitbox(context, {
         ...chargedProfile,
         damage: Math.round(chargedProfile.damage * 0.86),
-        range: 280,
+        range: COMBAT_TUNING.sledgehammer.shockwaveRadius,
         knockback: chargedProfile.knockback * 0.86,
         stun: Math.max(chargedProfile.stun, 0.62),
       }, "Charged Slam");
@@ -588,8 +596,8 @@ export class CombatSystem {
       this.queueSound("minigun-overheat");
       return { kind: "blocked", weaponId, label: "Overheated" };
     }
-    if (charge.charge < 0.9) {
-      charge.charge = Math.min(charge.maxCharge, charge.charge + 0.08);
+    if (charge.charge < 1) {
+      charge.charge = Math.min(charge.maxCharge, charge.charge + 0.02);
       this.queueSound("minigun-spin");
       return { kind: "utility", weaponId, label: "Spinning" };
     }
@@ -613,12 +621,12 @@ export class CombatSystem {
           knockback: profile.knockback * (1 + charge * 0.8),
           stun: profile.stun + charge * 0.08,
           radius: (profile.radius ?? 5) + charge * 2,
-          bounces: (profile.bounces ?? 0) + 1,
+          bounces: COMBAT_TUNING.projectiles.slingshotBounces,
         };
       }
       return {
         ...profile,
-        bounces: (profile.bounces ?? 0) + (context.player.lowSliding || context.player.action === "lowSlide" ? 2 : 1),
+        bounces: COMBAT_TUNING.projectiles.slingshotBounces,
         knockback: profile.knockback * 1.2,
       };
     }
@@ -628,10 +636,11 @@ export class CombatSystem {
       const chargeRatio = Math.min(charge / 12, 1);
       return {
         ...profile,
-        damage: Math.round(profile.damage * (1 + chargeRatio * 1.75)),
-        knockback: profile.knockback * (1 + chargeRatio * 0.55),
+        damage: Math.round(profile.damage * (1 + chargeRatio * COMBAT_TUNING.laser.chargeDamageScale)),
+        range: profile.range + chargeRatio * COMBAT_TUNING.laser.chargeLengthScale,
+        knockback: profile.knockback * (1 + chargeRatio * 0.95),
         stun: profile.stun + chargeRatio * 0.08,
-        radius: (profile.radius ?? 6) + chargeRatio * 5,
+        radius: (profile.radius ?? 6) + chargeRatio * COMBAT_TUNING.laser.chargeWidthScale,
         pierce: (profile.pierce ?? 0) + (charge >= 6 ? 1 : 0) + (charge >= 12 ? 1 : 0),
       };
     }
@@ -643,6 +652,7 @@ export class CombatSystem {
           ...profile,
           pellets: Math.max(2, Math.min(6, bullets)),
           spread: 0.13 + Math.min(bullets, 6) * 0.025,
+          bounces: context.player.ducking || context.player.action === "duck" || context.player.lowSliding ? COMBAT_TUNING.projectiles.revolverRicochetBounces : profile.bounces,
         };
       }
       if (ammoBefore === 1) {
@@ -705,38 +715,35 @@ export class CombatSystem {
         this.queueSound(slot === "secondary" ? "slingshot-scatter" : "slingshot-shot");
         break;
       case "laser-blaster":
-        context.player.velocityX -= aim.x * 85;
-        if (!context.player.grounded) {
-          context.player.velocityY -= 55;
-        }
+        this.applySelfRecoil(context.player, aim, 92 + Math.min(context.heldMs / 2200, 1) * 120, 58 + Math.min(context.heldMs / 2200, 1) * 58);
         this.queueSound("laser-fire");
         break;
       case "revolver":
         this.queueSound(slot === "secondary" ? "revolver-fan" : ammoBefore === 1 ? "revolver-last" : "revolver-shot");
-        context.player.velocityX -= aim.x * (ammoBefore === 1 ? 115 : 65);
+        this.applySelfRecoil(context.player, aim, ammoBefore === 1 ? 145 : 72, 24);
         break;
       case "minigun":
         if (charge) {
-          charge.heat = Math.min(1, charge.heat + 0.04);
+          charge.heat = Math.min(1, charge.heat + COMBAT_TUNING.minigun.heatPerShot);
           charge.charging = true;
         }
-        context.player.velocityX -= aim.x * 26;
-        if (!context.player.grounded) {
-          context.player.velocityY = Math.min(context.player.velocityY, 130);
-        }
+        this.applySelfRecoil(context.player, aim, 34, 8);
         this.queueSound("minigun-fire");
         break;
       case "sniper":
+        {
+          const steady = charge?.charge ?? 0;
         if (charge) {
           charge.charge = 0;
           charge.charging = false;
           charge.heat = 0.18;
         }
-        context.player.velocityX -= aim.x * 210;
-        context.player.velocityY -= 70;
+        this.clearStatus(context.ownerId, "steady");
+        this.applySelfRecoil(context.player, aim, steady > 0.95 ? 130 : 210, 82);
         this.queueSound("sniper-shot");
         this.queueSound("sniper-chamber");
         break;
+        }
       default:
         this.queueSound("weapon-drop");
         break;
@@ -856,14 +863,35 @@ export class CombatSystem {
   }
 
   private applyPistolRecoil(player: PlayerPhysicsState, aimInput: Vec2): void {
+    this.applySelfRecoil(player, aimInput, 118, 42);
+  }
+
+  private applySelfRecoil(player: PlayerPhysicsState, aimInput: Vec2, horizontal: number, vertical: number): void {
     const aim = normalize(aimInput);
-    const groundedScale = player.grounded ? 0.55 : 1;
-    player.velocityX -= aim.x * 170 * groundedScale;
-    player.velocityY -= Math.max(-0.25, aim.y) * 70 * groundedScale;
+    const airScale = player.grounded ? 1 : 1.55;
+    const scale = COMBAT_TUNING.selfRecoilMultiplier * airScale;
+    player.velocityX -= aim.x * horizontal * scale;
+    player.velocityY -= Math.max(0.35, aim.y) * vertical * scale;
     if (!player.grounded) {
-      player.velocityX -= aim.x * 105;
-      player.velocityY -= 70;
+      player.velocityY -= vertical * 0.65;
     }
+  }
+
+  private applySteadyStatus(ownerId: string): void {
+    const owner = this.combatants.get(ownerId);
+    if (!owner) {
+      return;
+    }
+    owner.statuses = upsertStatusEffect(owner.statuses, { id: "steady", label: "Steady", duration: COMBAT_TUNING.sniper.steadySeconds + 0.55, stacks: 1 });
+    owner.invulnerable = Math.max(owner.invulnerable, 0.08);
+  }
+
+  private clearStatus(targetId: string, id: StatusEffectId): void {
+    const target = this.combatants.get(targetId);
+    if (!target) {
+      return;
+    }
+    target.statuses = target.statuses.filter((status) => status.id !== id);
   }
 
   private registerWhipHit(targetId: string): { count: number; pulled: boolean } {
@@ -950,7 +978,7 @@ export class CombatSystem {
       target.invulnerable = previousInvulnerable;
       return false;
     }
-    this.bodyContactCooldowns.set(key, kind.includes("slam") ? 0.45 : 0.32);
+    this.bodyContactCooldowns.set(key, kind === "stomp" ? COMBAT_TUNING.headStomp.cooldown : kind.includes("slam") ? 0.45 : 0.32);
     this.addEffect(request.effect, target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y, request.effect === "trip" ? "#7cff6b" : "#ffd84d", request.label);
     this.queueSound(request.sound);
     return true;
@@ -1026,7 +1054,7 @@ export class CombatSystem {
 
     if (weaponId === "laser-blaster" && chargeState) {
       chargeState.charge = 0;
-      chargeState.heat = Math.min(1, chargeState.heat + 0.18);
+      chargeState.heat = Math.min(1, chargeState.heat + COMBAT_TUNING.laser.heatPerShot);
       chargeState.charging = false;
     }
     if (weaponId === "teleport-ball") {
@@ -1188,9 +1216,9 @@ export class CombatSystem {
 
     if (id === "minigun") {
       if (charge.charging) {
-        charge.charge = Math.min(charge.maxCharge, charge.charge + dt * 1.6);
+        charge.charge = Math.min(charge.maxCharge, charge.charge + dt / COMBAT_TUNING.minigun.spinUpSeconds);
       } else {
-        charge.charge = Math.max(0, charge.charge - dt * 0.28);
+        charge.charge = Math.max(0, charge.charge - dt * 0.08);
       }
       charge.heat = Math.max(0, charge.heat - dt * (charge.charging ? 0.04 : 0.18));
       if (charge.heat >= 1) {
@@ -1202,7 +1230,7 @@ export class CombatSystem {
 
     if (id === "sniper") {
       if (charge.charging) {
-        charge.charge = Math.min(charge.maxCharge, charge.charge + dt * 1.05);
+        charge.charge = Math.min(charge.maxCharge, charge.charge + dt / COMBAT_TUNING.sniper.steadySeconds);
       } else {
         charge.charge = Math.max(0, charge.charge - dt * 0.12);
       }
@@ -1237,6 +1265,10 @@ export class CombatSystem {
       }
       const statusUpdate = updateStatusEffects(combatant.statuses, dt);
       combatant.statuses = statusUpdate.effects;
+      if (combatant.statuses.some((status) => status.id === "shock")) {
+        this.addEffect("aura", combatant.x + combatant.width / 2, combatant.y + combatant.height / 2, combatant.x + combatant.width / 2, combatant.y - 16, "#c8c4a8", "Shock Aura");
+        this.addEffect("spark", combatant.x + combatant.width / 2, combatant.y + 16, combatant.x + combatant.width / 2 + Math.sin(performanceNow() * 0.02) * 18, combatant.y - 8, "#ffd84d", "Spark");
+      }
       if (statusUpdate.damage > 0 && combatant.invulnerable === 0) {
         this.applyDamage({ sourceId: "status", targetId: combatant.id, damage: statusUpdate.damage, knockback: { x: 0, y: 0 }, stun: 0, label: "DOT" });
       }
@@ -1260,8 +1292,8 @@ export class CombatSystem {
       projectile.vy += projectile.gravity * dt;
       projectile.x += projectile.vx * dt;
       projectile.y += projectile.vy * dt;
-      const ground = DEFAULT_PHYSICS.groundY - projectile.radius;
-      if (projectile.y > ground && projectile.bounces > 0) {
+      const ground = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+      if (projectile.y > ground) {
         projectile.y = ground;
         if (projectile.weaponId === "lightning-rod" && projectile.id.startsWith("throw")) {
           this.addEffect("lightning", projectile.x, projectile.y, projectile.x, projectile.y - 140, "#ffd84d", "Rod Strike");
@@ -1270,13 +1302,23 @@ export class CombatSystem {
           projectile.age = projectile.lifetime + 1;
           continue;
         }
-        projectile.vy *= -0.45;
-        projectile.vx *= 0.82;
-        projectile.bounces -= 1;
-        if (projectile.weaponId === "slingshot") {
-          projectile.damage = Math.max(1, Math.round(projectile.damage * 0.8));
-          this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), "Bounce");
-          this.queueSound("slingshot-bounce");
+        if (projectile.bounces > 0) {
+          projectile.vy *= COMBAT_TUNING.projectiles.bounceVelocityMultiplier;
+          projectile.vx *= COMBAT_TUNING.projectiles.bounceFriction;
+          projectile.bounces -= 1;
+          if (projectile.weaponId === "slingshot" || projectile.weaponId === "revolver") {
+            projectile.damage = Math.max(1, Math.round(projectile.damage * 0.8));
+            this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), projectile.weaponId === "revolver" ? "Ricochet" : "Bounce");
+            this.queueSound(projectile.weaponId === "slingshot" ? "slingshot-bounce" : "revolver-shot");
+          }
+        } else if (projectile.weaponId === "teleport-ball") {
+          projectile.vx = 0;
+          projectile.vy = 0;
+          projectile.gravity = 0;
+        } else {
+          this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 16, colorForWeapon(projectile.weaponId), "Impact");
+          projectile.age = projectile.lifetime + 1;
+          continue;
         }
       }
       for (const target of this.combatants.values()) {
@@ -1285,6 +1327,7 @@ export class CombatSystem {
         }
         if (intersectsRect(projectileBounds(projectile), target)) {
           const closePistolShot = projectile.weaponId === "pistol" && projectile.age < 0.13;
+          const sniperLegShot = projectile.weaponId === "sniper" && projectile.y >= target.y + target.height * 0.58;
           const knockback = closePistolShot
             ? { x: projectile.knockback.x * 1.55, y: projectile.knockback.y - 35 }
             : projectile.knockback;
@@ -1295,10 +1338,15 @@ export class CombatSystem {
             knockback,
             stun: closePistolShot ? projectile.stun + 0.04 : projectile.stun,
             label: projectile.label,
-            status: projectile.weaponId === "lightning-rod" ? "shock" : projectile.status,
+            status: projectile.weaponId === "lightning-rod" ? "shock" : sniperLegShot ? "legShotSlow" : projectile.status,
           });
           if (hit.applied) {
             projectile.hits.push(target.id);
+            if (sniperLegShot) {
+              target.statuses = upsertStatusEffect(target.statuses, createStatus("legShotSlow"));
+              this.addEffect("blood", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 28, projectile.y + 12, "#c71943", "Leg Shot");
+              this.queueSound("player-hit");
+            }
             if (projectile.weaponId === "teleport-ball") {
               const pending = this.pendingTeleports.get(projectile.ownerId);
               if (pending?.projectileId === projectile.id) {
@@ -1332,7 +1380,11 @@ export class CombatSystem {
         }
       }
     }
-    removeWhere(this.projectiles, (projectile) => projectile.age > projectile.lifetime);
+    const xLimit = 2400 + COMBAT_TUNING.projectiles.cleanupPadding;
+    removeWhere(this.projectiles, (projectile) => projectile.age > projectile.lifetime
+      || projectile.y > COMBAT_TUNING.projectiles.floorY + COMBAT_TUNING.projectiles.cleanupPadding
+      || projectile.x < -xLimit
+      || projectile.x > xLimit);
   }
 
   private updateHitboxes(dt: number): void {
@@ -1508,7 +1560,7 @@ export class CombatSystem {
           const low = player.lowSliding || player.action === "lowSlide";
           this.applyBodyHit(player.id, target, low ? "low-slide" : "slide", {
             damage: low ? 11 : 7,
-            knockback: { x: player.facing * (low ? 520 : 340), y: low ? -360 : -235 },
+            knockback: { x: player.facing * (low ? 610 : 390), y: low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce },
             stun: low ? 0.72 : 0.48,
             label: low ? "Low Slide Trip" : "Slide Trip",
             status: "tripped",
@@ -1522,8 +1574,8 @@ export class CombatSystem {
         const stompWindow = horizontalOverlap && player.velocityY > 180 && playerBottom >= target.y && playerBottom <= target.y + 28 && owner.y < target.y;
         if (stompWindow) {
           const hit = this.applyBodyHit(player.id, target, "stomp", {
-            damage: 6,
-            knockback: { x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * 80, y: -180 },
+            damage: COMBAT_TUNING.headStomp.damage,
+            knockback: { x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * 110, y: COMBAT_TUNING.headStomp.targetKnockdownForce },
             stun: 0.34,
             label: "Head Stomp",
             status: "daze",
@@ -1531,8 +1583,11 @@ export class CombatSystem {
             effect: "stomp",
           });
           if (hit) {
-            player.velocityY = -520;
-            owner.velocityY = -520;
+            player.velocityY = COMBAT_TUNING.headStomp.bounceForce;
+            player.jumpsUsed = 1;
+            player.airDiveUsed = false;
+            player.grounded = false;
+            owner.velocityY = COMBAT_TUNING.headStomp.bounceForce;
           }
         }
 
@@ -1540,7 +1595,7 @@ export class CombatSystem {
           this.applyBodyHit(player.id, target, "air-dive", {
             damage: 12,
             knockback: { x: player.facing * 380, y: -130 },
-            stun: 1,
+            stun: COMBAT_TUNING.diveHitStunDuration,
             label: "Dive Hit",
             status: "daze",
             sound: "dive-hit",
@@ -1563,11 +1618,11 @@ export class CombatSystem {
         if (player.justSlamLanded) {
           const centerX = owner.x + owner.width / 2;
           const targetX = target.x + target.width / 2;
-          if (Math.abs(targetX - centerX) <= 154 && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 90) {
+          if (Math.abs(targetX - centerX) <= COMBAT_TUNING.groundSlam.radius && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 90) {
             this.applyBodyHit(player.id, target, "ground-slam-wave", {
-              damage: 13,
-              knockback: { x: Math.sign(targetX - centerX || 1) * 390, y: -285 },
-              stun: 0.52,
+              damage: COMBAT_TUNING.groundSlam.damage,
+              knockback: { x: Math.sign(targetX - centerX || 1) * COMBAT_TUNING.groundSlam.knockback, y: -320 },
+              stun: COMBAT_TUNING.groundSlam.stun,
               label: "Slam Wave",
               status: "daze",
               sound: "ground-slam-impact",
@@ -1768,6 +1823,10 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Empowered", duration: 5, stacks: 1 };
     case "marked":
       return { id, label: "Marked", duration: 4, stacks: 1 };
+    case "steady":
+      return { id, label: "Steady", duration: COMBAT_TUNING.sniper.steadySeconds + 0.55, stacks: 1 };
+    case "legShotSlow":
+      return { id, label: "Leg Shot", duration: COMBAT_TUNING.sniper.legShotSlowDuration, stacks: 1 };
   }
 }
 

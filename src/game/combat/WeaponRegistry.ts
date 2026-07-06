@@ -11,6 +11,7 @@ import { slingshot } from "./weapons/Slingshot";
 import { sniper } from "./weapons/Sniper";
 import { teleportBall } from "./weapons/TeleportBall";
 import { whip } from "./weapons/Whip";
+import { COMBAT_TUNING } from "./CombatTuning";
 
 export const WEAPON_IDS = [
   "pistol",
@@ -60,7 +61,10 @@ class WeaponRegistry {
 
   constructor(definitions: WeaponDefinition[]) {
     for (const definition of definitions) {
-      this.definitions.set(definition.id, definition);
+      this.definitions.set(definition.id, {
+        ...definition,
+        weight: COMBAT_TUNING.weaponWeights[definition.id],
+      });
     }
   }
 

@@ -6,6 +6,7 @@ import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
+import { COMBAT_TUNING } from "./combat/CombatTuning";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./combat/WeaponRegistry";
 import { playSound } from "../audio/SoundSystem";
 import {
@@ -185,6 +186,10 @@ export class Game {
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.handleCombatInput(combatInput, dt, time);
+    if (this.combat.getCombatant(this.localPlayer.state.id)?.statuses.some((status) => status.id === "steady")) {
+      this.localPlayer.state.velocityX = 0;
+      this.localPlayer.state.velocityY = 0;
+    }
 
     if (this.localPlayer.state.justSlamLanded) {
       this.shakeTimer = 0.18;
@@ -259,7 +264,17 @@ export class Game {
     for (const remote of this.remotes.values()) {
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
     }
-    this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+    const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+    const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
+    if (steady) {
+      ctx.save();
+      ctx.globalAlpha = 0.34;
+      this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      ctx.restore();
+      this.drawSteadyOutline(ctx);
+    } else {
+      this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+    }
     this.drawLocalWeapon(ctx);
     this.drawLocalHealth(ctx);
     this.drawCrosshair(ctx);
@@ -439,7 +454,7 @@ export class Game {
       timer: result.kind === "dry-fire" ? 0.12 : result.weaponId === "sledgehammer" ? 0.34 : 0.22,
     };
     if (result.weaponId === "sledgehammer") {
-      this.shakeTimer = Math.max(this.shakeTimer, kind === "primary" ? 0.22 : 0.08);
+      this.shakeTimer = Math.max(this.shakeTimer, kind === "primary" ? COMBAT_TUNING.sledgehammer.screenShake : COMBAT_TUNING.sledgehammer.screenShake * 0.36);
     }
     if (result.weaponId === "sniper" && result.kind === "fired") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.12);
@@ -453,6 +468,8 @@ export class Game {
     switch (sound) {
       case "sledge-slam":
       case "sledge-impact":
+        this.shakeTimer = Math.max(this.shakeTimer, COMBAT_TUNING.sledgehammer.screenShake);
+        break;
       case "ground-slam-impact":
       case "laser-overcharge":
         this.shakeTimer = Math.max(this.shakeTimer, 0.22);
@@ -517,15 +534,25 @@ export class Game {
   private getWeightedPhysics(): PhysicsConfig {
     const weapon = weaponRegistry.get(this.combat.getPlayerInventory().equippedWeapon);
     const weight = weapon.weight;
+    const runtime = this.combat.getWeaponRuntimeState(weapon.id);
+    const local = this.combat.getCombatant(this.localPlayer.state.id);
+    const legSlow = local?.statuses.some((status) => status.id === "legShotSlow") ? COMBAT_TUNING.sniper.legShotMoveMultiplier : 1;
+    const steadyLock = local?.statuses.some((status) => status.id === "steady") ? 0 : 1;
+    const minigunSlow = weapon.id === "minigun" && runtime.heat > 0.02
+      ? COMBAT_TUNING.minigun.firingSlowMultiplier
+      : weapon.id === "minigun" && runtime.spin > 0.02
+        ? COMBAT_TUNING.minigun.spinSlowMultiplier
+        : 1;
+    const movementScale = legSlow * steadyLock * minigunSlow;
     return {
       ...DEFAULT_PHYSICS,
-      maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier,
-      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier,
-      airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier,
+      maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
+      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale,
+      airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale,
       jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier,
       doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier,
-      slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier,
-      lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier,
+      slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
+      lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
   }
 
@@ -772,12 +799,14 @@ export class Game {
       return;
     }
     if (projectile.weaponId === "laser-blaster") {
-      ctx.fillStyle = "rgba(90, 215, 255, 0.35)";
-      ctx.fillRect(Math.round(x - projectile.vx * 0.04), y - 6, Math.round(Math.max(32, Math.abs(projectile.vx) * 0.04)), 12);
-      ctx.fillStyle = "#d6f2ff";
-      ctx.fillRect(x - 8, y - 4, 16, 8);
+      const width = Math.max(8, projectile.radius * 2);
+      const length = Math.round(Math.max(36, Math.abs(projectile.vx) * 0.055 + projectile.radius * 5));
+      ctx.fillStyle = projectile.radius > 11 ? "rgba(255, 111, 145, 0.38)" : "rgba(90, 215, 255, 0.35)";
+      ctx.fillRect(Math.round(x - projectile.vx * 0.055), y - width / 2, length, width);
+      ctx.fillStyle = projectile.radius > 11 ? "#ffd0a6" : "#d6f2ff";
+      ctx.fillRect(x - Math.round(width * 0.7), y - Math.round(width * 0.35), Math.round(width * 1.4), Math.round(width * 0.7));
       ctx.fillStyle = "#5ad7ff";
-      ctx.fillRect(x - 4, y - 8, 8, 16);
+      ctx.fillRect(x - 4, y - Math.round(width * 0.55), 8, Math.round(width * 1.1));
       return;
     }
     if (projectile.weaponId === "revolver") {
@@ -887,6 +916,12 @@ export class Game {
       ctx.fillRect(tx - 5, ty - 5, 10, 10);
     } else if (effect.kind === "spark" || effect.kind === "dry-fire" || effect.kind === "pickup") {
       ctx.fillRect(x - 6, y - 6, 12, 12);
+    } else if (effect.kind === "blood") {
+      ctx.fillStyle = "#c71943";
+      for (let index = 0; index < 6; index += 1) {
+        const offset = index - 2.5;
+        ctx.fillRect(Math.round(x + offset * 5 + progress * (tx - x) * 0.3), Math.round(y + Math.sin(index) * 5 + progress * 12), 4, 4);
+      }
     } else if (effect.kind === "trip" || effect.kind === "stomp" || effect.kind === "stun") {
       ctx.fillRect(x - 12, y - 6, 24, 6);
       ctx.fillRect(x - 8, y - 18 - progress * 8, 16, 8);
@@ -957,6 +992,20 @@ export class Game {
     ctx.moveTo(x, y + 3);
     ctx.lineTo(x, y + 9);
     ctx.stroke();
+  }
+
+  private drawSteadyOutline(ctx: CanvasRenderingContext2D): void {
+    const state = this.localPlayer.state;
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    ctx.save();
+    ctx.strokeStyle = "rgba(214, 242, 255, 0.72)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 5, y - 5, state.width + 10, state.height + 10);
+    ctx.fillStyle = "rgba(214, 242, 255, 0.35)";
+    ctx.fillRect(x + state.width / 2 - 2, y - 18, 4, 12);
+    ctx.fillRect(x + state.width / 2 - 18, y + 12, 36, 3);
+    ctx.restore();
   }
 
   private renderCombatHud(): void {

@@ -1,0 +1,79 @@
+import { DEFAULT_PHYSICS } from "../Physics";
+import type { WeaponId, WeaponWeightDefinition } from "./Weapon";
+
+export const COMBAT_TUNING = {
+  enemyKnockbackMultiplier: 1.42,
+  selfRecoilMultiplier: 2.05,
+  slideTripPopUpForce: -330,
+  lowSlideTripPopUpForce: -520,
+  headStomp: {
+    damage: 10,
+    bounceForce: -760,
+    targetKnockdownForce: 260,
+    cooldown: 0.42,
+  },
+  diveHitStunDuration: 1.18,
+  groundSlam: {
+    damage: 18,
+    radius: 190,
+    knockback: 470,
+    stun: 0.58,
+  },
+  sledgehammer: {
+    shockwaveRadius: 300,
+    screenShake: 0.3,
+  },
+  sound: {
+    masterVolume: 0.48,
+    categoryVolumes: {
+      ui: 0.7,
+      movement: 0.82,
+      combat: 1,
+      weapon: 1,
+      heavy: 1.12,
+    },
+  },
+  weaponWeights: {
+    pistol: { label: "Light", moveSpeedMultiplier: 1.03, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1, slideMultiplier: 1.02 },
+    whip: { label: "Balanced", moveSpeedMultiplier: 0.94, accelerationMultiplier: 0.94, airAccelerationMultiplier: 0.96, jumpMultiplier: 0.98, slideMultiplier: 0.96 },
+    "teleport-ball": { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.04, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
+    "lightning-rod": { label: "Balanced", moveSpeedMultiplier: 0.9, accelerationMultiplier: 0.88, airAccelerationMultiplier: 0.9, jumpMultiplier: 0.96, slideMultiplier: 0.92 },
+    sledgehammer: { label: "Very Heavy", moveSpeedMultiplier: 0.68, accelerationMultiplier: 0.58, airAccelerationMultiplier: 0.58, jumpMultiplier: 0.82, slideMultiplier: 0.7 },
+    slingshot: { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.01, slideMultiplier: 1.04 },
+    "laser-blaster": { label: "Heavy", moveSpeedMultiplier: 0.84, accelerationMultiplier: 0.8, airAccelerationMultiplier: 0.82, jumpMultiplier: 0.93, slideMultiplier: 0.86 },
+    revolver: { label: "Balanced", moveSpeedMultiplier: 0.97, accelerationMultiplier: 0.98, airAccelerationMultiplier: 0.99, jumpMultiplier: 0.99, slideMultiplier: 0.98 },
+    minigun: { label: "Very Heavy", moveSpeedMultiplier: 0.62, accelerationMultiplier: 0.52, airAccelerationMultiplier: 0.52, jumpMultiplier: 0.76, slideMultiplier: 0.58 },
+    sniper: { label: "Heavy", moveSpeedMultiplier: 0.76, accelerationMultiplier: 0.68, airAccelerationMultiplier: 0.68, jumpMultiplier: 0.86, slideMultiplier: 0.74 },
+    knife: { label: "Light", moveSpeedMultiplier: 1.08, accelerationMultiplier: 1.12, airAccelerationMultiplier: 1.1, jumpMultiplier: 1.02, slideMultiplier: 1.08 },
+    machete: { label: "Heavy", moveSpeedMultiplier: 0.88, accelerationMultiplier: 0.82, airAccelerationMultiplier: 0.84, jumpMultiplier: 0.92, slideMultiplier: 0.86 },
+  } satisfies Record<WeaponId, WeaponWeightDefinition>,
+  laser: {
+    chargeDamageScale: 2.6,
+    chargeWidthScale: 10,
+    chargeLengthScale: 380,
+    heatPerShot: 0.26,
+    ventCooling: 0.62,
+    overchargeRadius: 150,
+    overchargeDamage: 24,
+  },
+  minigun: {
+    spinUpSeconds: 5,
+    heatPerShot: 0.045,
+    firingSlowMultiplier: 0.45,
+    spinSlowMultiplier: 0.62,
+  },
+  projectiles: {
+    floorY: DEFAULT_PHYSICS.groundY,
+    bounceVelocityMultiplier: -0.42,
+    bounceFriction: 0.72,
+    cleanupPadding: 520,
+    slingshotBounces: 1,
+    revolverRicochetBounces: 1,
+  },
+  sniper: {
+    steadySeconds: 1,
+    steadyDamageResistance: 0.18,
+    legShotSlowDuration: 10,
+    legShotMoveMultiplier: 0.52,
+  },
+} as const;
