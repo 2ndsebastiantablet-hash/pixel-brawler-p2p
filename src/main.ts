@@ -1,7 +1,6 @@
 import "./style.css";
-import "./game/combat/AxeReworkPatch";
 import { Game } from "./game/Game";
-import type { PeerInfo } from "./net/NetTypes";
+import type { PeerInfo, SignalMessage } from "./net/NetTypes";
 import { SignalingClient } from "./net/SignalingClient";
 import { WebRTCClient, type ConnectionStatus } from "./net/WebRTCClient";
 import { LobbyUI, type SessionView } from "./ui/LobbyUI";
@@ -119,51 +118,34 @@ async function hostRoom(
     setStatus("Creating room");
     const room = await signaling.createRoom({
       visibility,
-      serverName: serverName.trim() || `${profile.name}'s Arena`,
+      serverName,
       hostName: profile.name,
-      hostColor: profile.color,
+      hostClientId: profile.clientId,
+      bannedClientIds: readBanList(profile.clientId),
     });
-    rtc = new WebRTCClient(signaling, room.roomId, profile.clientId, true, {
-      onStatus: (status) => {
-        setStatus(status);
-      },
-      onPeerList: (peers) => {
-        currentSession = {
-          mode: visibility,
-          isHost: true,
-          code: room.code,
-          serverName: room.serverName,
-          hostName: profile.name,
-          localPeerId: profile.clientId,
-          peers,
-        };
-        ui.updateSession(currentSession);
-      },
-      onPlayerState: (packet) => {
-        game.applyRemoteState(packet);
-      },
-      onCombatEvent: (packet) => {
-        game.applyCombatEvent(packet);
-      },
-      onServerClosed: (reason) => {
-        returnToMain(reason || "Host left. Server closed.");
-      },
-    });
-    await rtc.connect(profile);
-    game.startNetwork(profile, true);
+
+    rtc = createRtcClient(profile);
+    game.startNetwork(rtc.peerId, profile, "host");
     currentSession = {
-      mode: visibility,
+      mode: room.visibility,
       isHost: true,
-      code: room.code,
+      localPeerId: rtc.peerId,
+      roomCode: room.roomCode,
       serverName: room.serverName,
-      hostName: profile.name,
-      localPeerId: profile.clientId,
-      peers: [localPeer(profile.clientId, true)],
+      hostName: room.hostName,
+      peers: [localPeer(rtc.peerId, true)],
     };
     ui.showGame(currentSession);
+    await rtc.host(room.roomCode);
+    if (visibility === "public") {
+      await refreshPublicRooms();
+    }
   } catch (error) {
-    console.error(error);
-    returnToMain(error instanceof Error ? error.message : "Could not create room");
+    resetRtc();
+    game.stop();
+    currentSession = null;
+    ui.showError(error);
+    ui.showSetup();
   }
 }
 
@@ -172,154 +154,218 @@ async function joinRoom(nextProfile: PlayerProfile, code: string): Promise<void>
     profile = nextProfile;
     resetRtc();
     game.setShowNames(profile.showNames);
-    setStatus("Joining room");
-    const room = await signaling.joinRoom(code.trim(), {
-      name: profile.name,
-      color: profile.color,
-      clientId: profile.clientId,
-    });
-    rtc = new WebRTCClient(signaling, room.roomId, profile.clientId, false, {
-      onStatus: (status) => {
-        setStatus(status);
-      },
-      onPeerList: (peers) => {
-        currentSession = {
-          mode: room.visibility,
-          isHost: false,
-          code: room.code,
-          serverName: room.serverName,
-          hostName: room.hostName,
-          localPeerId: profile.clientId,
-          peers,
-        };
-        ui.updateSession(currentSession);
-      },
-      onPlayerState: (packet) => {
-        game.applyRemoteState(packet);
-      },
-      onCombatEvent: (packet) => {
-        game.applyCombatEvent(packet);
-      },
-      onServerClosed: (reason) => {
-        returnToMain(reason || "Host left. Server closed.");
-      },
-    });
-    await rtc.connect(profile);
-    game.startNetwork(profile, false);
+    setStatus("Connecting");
+    rtc = createRtcClient(profile);
+    game.startNetwork(rtc.peerId, profile, "guest");
     currentSession = {
-      mode: room.visibility,
+      mode: "private",
       isHost: false,
-      code: room.code,
-      serverName: room.serverName,
-      hostName: room.hostName,
-      localPeerId: profile.clientId,
-      peers: [localPeer(profile.clientId, false)],
+      localPeerId: rtc.peerId,
+      roomCode: code,
+      peers: [localPeer(rtc.peerId, false)],
     };
     ui.showGame(currentSession);
+    await rtc.join(code);
   } catch (error) {
-    console.error(error);
-    returnToMain(error instanceof Error ? error.message : "Could not join room");
+    resetRtc();
+    game.stop();
+    currentSession = null;
+    ui.showError(error);
+    ui.showSetup();
   }
 }
 
 async function refreshPublicRooms(): Promise<void> {
   try {
-    const rooms = await signaling.listPublicRooms();
-    ui.setPublicRooms(rooms);
+    ui.setPublicRooms(await signaling.listPublicRooms());
   } catch (error) {
-    console.warn("Failed to refresh public rooms", error);
+    console.warn("Could not refresh public rooms", error);
     ui.setPublicRooms([]);
   }
 }
 
+function createRtcClient(nextProfile: PlayerProfile): WebRTCClient {
+  return new WebRTCClient(signaling, nextProfile, {
+    onStatus: (status: ConnectionStatus) => setStatus(status),
+    onRemoteState: (state) => game.setRemoteState(state),
+    onCombatEvent: (event) => game.applyCombatEvent(event),
+    onPeerLeft: (peerId) => {
+      game.removeRemote(peerId);
+      if (currentSession) {
+        currentSession = {
+          ...currentSession,
+          peers: currentSession.peers.filter((peer) => peer.peerId !== peerId),
+        };
+        ui.updateSession(currentSession);
+      }
+    },
+    onLobby: (message) => updateSessionFromLobby(message),
+    onKicked: (reason) => returnToMain(reason, false),
+    onBanned: (reason) => returnToMain(reason, false),
+    onServerClosed: (reason) => returnToMain(reason, false),
+    onAfkWarning: (message) => setStatus(message),
+  });
+}
+
+function updateSessionFromLobby(message: Extract<SignalMessage, { type: "lobby" }>): void {
+  const localPeerId = message.peers.find((peer) => peer.clientId === profile.clientId)?.peerId
+    ?? rtc?.peerId
+    ?? currentSession?.localPeerId
+    ?? "local";
+
+  currentSession = {
+    mode: message.visibility,
+    isHost: message.hostClientId === profile.clientId,
+    localPeerId,
+    roomCode: message.roomCode,
+    serverName: message.serverName,
+    hostName: message.hostName,
+    peers: message.peers,
+  };
+  ui.showGame(currentSession);
+}
+
 function kickPeer(peer: PeerInfo): void {
-  if (!rtc || !currentSession?.isHost) {
+  if (!currentSession?.isHost || !rtc) {
     return;
   }
-  rtc.kick(peer.id, false);
+  rtc.kickPeer(peer.peerId);
+  removePeerLocally(peer);
 }
 
 function banPeer(peer: PeerInfo): void {
-  if (!rtc || !currentSession?.isHost) {
+  if (!currentSession?.isHost || !rtc) {
     return;
   }
-  rtc.kick(peer.id, true);
+  addBan(profile.clientId, peer.clientId);
+  rtc.banPeer(peer.clientId);
+  removePeerLocally(peer);
+}
+
+function removePeerLocally(peer: PeerInfo): void {
+  game.removeRemote(peer.peerId);
+  if (!currentSession) {
+    return;
+  }
+  currentSession = {
+    ...currentSession,
+    peers: currentSession.peers.filter((item) => item.peerId !== peer.peerId && item.clientId !== peer.clientId),
+  };
+  ui.updateSession(currentSession);
 }
 
 function endServer(): void {
-  rtc?.closeServer();
-  returnToMain("Server closed");
+  const active = rtc;
+  rtc = null;
+  active?.closeServer();
+  game.stop();
+  currentSession = null;
+  ui.showMain("Server closed");
 }
 
-function returnToMain(message?: string): void {
-  resetRtc();
-  currentSession = null;
-  currentStatus = message ?? "Disconnected";
+function returnToMain(message: string, closeRtc = true): void {
+  if (closeRtc) {
+    resetRtc();
+  } else {
+    rtc = null;
+  }
   game.stop();
-  ui.showMenu(message);
+  currentSession = null;
+  ui.showMain(message);
+  currentStatus = message;
+  renderDebugOverlay();
 }
 
 function resetRtc(): void {
-  rtc?.disconnect();
+  const active = rtc;
   rtc = null;
+  active?.close();
 }
 
 function setStatus(status: ConnectionStatus | string): void {
   currentStatus = status;
+  ui.setStatus(status);
   renderDebugOverlay();
 }
 
-function localPeer(id: string, host: boolean): PeerInfo {
+function installDebugHook(): void {
+  Object.defineProperty(window, "__PIXEL_BRAWLER_DEBUG__", {
+    configurable: true,
+    get: buildDebugSnapshot,
+  });
+  window.setInterval(renderDebugOverlay, 250);
+}
+
+function buildDebugSnapshot(): PixelBrawlerDebugSnapshot {
+  const gameDebug = game.getDebugSnapshot();
+  const netDebug = rtc?.getDebugSnapshot();
   return {
-    id,
-    name: profile.name,
-    color: profile.color,
-    host,
-    connectedAt: Date.now(),
-    afkSeconds: 0,
+    signalingUrl: signaling.baseUrl,
+    roomCode: currentSession?.roomCode,
+    clientId: profile.clientId,
+    peerId: rtc?.peerId ?? currentSession?.localPeerId,
+    connectedPeers: netDebug?.connectedPeerCount ?? Math.max(0, (currentSession?.peers.length ?? 1) - 1),
+    roomPlayerCount: currentSession?.peers.length ?? 0,
+    connectionStatus: currentStatus,
+    webSocketStatus: netDebug?.webSocketStatus ?? "closed",
+    webRtcPeerStatus: netDebug?.peerStatus ?? {},
+    dataChannels: netDebug?.dataChannels ?? {},
+    relayFallbackPeerCount: netDebug?.relayFallbackPeerCount ?? 0,
+    remotePlayers: gameDebug.remotePlayers,
+    localPlayer: gameDebug.localPlayer,
   };
 }
 
-function createDebugOverlay(): HTMLDivElement {
-  const panel = document.createElement("div");
-  panel.className = "debug-overlay";
-  panel.hidden = true;
-  root.append(panel);
-  return panel;
-}
-
-function installDebugHook(): void {
-  Object.assign(window, {
-    __PIXEL_BRAWLER_DEBUG__: () => ({
-      session: currentSession,
-      status: currentStatus,
-      signalingUrl: signaling.getDebugUrl(),
-      rtc: rtc?.getDebugState() ?? null,
-      game: game.getDebugState(),
-    }),
-  });
+function createDebugOverlay(): HTMLPreElement {
+  const overlay = document.createElement("pre");
+  overlay.className = "debug-overlay";
+  overlay.hidden = true;
+  document.body.append(overlay);
+  return overlay;
 }
 
 function renderDebugOverlay(): void {
   if (!debugOverlayVisible) {
     return;
   }
-  const rtcDebug = rtc?.getDebugState();
-  const gameDebug = game.getDebugState();
+  const debug = buildDebugSnapshot();
   debugOverlay.textContent = [
-    `status: ${currentStatus}`,
-    `signal: ${signaling.getDebugUrl()}`,
-    `room: ${currentSession?.code ?? "offline"}`,
-    `client: ${profile.clientId}`,
-    `peers: ${rtcDebug?.connectedPeers ?? 0}/${currentSession?.peers.length ?? 0}`,
-    `channels: ${rtcDebug?.channelsOpen ?? 0}`,
-    `remote: ${gameDebug.remotePlayers}`,
-    `ws: ${rtcDebug?.websocketStatus ?? "none"}`,
+    `signaling ${debug.signalingUrl}`,
+    `room ${debug.roomCode ?? "-"} client ${debug.clientId}`,
+    `peer ${debug.peerId ?? "-"} connected ${debug.connectedPeers} room ${debug.roomPlayerCount}`,
+    `ws ${debug.webSocketStatus} status ${debug.connectionStatus}`,
+    `rtc ${JSON.stringify(debug.webRtcPeerStatus)}`,
+    `dc ${JSON.stringify(debug.dataChannels)} fallback ${debug.relayFallbackPeerCount}`,
+    `remote players ${debug.remotePlayers.count}`,
   ].join("\n");
 }
 
-declare global {
-  interface Window {
-    __PIXEL_BRAWLER_DEBUG__?: () => unknown;
+function localPeer(peerId: string, isHost: boolean): PeerInfo {
+  return {
+    peerId,
+    clientId: profile.clientId,
+    name: profile.name,
+    color: profile.color,
+    isHost,
+  };
+}
+
+function readBanList(hostClientId: string): string[] {
+  try {
+    const raw = localStorage.getItem(banKey(hostClientId));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
   }
+}
+
+function addBan(hostClientId: string, bannedClientId: string): void {
+  const bans = new Set(readBanList(hostClientId));
+  bans.add(bannedClientId);
+  localStorage.setItem(banKey(hostClientId), JSON.stringify([...bans]));
+}
+
+function banKey(hostClientId: string): string {
+  return `pixel-brawler-p2p.bans.${hostClientId}`;
 }
