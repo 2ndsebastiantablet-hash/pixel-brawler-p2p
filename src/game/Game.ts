@@ -547,6 +547,9 @@ export class Game {
     if (result.weaponId === "laser-blaster" && result.label === "Overcharge") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.24);
     }
+    if (result.weaponId === "machete" && kind === "secondary") {
+      this.shakeTimer = Math.max(this.shakeTimer, 0.08);
+    }
   }
 
   private applySoundShake(sound: Parameters<typeof playSound>[0]): void {
@@ -566,6 +569,9 @@ export class Game {
       case "revolver-last":
       case "minigun-overheat":
         this.shakeTimer = Math.max(this.shakeTimer, 0.1);
+        break;
+      case "machete-chop":
+        this.shakeTimer = Math.max(this.shakeTimer, 0.08);
         break;
     }
   }
@@ -843,6 +849,22 @@ export class Game {
         ctx.fillStyle = "rgba(216, 240, 255, 0.5)";
         this.pixelRect(ctx, x + facing * 18, y - 12, facing * 34, 24);
       }
+    } else if (weaponId === "machete") {
+      const chop = this.attackVisual?.weaponId === "machete" && this.attackVisual.kind === "secondary";
+      const reach = active > 0 ? (chop ? 46 : 34) : 10;
+      const x = Math.round(centerX + facing * (16 + reach));
+      const y = Math.round(centerY + (chop ? -18 : -2) + aim.y * 12);
+      ctx.fillStyle = "#344136";
+      this.pixelRect(ctx, x - facing * 18, y + 6, facing * 20, 8);
+      ctx.fillStyle = "#9ee7c3";
+      this.pixelRect(ctx, x, y - 7, facing * 42, 14);
+      this.pixelRect(ctx, x + facing * 30, y - 13, facing * 14, 20);
+      ctx.fillStyle = "#f0fff7";
+      this.pixelRect(ctx, x + facing * 35, y - 4, facing * 12, 6);
+      if (active > 0) {
+        ctx.fillStyle = chop ? "rgba(158, 231, 195, 0.5)" : "rgba(158, 231, 195, 0.34)";
+        this.pixelRect(ctx, x + facing * 24, y - (chop ? 22 : 16), facing * (chop ? 58 : 44), chop ? 44 : 30);
+      }
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
       const lift = active > 0 || charge > 0.2 ? -34 - charge * 18 : -8;
@@ -939,6 +961,12 @@ export class Game {
         ctx.fillRect(-18, -3, 30, 6);
         ctx.fillStyle = "#2b3542";
         ctx.fillRect(9, -5, 10, 10);
+      } else if (projectile.weaponId === "machete") {
+        ctx.fillStyle = "#9ee7c3";
+        ctx.fillRect(-24, -5, 42, 10);
+        ctx.fillRect(8, -11, 14, 22);
+        ctx.fillStyle = "#344136";
+        ctx.fillRect(16, -4, 14, 8);
       } else {
         ctx.fillStyle = projectile.color;
         ctx.fillRect(-12, -4, 24, 8);
@@ -1043,6 +1071,12 @@ export class Game {
       ctx.fillRect(x - 18, y - 3, 30, 6);
       ctx.fillStyle = "#2b3542";
       ctx.fillRect(x + 8, y - 5, 10, 10);
+    } else if (dropped.weaponId === "machete") {
+      ctx.fillStyle = "#9ee7c3";
+      ctx.fillRect(x - 24, y - 5, 42, 10);
+      ctx.fillRect(x + 8, y - 13, 15, 24);
+      ctx.fillStyle = "#344136";
+      ctx.fillRect(x + 16, y - 4, 14, 8);
     } else {
       ctx.fillRect(x - 12, y - 4, 24, 8);
       ctx.fillRect(x + 3, y + 3, 7, 9);
@@ -1317,6 +1351,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f65bd8";
     case "knife":
       return "#d8f0ff";
+    case "machete":
+      return "#9ee7c3";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1348,7 +1384,9 @@ function weaponHudDetail(
     case "sniper":
       return `Steady ${Math.round(runtime.steady * 100)}% - Chamber ${runtime.chamber.toFixed(1)}s`;
     case "knife":
-      return "Close combo - throw sticks";
+      return "Infinite throw - recoil kick";
+    case "machete":
+      return "Wide slash - heavy chop";
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
@@ -1383,7 +1421,9 @@ function weaponHelper(id: WeaponId): string {
     case "sniper":
       return "Hold/right steady - Left chambered shot - Pierces";
     case "knife":
-      return "Fast combo - Right/G throw - F pickup";
+      return "Infinite throws - Right/G kick back";
+    case "machete":
+      return "Wide slash - Right heavy overhead chop";
     default:
       return "";
   }

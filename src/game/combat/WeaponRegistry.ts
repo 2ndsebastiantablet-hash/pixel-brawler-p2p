@@ -25,6 +25,7 @@ export const WEAPON_IDS = [
   "minigun",
   "sniper",
   "knife",
+  "machete",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [

@@ -670,8 +670,11 @@ export class CombatSystem {
     if (weapon.id === "knife") {
       this.queueSound(this.peekKnifeComboStep() === 3 ? "knife-stab" : "knife-slash");
     }
+    if (weapon.id === "machete") {
+      this.queueSound(slot === "secondary" ? "machete-chop" : "machete-slash");
+    }
 
-    this.spawnMeleeHitbox(context, chargedProfile, slot === "secondary" ? "Heavy" : weapon.name);
+    this.spawnMeleeHitbox(context, chargedProfile, meleeLabelFor(weapon.id, slot, weapon.name));
     if (weapon.id === "sledgehammer" && context.heldMs >= 650) {
       this.addRadialHitbox(context, {
         ...chargedProfile,
@@ -808,6 +811,23 @@ export class CombatSystem {
         range: profile.range + (dashStab ? 22 : 0) + (airSlash ? 8 : 0),
         knockback: profile.knockback * (step === 3 ? 1.55 : dashStab ? 1.32 : 1),
         stun: profile.stun + (step === 3 ? 0.16 : dashStab ? 0.05 : 0),
+      };
+    }
+
+    if (weaponId === "machete") {
+      const dashCleave = context.player.sliding || context.player.lowSliding || context.player.action === "slide" || context.player.action === "lowSlide";
+      const airSlash = !context.player.grounded;
+      if (airSlash && slot === "primary") {
+        context.player.velocityY = Math.min(context.player.velocityY, 90);
+      }
+      if (airSlash && slot === "secondary") {
+        context.player.velocityY = Math.max(context.player.velocityY, 180);
+      }
+      return {
+        ...profile,
+        range: profile.range + (dashCleave ? 24 : 0),
+        knockback: profile.knockback * (slot === "secondary" ? 1.12 : dashCleave ? 1.22 : 1),
+        stun: profile.stun + (slot === "secondary" ? 0.05 : 0),
       };
     }
 
@@ -1241,13 +1261,21 @@ export class CombatSystem {
     const center = this.muzzle(context.player);
     const isWhip = weaponId === "whip";
     const isKnife = weaponId === "knife";
+    const isMachete = weaponId === "machete";
+    const isMacheteChop = isMachete && label === "Machete Chop";
     const isHammer = weaponId === "sledgehammer";
     const knifeStep = isKnife ? this.registerKnifeSwing() : 0;
     const lowTrip = isWhip && (context.player.ducking || context.player.lowSliding || context.player.action === "duck" || context.player.action === "lowSlide");
     const width = isKnife ? profile.range + (knifeStep === 3 ? 10 : 0) : profile.range;
-    const height = isWhip ? Math.max(32, (profile.radius ?? 14) * 2.4) : isKnife ? Math.max(24, (profile.radius ?? 14) * 2.2) : Math.max(22, (profile.radius ?? 14) * 2);
+    const height = isWhip
+      ? Math.max(32, (profile.radius ?? 14) * 2.4)
+      : isKnife
+        ? Math.max(24, (profile.radius ?? 14) * 2.2)
+        : isMachete
+          ? Math.max(40, (profile.radius ?? 20) * (isMacheteChop ? 2.6 : 2.1))
+          : Math.max(22, (profile.radius ?? 14) * 2);
     const x = aim.x >= 0 ? center.x : center.x - width;
-    const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : 18);
+    const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : isMacheteChop ? 32 : 18);
     const hitLabel = isKnife ? (knifeStep === 3 ? "Knife Stab" : "Knife Slash") : lowTrip ? "Low Whip" : label;
     this.hitboxes.push({
       id: this.makeId("hit"),
@@ -1258,19 +1286,25 @@ export class CombatSystem {
       width,
       height,
       damage: profile.damage,
-      knockback: { x: Math.sign(aim.x || context.player.facing) * profile.knockback, y: aim.y * profile.knockback - 60 },
+      knockback: {
+        x: Math.sign(aim.x || context.player.facing) * profile.knockback,
+        y: isMacheteChop ? Math.max(70, aim.y * profile.knockback + 70) : aim.y * profile.knockback - 60,
+      },
       stun: profile.stun,
       age: 0,
       duration: Math.max(0.08, profile.cooldown * 0.46),
       label: hitLabel,
       color: colorForWeapon(weaponId),
       status: lowTrip ? "tripped" : profile.status,
-      sweetSpot: isWhip ? "tip" : undefined,
+      sweetSpot: isWhip || isMachete ? "tip" : undefined,
       lowTrip,
-      heavy: isHammer,
+      heavy: isHammer || isMacheteChop,
       hits: [],
     });
     this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, colorForWeapon(weaponId), hitLabel);
+    if (isMacheteChop) {
+      this.addEffect("spark", x + width * 0.5, y + height, x + width * 0.5, y + height + 18, colorForWeapon(weaponId), "Chop");
+    }
   }
 
   private addRadialHitbox(context: WeaponUseContext, profile: AttackProfile, label: string): void {
@@ -1301,6 +1335,15 @@ export class CombatSystem {
     const weapon = weaponRegistry.get(weaponId);
     const aim = normalize(aimInput);
     const start = this.muzzle(player);
+    if (weaponId === "knife") {
+      const cooldown = this.inventory.cooldowns.knife ?? 0;
+      if (cooldown > 0) {
+        return { kind: "blocked", weaponId, label: "Throw cooldown" };
+      }
+      this.inventory.cooldowns.knife = weapon.secondary.cooldown;
+      this.applySelfRecoil(player, aim, 84, 22);
+      this.addEffect("muzzle", start.x, start.y, start.x + aim.x * 28, start.y + aim.y * 18, colorForWeapon(weaponId), "Throw");
+    }
     if (weaponId !== "knife") {
       this.droppedWeapons.push({
         id: this.makeId("drop"),
@@ -1326,8 +1369,8 @@ export class CombatSystem {
       knockback: { x: aim.x * weapon.throw.knockback, y: aim.y * weapon.throw.knockback - 40 },
       stun: emptyToss ? weapon.throw.stun + 0.1 : weapon.throw.stun,
       age: 0,
-      lifetime: weaponId === "knife" ? 0.95 : 0.85,
-      gravity: weaponId === "knife" ? 760 : 900,
+      lifetime: weaponId === "knife" ? weapon.secondary.range / Math.max(weapon.throw.speed, 1) : 0.85,
+      gravity: weaponId === "knife" ? 120 : 900,
       bounces: weaponId === "knife" ? 0 : 1,
       pierce: 0,
       label: `${weapon.name} throw`,
@@ -1339,29 +1382,6 @@ export class CombatSystem {
     this.queueSound(weaponId === "pistol" ? "pistol-throw" : weaponId === "knife" ? "knife-throw" : "weapon-drop");
     this.recentEvents.push(this.createEvent(ownerId, weaponId, "throw", start, aim, "Throw", now));
     return { kind: "fired", weaponId, label: "Throw" };
-  }
-
-  private stickThrownKnife(projectile: Projectile): void {
-    const existing = this.droppedWeapons.find((dropped) => dropped.weaponId === "knife" && Math.hypot(dropped.x - projectile.x, dropped.y - projectile.y) < 16);
-    if (existing) {
-      existing.x = projectile.x;
-      existing.y = projectile.y;
-      existing.vx = 0;
-      existing.vy = 0;
-      existing.pickupable = true;
-      return;
-    }
-    this.droppedWeapons.push({
-      id: this.makeId("drop"),
-      weaponId: "knife",
-      x: projectile.x,
-      y: projectile.y,
-      vx: 0,
-      vy: 0,
-      age: 0.3,
-      pickupable: true,
-    });
-    this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
   }
 
   private updateInventory(dt: number): void {
@@ -1517,7 +1537,7 @@ export class CombatSystem {
             this.queueSound(projectile.weaponId === "slingshot" ? "slingshot-bounce" : "revolver-shot");
           }
         } else if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
-          this.stickThrownKnife(projectile);
+          this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
           projectile.age = projectile.lifetime + 1;
           continue;
         } else if (projectile.weaponId === "teleport-ball") {
@@ -1582,7 +1602,7 @@ export class CombatSystem {
               this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y, colorForWeapon(projectile.weaponId), "Suppress");
             }
             if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
-              this.stickThrownKnife(projectile);
+              this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
               this.queueSound("knife-hit");
             }
             if (projectile.weaponId === "teleport-ball") {
@@ -1620,7 +1640,9 @@ export class CombatSystem {
           const whipHit = hitbox.weaponId === "whip";
           const rodHit = hitbox.weaponId === "lightning-rod";
           const knifeHit = hitbox.weaponId === "knife";
+          const macheteHit = hitbox.weaponId === "machete";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
+          const macheteTipHit = macheteHit && isWhipTipHit(hitbox, target);
           const combo = whipHit ? this.registerWhipHit(target.id) : { count: 0, pulled: false };
           const rodEmpowered = rodHit && owner?.statuses.some((status) => status.id === "empowered");
           const backstab = knifeHit && owner ? isBackstab(owner, target, hitbox.knockback.x) : false;
@@ -1630,8 +1652,24 @@ export class CombatSystem {
                 y: -135,
               }
             : undefined;
-          const damage = whipHit && tipHit ? hitbox.damage + 4 : rodEmpowered ? hitbox.damage + 6 : knifeHit && backstab ? hitbox.damage + 5 : hitbox.damage;
-          const stun = whipHit && tipHit ? hitbox.stun + 0.14 : rodEmpowered ? hitbox.stun + 0.12 : knifeHit && backstab ? hitbox.stun + 0.08 : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
+          const damage = whipHit && tipHit
+            ? hitbox.damage + 4
+            : rodEmpowered
+              ? hitbox.damage + 6
+              : knifeHit && backstab
+                ? hitbox.damage + 5
+                : macheteTipHit
+                  ? hitbox.damage + 4
+                  : hitbox.damage;
+          const stun = whipHit && tipHit
+            ? hitbox.stun + 0.14
+            : rodEmpowered
+              ? hitbox.stun + 0.12
+              : knifeHit && backstab
+                ? hitbox.stun + 0.08
+                : macheteTipHit
+                  ? hitbox.stun + 0.05
+                  : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
           const hitY = clamp(hitbox.y + hitbox.height / 2, target.y, target.y + target.height - 1);
           const hit = this.applyDamage({
             sourceId: hitbox.ownerId,
@@ -1639,7 +1677,7 @@ export class CombatSystem {
             damage,
             knockback: pull ?? (rodHit ? { x: hitbox.knockback.x * 1.28, y: hitbox.knockback.y - 75 } : hitbox.knockback),
             stun,
-            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : knifeHit && backstab ? `${hitbox.label} Backstab` : hitbox.label,
+            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : knifeHit && backstab ? `${hitbox.label} Backstab` : macheteTipHit ? "Tip Cleave" : hitbox.label,
             status: rodHit ? "shock" : hitbox.lowTrip ? "tripped" : hitbox.status,
             weaponId: hitbox.weaponId,
             hitY,
@@ -1656,6 +1694,10 @@ export class CombatSystem {
             if (knifeHit) {
               this.queueSound("knife-hit");
               this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 18, hitY, colorForWeapon(hitbox.weaponId), backstab ? "Backstab" : "Cut");
+            }
+            if (macheteHit) {
+              this.queueSound("machete-hit");
+              this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 26, hitY, colorForWeapon(hitbox.weaponId), macheteTipHit ? "Tip" : "Cleave");
             }
             if (rodHit) {
               this.queueSound("lightning-shock");
@@ -1815,7 +1857,12 @@ export class CombatSystem {
           if (hit) {
             player.velocityY = COMBAT_TUNING.headStomp.bounceForce;
             player.jumpsUsed = 1;
+            player.airDiving = false;
+            player.airDiveTimer = 0;
             player.airDiveUsed = false;
+            player.groundSlamming = false;
+            player.jumpBufferTimer = 0;
+            player.coyoteTimer = 0;
             player.grounded = false;
             owner.velocityY = COMBAT_TUNING.headStomp.bounceForce;
           }
@@ -2083,6 +2130,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f65bd8";
     case "knife":
       return "#d8f0ff";
+    case "machete":
+      return "#9ee7c3";
     default:
       return "#ffffff";
   }
@@ -2120,6 +2169,13 @@ function projectileLabelFor(id: WeaponId, slot: "primary" | "secondary"): string
     default:
       return weaponRegistry.get(id).name;
   }
+}
+
+function meleeLabelFor(id: WeaponId, slot: "primary" | "secondary", fallback: string): string {
+  if (id === "machete") {
+    return slot === "secondary" ? "Machete Chop" : "Machete Slash";
+  }
+  return slot === "secondary" ? "Heavy" : fallback;
 }
 
 function createStatus(id: StatusEffectId): StatusEffect {

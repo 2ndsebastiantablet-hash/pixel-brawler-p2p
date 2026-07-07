@@ -14,7 +14,7 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
-- Eleven enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, and knife. Machete remains registered for compatibility but hidden from the armory/loadout.
+- Twelve enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, and machete.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
@@ -57,13 +57,14 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds with stronger self-recoil, the last bullet hits harder with extra kick, and head/leg hits become especially dangerous or slowing.
 - Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, and it must spin for five seconds before firing. Heat rises while firing, overheat locks the gun briefly, the barrels glow red, and recoil pushes the player back.
 - Sniper: Heavy precision weapon. Hold right click to enter steady mode, locking movement and making the player fully invisible to local and remote players for up to 15 seconds. Left click reveals and fires the chambered shot; steady shots deal more damage, mark targets, and pierce harder. Head shots are near lethal, and lower-body shots apply a 10-second leg-shot slow with pixel blood flecks.
-- Knife: Fast close-range combo weapon in slot 11. Left click chains slash, slash, stab; the third hit deals more damage/stun, air slashes stall slightly, dash slashes reach farther, repeated cuts bleed, and right click or `G` throws a pickupable knife that sticks briefly on hit/impact.
+- Knife: Infinite throwing knife in slot 11. Right click or `G` throws a fast spinning knife without ammo or inventory loss, with a short cooldown and noticeable recoil; airborne throws kick much harder for movement tricks. Left click still chains quick close slashes/stabs that can bleed.
+- Machete: Heavy close-range blade in slot 12. Left click swings a wide pushing slash with a tip bonus, slide slashes cleave farther, air slashes slow falling slightly, and right click uses a slower overhead chop with stronger damage, knockback, hit sparks, and a small ground-chop effect.
 
 ## Movement Combat
 
 - Slide Trip: Ground `Shift` slide trips enemies on contact, dealing light damage, upward pop, knockback, and short stun.
 - Low Slide Trip: `S` + `Shift` slides longer and trips harder with stronger pop and stun.
-- Head Stomp: Landing on a target's head with downward velocity deals damage, stuns/squashes the target briefly, bounces the stomping player upward, and refreshes an aerial jump/dive option.
+- Head Stomp: Landing on a target's head with downward velocity deals damage, stuns/squashes the target briefly, bounces the stomping player upward, clears dive state, and refreshes one midair double jump.
 - Air Dive Hit: `Shift` in air dives into targets for damage, knockback, and about one second of stun.
 - Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a tuned shockwave.
 - Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
@@ -75,7 +76,7 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Ricochet: Slingshot stones can bounce many times. Revolver crouch/low shots can ricochet once. Normal bullets do not bounce forever.
 - Teleporting Ball: The marker bounces/sticks above the floor and remains usable for the delayed teleport instead of falling into the void.
 - Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
-- Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, stick briefly, then become pickupable with `F`.
+- Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, show a brief stick/spark, then clean up automatically because Knife has infinite throws.
 
 ## Loading Screen And Sound
 
@@ -105,7 +106,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the enabled armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons; Knife is after Sniper and is easiest to reach with `E`.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the enabled armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons; Knife and Machete are after Sniper and are easiest to reach with `E`.
 
 ## Run the signaling Worker locally
 
@@ -206,7 +207,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable eleven-weapon vertical slice, not final balance.
+- Combat is a playable twelve-weapon vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
 - The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.

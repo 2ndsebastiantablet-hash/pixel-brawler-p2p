@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PHYSICS, createPlayerState } from "../src/game/Physics";
+import { DEFAULT_PHYSICS, createPlayerState, stepPlayer } from "../src/game/Physics";
 import { CombatSystem } from "../src/game/combat/CombatSystem";
 import { createCustomFighter } from "../src/game/combat/Fighter";
 import { COMBAT_TUNING } from "../src/game/combat/CombatTuning";
@@ -35,7 +35,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(11);
+    expect(fighter.weaponInventory).toHaveLength(12);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -497,13 +497,37 @@ describe("combat system", () => {
       stompTarget.velocityX = 0;
       stompTarget.velocityY = 0;
     }
-    const stomper = { ...playerState, x: 20, y: playerState.y - 30, grounded: false, velocityY: 520 };
+    const stomper = {
+      ...playerState,
+      x: 20,
+      y: playerState.y - 30,
+      grounded: false,
+      velocityY: 520,
+      jumpsUsed: 2,
+      airDiving: true,
+      airDiveTimer: 0.12,
+      airDiveUsed: true,
+    };
     combat.syncLocalPlayer(stomper, "Tester", "#18dff5");
     combat.update(1 / 60, [stomper]);
     expect(stomper.velocityY).toBeLessThan(0);
     expect(combat.getCombatant(dummy.id)?.hitstun).toBeGreaterThan(0);
     expect(stomper.jumpsUsed).toBe(1);
+    expect(stomper.airDiving).toBe(false);
+    expect(stomper.airDiveTimer).toBe(0);
     expect(stomper.airDiveUsed).toBe(false);
+    const postStompJump = stepPlayer(stomper, {
+      left: false,
+      right: false,
+      up: false,
+      down: false,
+      downPressed: false,
+      jumpPressed: true,
+      jumpHeld: true,
+      dashPressed: false,
+    }, 1 / 60);
+    expect(postStompJump.velocityY).toBe(DEFAULT_PHYSICS.doubleJumpVelocity);
+    expect(postStompJump.jumpsUsed).toBe(2);
 
     const diveTarget = combat.getCombatant(dummy.id);
     if (diveTarget) {
@@ -671,7 +695,7 @@ describe("combat system", () => {
     expect(combat.getSnapshot().damageNumbers.at(-1)?.label).toContain("LEG");
   });
 
-  it("uses the knife as an eleventh weapon with close combo hits, bleed, and thrown pickup behavior", () => {
+  it("uses knife as an infinite throwing weapon with cooldown, recoil, hit cleanup, and close combo bleed", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     combat.equip("knife");
@@ -696,18 +720,95 @@ describe("combat system", () => {
 
     target.hp = 100;
     target.invulnerable = 0;
-    target.x = 168;
+    target.x = 190;
     target.y = playerState.y;
     target.velocityX = 0;
     target.velocityY = 0;
     combat.getPlayerInventory().cooldowns.knife = 0;
+    player.velocityX = 0;
+    player.velocityY = 0;
     const thrown = combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 500, heldMs: 0, isNewPress: true });
     expect(thrown.kind).toBe("fired");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("knife");
     expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "knife" && projectile.label === "Knife throw")).toBe(true);
+    expect(combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "knife")?.lifetime).toBeGreaterThan(0.45);
+    expect(player.velocityX).toBeLessThan(-120);
+    expect(combat.getPlayerInventory().cooldowns.knife).toBeGreaterThan(0);
+    const blocked = combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 510, heldMs: 0, isNewPress: true });
+    expect(blocked.kind).toBe("blocked");
     expect(combat.consumeSounds()).toContain("knife-throw");
     combat.update(0.2, [player]);
     expect(target.statuses.some((status) => status.id === "bleed")).toBe(true);
-    expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "knife")).toBe(true);
+    expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "knife")).toBe(false);
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("knife");
+
+    combat.getPlayerInventory().cooldowns.knife = 0;
+    target.invulnerable = 0;
+    target.x = 260;
+    combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 900, heldMs: 0, isNewPress: true });
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("knife");
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "knife")).toHaveLength(1);
+  });
+
+  it("makes airborne knife throws kick much harder for movement tricks", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("knife");
+    const grounded = { ...playerState, velocityX: 0, velocityY: 0 };
+    const airborne = { ...playerState, grounded: false, velocityX: 0, velocityY: 0 };
+
+    combat.useSecondary({ ownerId: "local", player: grounded, aim: { x: 1, y: 0.15 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.getPlayerInventory().cooldowns.knife = 0;
+    combat.useSecondary({ ownerId: "local", player: airborne, aim: { x: 1, y: 0.15 }, now: 300, heldMs: 0, isNewPress: true });
+
+    expect(Math.abs(airborne.velocityX)).toBeGreaterThan(Math.abs(grounded.velocityX) * 1.5);
+    expect(airborne.velocityY).toBeLessThan(grounded.velocityY);
+  });
+
+  it("adds machete as a heavy close-range weapon with slash and overhead chop", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("machete");
+    const player = { ...playerState, id: "peer-a", x: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 64,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const slash = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(slash.kind).toBe("hitbox");
+    combat.update(1 / 60, [player]);
+    expect(combat.getCombatant("peer-b")?.hp).toBeLessThan(100);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["machete-slash", "machete-hit"]));
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "machete", targetId: "peer-b", damage: expect.any(Number) }),
+    ]));
+
+    const target = combat.getCombatant("peer-b")!;
+    target.hp = 100;
+    target.invulnerable = 0;
+    target.x = 70;
+    target.y = playerState.y;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    player.grounded = false;
+    player.velocityY = 0;
+    combat.getPlayerInventory().cooldowns.machete = 0;
+    const chop = combat.useSecondary({ ownerId: "peer-a", player, aim: { x: 1, y: 0.1 }, now: 600, heldMs: 0, isNewPress: true });
+    expect(chop.kind).toBe("hitbox");
+    expect(player.velocityY).toBeGreaterThan(120);
+    combat.update(1 / 60, [player]);
+    expect(target.hp).toBeLessThanOrEqual(75);
+    expect(target.velocityX).toBeGreaterThan(450);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["machete-chop", "machete-hit"]));
   });
 
   it("electrocutes on lightning rod contact and carries a wider sledgehammer shockwave", () => {
