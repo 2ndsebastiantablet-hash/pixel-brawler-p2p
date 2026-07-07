@@ -2,8 +2,8 @@ import { DEFAULT_PHYSICS } from "../Physics";
 import type { WeaponId, WeaponWeightDefinition } from "./Weapon";
 
 export const COMBAT_TUNING = {
-  enemyKnockbackMultiplier: 1.42,
-  selfRecoilMultiplier: 2.05,
+  enemyKnockbackMultiplier: 1.85,
+  selfRecoilMultiplier: 3.15,
   slideTripPopUpForce: -330,
   lowSlideTripPopUpForce: -520,
   headStomp: {
@@ -48,13 +48,13 @@ export const COMBAT_TUNING = {
     machete: { label: "Heavy", moveSpeedMultiplier: 0.88, accelerationMultiplier: 0.82, airAccelerationMultiplier: 0.84, jumpMultiplier: 0.92, slideMultiplier: 0.86 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,
   laser: {
-    chargeDamageScale: 2.6,
-    chargeWidthScale: 10,
-    chargeLengthScale: 380,
-    heatPerShot: 0.26,
-    ventCooling: 0.62,
-    overchargeRadius: 150,
-    overchargeDamage: 24,
+    chargeDamageScale: 3.4,
+    chargeWidthScale: 18,
+    chargeLengthScale: 760,
+    heatPerShot: 0.16,
+    ventCooling: 0.75,
+    overchargeRadius: 175,
+    overchargeDamage: 30,
   },
   minigun: {
     spinUpSeconds: 5,
@@ -64,10 +64,10 @@ export const COMBAT_TUNING = {
   },
   projectiles: {
     floorY: DEFAULT_PHYSICS.groundY,
-    bounceVelocityMultiplier: -0.42,
-    bounceFriction: 0.72,
+    bounceVelocityMultiplier: -0.82,
+    bounceFriction: 0.94,
     cleanupPadding: 520,
-    slingshotBounces: 1,
+    slingshotBounces: 10,
     revolverRicochetBounces: 1,
   },
   sniper: {
