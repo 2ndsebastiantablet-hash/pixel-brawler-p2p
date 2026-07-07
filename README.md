@@ -20,9 +20,9 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
 - Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots. Volume constants are fed from the central combat tuning file.
 - Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, melee hits, slide trips, stomps, dives, and ground-slam interactions.
-- Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, and room-broadcast state/combat packets.
+- Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
-The Worker handles room membership, AFK checks, server cleanup, and compact state/combat packet relay to all other players in the room. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
+The client creates a WebRTC data-channel mesh between peers for gameplay packets. Until a data channel is open, the Worker relays compact state/combat packets only to the peers that still need fallback delivery. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
 
 ## Controls
 
@@ -127,7 +127,15 @@ The Worker runs at `http://localhost:8787` by default. The front end uses that U
 8. Shoot, whip, hammer, slide, stomp, dive, and ground slam the other player. Remote players should take HP damage, knockback, hitstun/status effects, damage numbers, KO, and respawn.
 9. Open more windows to test room capacity. Public and private rooms allow up to 10 players, public rows show `1/10`, `2/10`, and so on, and joining is blocked only once the room reaches `10/10`.
 
-If players do not appear or combat packets do not apply, check both browser consoles and the Worker terminal. The current prototype uses the room WebSocket relay for state and combat sync, so it does not require TURN for the gameplay packet path. On the deployed Pages site, the client falls back to `https://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev` when `VITE_SIGNALING_URL` is not set; local dev still falls back to `http://localhost:8787`.
+You can also run the automated two-browser smoke test after both dev servers are running:
+
+```bash
+npm run test:multiplayer
+```
+
+Press `F3` in a local/dev browser to toggle the compact network debug overlay. The same safe state is exposed as `window.__PIXEL_BRAWLER_DEBUG__` for Playwright and manual console checks. It includes the signaling URL, room code, client/peer IDs, WebSocket status, WebRTC peer status, data-channel status, connected peer count, fallback count, and remote player count/positions.
+
+If players do not appear or combat packets do not apply, check both browser consoles, the F3 overlay, and the Worker terminal. Gameplay packets prefer WebRTC data channels and use the room WebSocket as a targeted fallback while channels connect. On the deployed Pages site, the client falls back to `https://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev` when `VITE_SIGNALING_URL` is not set; local dev still falls back to `http://localhost:8787`.
 
 ## Host Kick And Ban
 
@@ -179,7 +187,7 @@ npm run worker:deploy
 
 Wrangler will create the Durable Object classes declared in the `v1` migration on first deploy. The npm scripts pass `-c wrangler.toml` explicitly so Wrangler does not pick up a parent directory config when this repo sits inside another workspace.
 
-If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This room-cleanup update changes Worker relay/lifecycle behavior but does not require a new Durable Object migration. In non-interactive terminals, Wrangler requires `CLOUDFLARE_API_TOKEN`.
+If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This multiplayer connection update changes Worker relay behavior but does not require a new Durable Object migration. In non-interactive terminals, Wrangler requires `CLOUDFLARE_API_TOKEN`. After deploy, `GET /health` should include `"signalingProtocolVersion":2`; if live `/health` only returns `{"ok":true}`, the Worker is still on an older deployment.
 
 ## Useful scripts
 
@@ -189,6 +197,7 @@ npm run build        # TypeScript check and production build
 npm run preview      # Preview built dist
 npm run check        # TypeScript check and Vitest unit tests
 npm test             # Vitest unit tests only
+npm run test:multiplayer # Playwright two-browser multiplayer smoke test
 npm run worker:dev   # Local Cloudflare Worker/Durable Object signaling server
 npm run worker:deploy
 ```
@@ -197,7 +206,7 @@ npm run worker:deploy
 
 - Combat is a playable ten-weapon vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
-- The room WebSocket relay supports up to 10 players. It is intentionally simple and may need rate limiting, host validation, or server authority before serious competitive play.
+- The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.
 - Public room entries are short-lived development records hydrated from live Durable Objects when listed.
-- WebRTC offer/answer types remain in the protocol for compatibility, but gameplay state and combat currently use the Durable Object room relay.
+- Deployed Pages and Worker versions must match. If Pages serves an older asset or Worker `/health` lacks `signalingProtocolVersion:2`, deploy the stale side before trusting live multiplayer results.

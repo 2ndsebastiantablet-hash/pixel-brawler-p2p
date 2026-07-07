@@ -9,11 +9,13 @@
     "preview": "vite preview --host 0.0.0.0",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && vitest run",
     "test": "vitest run",
+    "test:multiplayer": "playwright test e2e/multiplayer.spec.mjs",
     "worker:dev": "wrangler dev -c wrangler.toml --local --port 8787",
     "worker:deploy": "wrangler deploy -c wrangler.toml"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@playwright/test": "^1.61.1",
     "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^7.0.0",

@@ -16,10 +16,11 @@ export interface CreateRoomResponse {
   serverName: string;
   hostName: string;
   hostClientId: string;
+  signalingProtocolVersion?: number;
 }
 
 export class SignalingClient {
-  constructor(private readonly baseUrl = getDefaultSignalingUrl()) {}
+  constructor(readonly baseUrl = getDefaultSignalingUrl()) {}
 
   async createRoom(options: CreateRoomOptions): Promise<CreateRoomResponse> {
     const response = await fetch(`${this.baseUrl}/rooms`, {

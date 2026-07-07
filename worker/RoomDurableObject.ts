@@ -143,21 +143,14 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
 
       if (["offer", "answer", "ice"].includes(type)) {
         const relayed = JSON.stringify({ ...message, from: sender.peerId });
-        for (const session of this.sessions.values()) {
-          if (session.peerId !== sender.peerId) {
-            safeSend(session.socket, relayed);
-          }
-        }
+        this.relayToPeers(sender, relayed, typeof message.targetPeerId === "string" ? message.targetPeerId : undefined);
         return;
       }
 
       if (type === "data" && isRelayPacket(message.packet)) {
-        const relayed = JSON.stringify({ type: "data", from: sender.peerId, packet: message.packet });
-        for (const session of this.sessions.values()) {
-          if (session.peerId !== sender.peerId) {
-            safeSend(session.socket, relayed);
-          }
-        }
+        const targetPeerId = typeof message.targetPeerId === "string" ? message.targetPeerId : undefined;
+        const relayed = JSON.stringify({ type: "data", from: sender.peerId, targetPeerId, packet: message.packet });
+        this.relayToPeers(sender, relayed, targetPeerId);
         return;
       }
 
@@ -170,7 +163,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
         const targetPeerId = typeof message.targetPeerId === "string" ? message.targetPeerId : "";
         const target = [...this.sessions.values()].find((session) => session.peerId === targetPeerId);
         if (target && !target.isHost) {
-          await this.removeSession(target, { type: "kick", reason: "Kicked by host" });
+          await this.removeSession(target, { type: "kick", reason: "You were kicked from the server." });
         }
         return;
       }
@@ -189,7 +182,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       }
 
       if (type === "server-closed") {
-        await this.closeRoom("Server closed by host");
+        await this.closeRoom(typeof message.reason === "string" ? message.reason : "Host left. Server closed.");
       }
     } catch {
       safeSend(sender.socket, JSON.stringify({ type: "error", message: "Malformed signaling message" }));
@@ -217,7 +210,7 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
       return;
     }
     if (session.isHost && this.meta && !this.meta.closed) {
-      await this.closeRoom("Host left");
+      await this.closeRoom("Host left. Server closed.");
       return;
     }
 
@@ -273,6 +266,18 @@ export class RoomDurableObject extends DurableObject<DurableObjectEnv> {
     });
     for (const session of this.sessions.values()) {
       safeSend(session.socket, lobbyMessage);
+    }
+  }
+
+  private relayToPeers(sender: PeerSession, message: string, targetPeerId?: string): void {
+    for (const session of this.sessions.values()) {
+      if (session.peerId === sender.peerId) {
+        continue;
+      }
+      if (targetPeerId && session.peerId !== targetPeerId) {
+        continue;
+      }
+      safeSend(session.socket, message);
     }
   }
 

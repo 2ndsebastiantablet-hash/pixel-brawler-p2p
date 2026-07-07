@@ -71,10 +71,10 @@ export interface CombatEventPacket {
 }
 
 export type SignalMessage =
-  | { type: "offer"; sdp: RTCSessionDescriptionInit; from?: string }
-  | { type: "answer"; sdp: RTCSessionDescriptionInit; from?: string }
-  | { type: "ice"; candidate: RTCIceCandidateInit; from?: string }
-  | { type: "data"; from?: string; packet: PlayerStatePacket | CombatEventPacket }
+  | { type: "offer"; sdp: RTCSessionDescriptionInit; from?: string; targetPeerId?: string }
+  | { type: "answer"; sdp: RTCSessionDescriptionInit; from?: string; targetPeerId?: string }
+  | { type: "ice"; candidate: RTCIceCandidateInit; from?: string; targetPeerId?: string }
+  | { type: "data"; from?: string; targetPeerId?: string; packet: PlayerStatePacket | CombatEventPacket }
   | { type: "lobby"; roomCode: string; visibility: "private" | "public"; serverName: string; hostName: string; hostClientId: string; peers: PeerInfo[] }
   | { type: "peer-left"; peerId: string }
   | { type: "kick"; targetPeerId?: string; targetClientId?: string; reason?: string }

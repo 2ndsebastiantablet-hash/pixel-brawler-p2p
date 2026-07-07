@@ -42,6 +42,30 @@ interface GameOptions {
   onCombatEvent: (packet: NetCombatEventPacket) => void;
 }
 
+export interface GameDebugSnapshot {
+  localPlayer: {
+    id: string;
+    clientId: string;
+    name: string;
+    color: string;
+    x: number;
+    y: number;
+    hp?: number;
+  };
+  remotePlayers: {
+    count: number;
+    players: Array<{
+      id: string;
+      clientId: string;
+      name: string;
+      color: string;
+      x: number;
+      y: number;
+      hp?: number;
+    }>;
+  };
+}
+
 export class Game {
   readonly canvas: HTMLCanvasElement;
   private readonly combatHud: HTMLElement;
@@ -102,6 +126,38 @@ export class Game {
 
   setShowNames(show: boolean): void {
     this.showNames = show;
+  }
+
+  getDebugSnapshot(): GameDebugSnapshot {
+    const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+    const remotePlayers = [...this.remotes.values()].map((remote) => {
+      const combatant = this.combat.getCombatant(remote.player.state.id);
+      return {
+        id: remote.player.state.id,
+        clientId: remote.player.clientId,
+        name: remote.player.name,
+        color: remote.player.color,
+        x: remote.player.state.x,
+        y: remote.player.state.y,
+        hp: combatant?.hp,
+      };
+    });
+
+    return {
+      localPlayer: {
+        id: this.localPlayer.state.id,
+        clientId: this.localPlayer.clientId,
+        name: this.localPlayer.name,
+        color: this.localPlayer.color,
+        x: this.localPlayer.state.x,
+        y: this.localPlayer.state.y,
+        hp: localCombatant?.hp,
+      },
+      remotePlayers: {
+        count: remotePlayers.length,
+        players: remotePlayers,
+      },
+    };
   }
 
   stop(): void {

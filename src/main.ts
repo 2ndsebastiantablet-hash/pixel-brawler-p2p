@@ -15,6 +15,9 @@ const signaling = new SignalingClient();
 let profile = loadPlayerProfile();
 let rtc: WebRTCClient | null = null;
 let currentSession: SessionView | null = null;
+let currentStatus: ConnectionStatus | string = "Offline";
+let debugOverlayVisible = false;
+const debugOverlay = createDebugOverlay();
 
 const game = new Game(root, {
   onLocalState: (packet) => {
@@ -57,8 +60,17 @@ const ui = new LobbyUI(root, profile, {
 });
 
 void refreshPublicRooms();
+installDebugHook();
 
 window.addEventListener("keydown", (event) => {
+  if (event.code === "F3") {
+    event.preventDefault();
+    debugOverlayVisible = !debugOverlayVisible;
+    debugOverlay.hidden = !debugOverlayVisible;
+    renderDebugOverlay();
+    return;
+  }
+
   if (!currentSession) {
     return;
   }
@@ -90,7 +102,7 @@ function startOffline(nextProfile: PlayerProfile): void {
     hostName: profile.name,
     peers: [localPeer("local", true)],
   };
-  ui.setStatus("Offline");
+  setStatus("Offline");
   ui.showGame(currentSession);
 }
 
@@ -103,7 +115,7 @@ async function hostRoom(
     profile = nextProfile;
     resetRtc();
     game.setShowNames(profile.showNames);
-    ui.setStatus("Creating room");
+    setStatus("Creating room");
     const room = await signaling.createRoom({
       visibility,
       serverName,
@@ -142,7 +154,7 @@ async function joinRoom(nextProfile: PlayerProfile, code: string): Promise<void>
     profile = nextProfile;
     resetRtc();
     game.setShowNames(profile.showNames);
-    ui.setStatus("Connecting");
+    setStatus("Connecting");
     rtc = createRtcClient(profile);
     game.startNetwork(rtc.peerId, profile, "guest");
     currentSession = {
@@ -174,7 +186,7 @@ async function refreshPublicRooms(): Promise<void> {
 
 function createRtcClient(nextProfile: PlayerProfile): WebRTCClient {
   return new WebRTCClient(signaling, nextProfile, {
-    onStatus: (status: ConnectionStatus) => ui.setStatus(status),
+    onStatus: (status: ConnectionStatus) => setStatus(status),
     onRemoteState: (state) => game.setRemoteState(state),
     onCombatEvent: (event) => game.applyCombatEvent(event),
     onPeerLeft: (peerId) => {
@@ -191,7 +203,7 @@ function createRtcClient(nextProfile: PlayerProfile): WebRTCClient {
     onKicked: (reason) => returnToMain(reason, false),
     onBanned: (reason) => returnToMain(reason, false),
     onServerClosed: (reason) => returnToMain(reason, false),
-    onAfkWarning: (message) => ui.setStatus(message),
+    onAfkWarning: (message) => setStatus(message),
   });
 }
 
@@ -260,12 +272,71 @@ function returnToMain(message: string, closeRtc = true): void {
   game.stop();
   currentSession = null;
   ui.showMain(message);
+  currentStatus = message;
+  renderDebugOverlay();
 }
 
 function resetRtc(): void {
   const active = rtc;
   rtc = null;
   active?.close();
+}
+
+function setStatus(status: ConnectionStatus | string): void {
+  currentStatus = status;
+  ui.setStatus(status);
+  renderDebugOverlay();
+}
+
+function installDebugHook(): void {
+  Object.defineProperty(window, "__PIXEL_BRAWLER_DEBUG__", {
+    configurable: true,
+    get: buildDebugSnapshot,
+  });
+  window.setInterval(renderDebugOverlay, 250);
+}
+
+function buildDebugSnapshot(): PixelBrawlerDebugSnapshot {
+  const gameDebug = game.getDebugSnapshot();
+  const netDebug = rtc?.getDebugSnapshot();
+  return {
+    signalingUrl: signaling.baseUrl,
+    roomCode: currentSession?.roomCode,
+    clientId: profile.clientId,
+    peerId: rtc?.peerId ?? currentSession?.localPeerId,
+    connectedPeers: currentSession?.peers.length ?? 0,
+    connectionStatus: currentStatus,
+    webSocketStatus: netDebug?.webSocketStatus ?? "closed",
+    webRtcPeerStatus: netDebug?.peerStatus ?? {},
+    dataChannels: netDebug?.dataChannels ?? {},
+    relayFallbackPeerCount: netDebug?.relayFallbackPeerCount ?? 0,
+    remotePlayers: gameDebug.remotePlayers,
+    localPlayer: gameDebug.localPlayer,
+  };
+}
+
+function createDebugOverlay(): HTMLPreElement {
+  const overlay = document.createElement("pre");
+  overlay.className = "debug-overlay";
+  overlay.hidden = true;
+  document.body.append(overlay);
+  return overlay;
+}
+
+function renderDebugOverlay(): void {
+  if (!debugOverlayVisible) {
+    return;
+  }
+  const debug = buildDebugSnapshot();
+  debugOverlay.textContent = [
+    `signaling ${debug.signalingUrl}`,
+    `room ${debug.roomCode ?? "-"} client ${debug.clientId}`,
+    `peer ${debug.peerId ?? "-"} connected ${debug.connectedPeers}`,
+    `ws ${debug.webSocketStatus} status ${debug.connectionStatus}`,
+    `rtc ${JSON.stringify(debug.webRtcPeerStatus)}`,
+    `dc ${JSON.stringify(debug.dataChannels)} fallback ${debug.relayFallbackPeerCount}`,
+    `remote players ${debug.remotePlayers.count}`,
+  ].join("\n");
 }
 
 function localPeer(peerId: string, isHost: boolean): PeerInfo {

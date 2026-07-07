@@ -15,6 +15,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 };
+const signalingProtocolVersion = 2;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -25,7 +26,7 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true });
+      return json({ ok: true, signalingProtocolVersion });
     }
 
     if (request.method === "POST" && url.pathname === "/rooms") {
@@ -105,7 +106,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   }
 
   console.info(JSON.stringify({ event: "room_created", roomCode, visibility }));
-  return json({ roomCode, visibility, serverName, hostName, hostClientId });
+  return json({ roomCode, visibility, serverName, hostName, hostClientId, signalingProtocolVersion });
 }
 
 function directory(env: Env): DurableObjectStub<RoomDirectoryDurableObject> {
