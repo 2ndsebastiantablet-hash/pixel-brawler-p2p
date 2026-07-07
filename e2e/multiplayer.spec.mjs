@@ -41,6 +41,79 @@ test.describe("multiplayer visibility", () => {
     }
   });
 
+  test("private room connects three real browser pages in one mesh", async ({ browser }) => {
+    const hostContext = await browser.newContext();
+    const guestOneContext = await browser.newContext();
+    const guestTwoContext = await browser.newContext();
+    const host = await hostContext.newPage();
+    const guestOne = await guestOneContext.newPage();
+    const guestTwo = await guestTwoContext.newPage();
+
+    try {
+      await startPrivateHost(host, "Host");
+      const roomCodeHandle = await waitForDebugValue(host, (debug) => debug.roomCode);
+      const roomCode = await roomCodeHandle.jsonValue();
+
+      await joinPrivateRoom(guestOne, "GuestOne", roomCode);
+      await waitForRoomPlayerCount([host, guestOne], 2);
+      await joinPrivateRoom(guestTwo, "GuestTwo", roomCode);
+
+      await waitForRoomPlayerCount([host, guestOne, guestTwo], 3);
+      await waitForRemoteCount([host, guestOne, guestTwo], 2);
+      await expect.poll(() => debugValue(guestTwo, (debug) => debug.connectionStatus), { timeout: 15_000 }).not.toBe("Disconnected / failed");
+
+      const guestOneInitialHostX = await remoteXForPeerName(guestOne, "Host");
+      const guestTwoInitialHostX = await remoteXForPeerName(guestTwo, "Host");
+      await host.keyboard.down("KeyD");
+      await host.waitForTimeout(700);
+      await host.keyboard.up("KeyD");
+
+      await expect.poll(async () => Math.abs((await remoteXForPeerName(guestOne, "Host")) - guestOneInitialHostX), { timeout: 10_000 }).toBeGreaterThan(4);
+      await expect.poll(async () => Math.abs((await remoteXForPeerName(guestTwo, "Host")) - guestTwoInitialHostX), { timeout: 10_000 }).toBeGreaterThan(4);
+    } finally {
+      await hostContext.close();
+      await guestOneContext.close();
+      await guestTwoContext.close();
+    }
+  });
+
+  test("public room supports five pages and reports 5/10 in the server list", async ({ browser }) => {
+    test.setTimeout(90_000);
+    const contexts = [];
+    const pages = [];
+    const serverName = `Five ${Date.now()}`;
+
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const context = await browser.newContext();
+        contexts.push(context);
+        pages.push(await context.newPage());
+      }
+
+      await startPublicHost(pages[0], "Host", serverName);
+      const roomCodeHandle = await waitForDebugValue(pages[0], (debug) => debug.roomCode);
+      const roomCode = await roomCodeHandle.jsonValue();
+      for (let index = 1; index < pages.length; index += 1) {
+        await joinPrivateRoom(pages[index], `Guest${index}`, roomCode);
+        await waitForRoomPlayerCount(pages.slice(0, index + 1), index + 1);
+      }
+
+      await waitForRemoteCount(pages, 4);
+
+      const listContext = await browser.newContext();
+      contexts.push(listContext);
+      const listPage = await listContext.newPage();
+      await listPage.goto(appUrl, { waitUntil: "domcontentloaded" });
+      await dismissControls(listPage);
+      await listPage.getByRole("button", { name: "Play" }).click();
+      await listPage.locator("[data-join]").click();
+      const row = listPage.locator(".public-room").filter({ hasText: serverName }).first();
+      await expect(row).toContainText("5/10 players", { timeout: 15_000 });
+    } finally {
+      await Promise.all(contexts.map((context) => context.close()));
+    }
+  });
+
   test("public room appears and creates remote players", async ({ browser }) => {
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();
@@ -182,4 +255,25 @@ async function waitForRemoteX(page) {
     const firstRemote = window.__PIXEL_BRAWLER_DEBUG__?.remotePlayers.players[0];
     return firstRemote?.x;
   });
+}
+
+async function waitForRemoteCount(pages, expectedCount) {
+  await Promise.all(pages.map((page) => expect.poll(
+    () => debugValue(page, (debug) => debug.remotePlayers.count),
+    { timeout: 20_000 },
+  ).toBeGreaterThanOrEqual(expectedCount)));
+}
+
+async function waitForRoomPlayerCount(pages, expectedCount) {
+  await Promise.all(pages.map((page) => expect.poll(
+    () => debugValue(page, (debug) => debug.roomPlayerCount),
+    { timeout: 20_000 },
+  ).toBeGreaterThanOrEqual(expectedCount)));
+}
+
+async function remoteXForPeerName(page, name) {
+  return page.evaluate((peerName) => {
+    const player = window.__PIXEL_BRAWLER_DEBUG__?.remotePlayers.players.find((remote) => remote.name === peerName);
+    return player?.x;
+  }, name);
 }

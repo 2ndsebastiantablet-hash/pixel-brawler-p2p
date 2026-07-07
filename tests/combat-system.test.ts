@@ -765,6 +765,46 @@ describe("combat system", () => {
     expect(airborne.velocityY).toBeLessThan(grounded.velocityY);
   });
 
+  it("damages overlapping targets with equipped knife contact on a short per-target cooldown", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("knife");
+    const player = { ...playerState, id: "peer-a", x: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 24,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.update(1 / 60, [player]);
+    const firstHp = combat.getCombatant("peer-b")!.hp;
+    expect(firstHp).toBeGreaterThanOrEqual(95);
+    expect(firstHp).toBeLessThan(100);
+    expect(combat.consumeSounds()).toContain("knife-contact");
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "knife", targetId: "peer-b", label: "Knife Contact" }),
+    ]));
+
+    combat.update(0.1, [player]);
+    expect(combat.getCombatant("peer-b")!.hp).toBe(firstHp);
+
+    const target = combat.getCombatant("peer-b")!;
+    target.x = 24;
+    target.y = playerState.y;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    target.invulnerable = 0;
+    combat.update(0.42, [player]);
+    expect(target.hp).toBeLessThan(firstHp);
+  });
+
   it("adds machete as a heavy close-range weapon with slash and overhead chop", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -811,20 +851,83 @@ describe("combat system", () => {
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["machete-chop", "machete-hit"]));
   });
 
-  it("electrocutes on lightning rod contact and carries a wider sledgehammer shockwave", () => {
+  it("grows machete length on every hit and grants permanent power plus extra growth on KO", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("machete");
+    const player = { ...playerState, id: "peer-a", x: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 82,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+      hp: 100,
+    });
+
+    expect(combat.getMacheteState("peer-a")).toMatchObject({ rangeBonus: 0, damageBonus: 0 });
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(1 / 60, [player]);
+    const afterHit = combat.getMacheteState("peer-a");
+    expect(afterHit.rangeBonus).toBeGreaterThanOrEqual(8);
+    expect(afterHit.damageBonus).toBe(0);
+    expect(afterHit.redness).toBeGreaterThan(0);
+
+    const target = combat.getCombatant("peer-b")!;
+    target.hp = 6;
+    target.invulnerable = 0;
+    target.x = 118;
+    target.y = playerState.y;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    combat.getPlayerInventory().cooldowns.machete = 0;
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 500, heldMs: 0, isNewPress: true });
+    combat.update(1 / 60, [player]);
+
+    const afterKo = combat.getMacheteState("peer-a");
+    expect(target.respawnTimer).toBeGreaterThan(0);
+    expect(afterKo.rangeBonus).toBeGreaterThanOrEqual(afterHit.rangeBonus + 40);
+    expect(afterKo.damageBonus).toBeGreaterThanOrEqual(2);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "Growth KO")).toBe(true);
+  });
+
+  it("summons a giant lightning primary strike that self-damages and grants a 60 second attack buff", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     const player = { ...playerState };
     combat.syncLocalPlayer(player, "Tester", "#18dff5");
 
     combat.equip("lightning-rod");
-    const rodDummy = combat.spawnTrainingDummy({ x: player.x + 58, y: player.y });
-    combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
-    combat.update(1 / 60, [player]);
-    expect(combat.getCombatant(rodDummy.id)?.statuses.some((status) => status.id === "shock")).toBe(true);
-    expect(combat.getCombatant(rodDummy.id)?.hitstun).toBeGreaterThan(0.2);
-    combat.update(0.1, [player]);
-    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "aura" && effect.label === "Shock Aura")).toBe(true);
+    const rodDummy = combat.spawnTrainingDummy({ x: player.x + 130, y: player.y });
+    const charged = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    const local = combat.getCombatant("local")!;
+    expect(charged.kind).toBe("utility");
+    expect(local.hp).toBeLessThanOrEqual(75);
+    expect(local.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "empowered", duration: expect.closeTo(60, 0) })]));
+    expect(combat.getLightningState("local").empoweredTimer).toBeGreaterThanOrEqual(59);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "lightning" && effect.ty < effect.y - 300)).toBe(true);
+    expect(combat.consumeSounds()).toContain("lightning-strike");
+
+    const previousHp = combat.getCombatant(rodDummy.id)!.hp;
+    combat.applyDamage({
+      sourceId: "local",
+      targetId: rodDummy.id,
+      damage: 10,
+      knockback: { x: 100, y: 0 },
+      stun: 0.1,
+      label: "Buffed Test",
+      weaponId: "lightning-rod",
+    });
+    expect(combat.getCombatant(rodDummy.id)!.hp).toBeLessThanOrEqual(previousHp - 12);
+
+    combat.update(60.1, [player]);
+    expect(combat.getLightningState("local").empoweredTimer).toBe(0);
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "empowered")).toBe(false);
 
     const target = combat.getCombatant(rodDummy.id);
     if (target) {

@@ -116,6 +116,43 @@ describe("WebRTCClient mesh connections", () => {
     });
   });
 
+  it("keeps a multi-peer room alive when one direct data channel disconnects and relay fallback remains available", async () => {
+    const handlers = noopHandlers();
+    const client = new WebRTCClient(fakeSignaling(socket), localProfile, handlers);
+    await client.host("ROOM1");
+
+    socket.receive({
+      type: "lobby",
+      roomCode: "ROOM1",
+      visibility: "private",
+      serverName: "Private Server",
+      hostName: localProfile.name,
+      hostClientId: localProfile.clientId,
+      peers: [
+        { peerId: client.peerId, clientId: localProfile.clientId, name: localProfile.name, color: localProfile.color, isHost: true },
+        { peerId: "zz-remote-peer", clientId: remoteProfile.clientId, name: remoteProfile.name, color: remoteProfile.color, isHost: false },
+        { peerId: "zy-third-peer", clientId: "client-third", name: "Third", color: "#7cff6b", isHost: false },
+      ],
+    });
+    await flushPromises();
+
+    expect(FakePeerConnection.instances).toHaveLength(2);
+    FakePeerConnection.instances[0].connectionState = "connected";
+    FakePeerConnection.instances[0].createdDataChannel?.open();
+    FakePeerConnection.instances[1].connectionState = "disconnected";
+    FakePeerConnection.instances[1].onconnectionstatechange?.();
+
+    expect(handlers.onStatus).not.toHaveBeenCalledWith("Disconnected / failed");
+    const packet = playerPacket(client.peerId);
+    client.sendPlayerState(packet);
+
+    expect(socket.sentMessages).toContainEqual({
+      type: "data",
+      targetPeerId: "zy-third-peer",
+      packet,
+    });
+  });
+
   it("normalizes old Worker lobby peer strings without making guests hosts", async () => {
     const handlers = noopHandlers();
     const client = new WebRTCClient(fakeSignaling(socket), localProfile, handlers);

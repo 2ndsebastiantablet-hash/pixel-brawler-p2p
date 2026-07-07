@@ -110,6 +110,15 @@ const maxHp = 100;
 const respawnDelay = 2;
 const teleportDelay = 3;
 const whipComboWindow = 0.55;
+const knifeContactDamage = 4;
+const knifeContactCooldown = 0.42;
+const macheteHitGrowth = 12;
+const macheteKoGrowth = 60;
+const macheteKoDamageBonus = 3;
+const lightningBuffDuration = 60;
+const lightningSelfDamage = 28;
+const empoweredDamageScale = 1.22;
+const empoweredKnockbackScale = 1.18;
 
 interface PendingTeleport {
   ownerId: string;
@@ -126,6 +135,11 @@ interface LightningState {
   shockCooldowns: Map<string, number>;
 }
 
+interface MacheteGrowthState {
+  rangeBonus: number;
+  damageBonus: number;
+}
+
 export interface WeaponRuntimeState {
   charge: number;
   heat: number;
@@ -134,6 +148,13 @@ export interface WeaponRuntimeState {
   chamber: number;
   charging: boolean;
   overheated: boolean;
+  rangeBonus: number;
+  damageBonus: number;
+  redness: number;
+}
+
+export interface MacheteRuntimeState extends MacheteGrowthState {
+  redness: number;
 }
 
 export class CombatSystem {
@@ -149,6 +170,7 @@ export class CombatSystem {
   private readonly sounds: SoundId[] = [];
   private readonly pendingTeleports = new Map<string, PendingTeleport>();
   private readonly lightning = new Map<string, LightningState>();
+  private readonly machetes = new Map<string, MacheteGrowthState>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private nextId = 0;
 
@@ -167,6 +189,7 @@ export class CombatSystem {
     this.sounds.length = 0;
     this.pendingTeleports.clear();
     this.lightning.clear();
+    this.machetes.clear();
     this.bodyContactCooldowns.clear();
   }
 
@@ -286,6 +309,9 @@ export class CombatSystem {
   }
 
   usePrimary(context: WeaponUseContext): WeaponUseResult {
+    if (this.inventory.equippedWeapon === "lightning-rod") {
+      return this.callLightningSkyStrike(context);
+    }
     return this.useAttack(context, "primary");
   }
 
@@ -394,9 +420,14 @@ export class CombatSystem {
     const effectiveStun = request.stun + locationModifier.stunBonus;
     const finalStatus = statusForHit(request.weaponId, hitLocation, request.status);
     const finalLabel = hitLocation ? `${labelForHitLocation(hitLocation)} ${request.label}` : request.label;
+    const source = this.combatants.get(request.sourceId);
     const steadyResist = target.statuses.some((status) => status.id === "steady") && request.sourceId !== target.id;
-    const damageScale = steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1;
-    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1) * locationModifier.knockbackScale;
+    const empoweredAttack = !request.skipSourceScaling
+      && request.sourceId !== target.id
+      && request.sourceId !== "status"
+      && Boolean(source?.statuses.some((status) => status.id === "empowered"));
+    const damageScale = (steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1) * (empoweredAttack ? empoweredDamageScale : 1);
+    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1) * locationModifier.knockbackScale * (empoweredAttack ? empoweredKnockbackScale : 1);
     const verticalLift = request.damage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
     const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
@@ -483,10 +514,10 @@ export class CombatSystem {
     this.updateTeleports(dt, players);
     this.updateHitboxes(dt);
     this.updateLightning(dt, players);
+    this.updateContactCooldowns(dt);
     this.updateBodyContact(dt, players);
     this.updateDroppedWeapons(dt);
     this.updateTimedVisuals(dt);
-    this.updateContactCooldowns(dt);
   }
 
   consumeEvents(): CombatEventPacket[] {
@@ -516,9 +547,18 @@ export class CombatSystem {
     };
   }
 
-  getWeaponRuntimeState(id: WeaponId = this.inventory.equippedWeapon): WeaponRuntimeState {
+  getMacheteState(ownerId: string): MacheteRuntimeState {
+    const state = this.machetes.get(ownerId) ?? { rangeBonus: 0, damageBonus: 0 };
+    return {
+      ...state,
+      redness: macheteRedness(state),
+    };
+  }
+
+  getWeaponRuntimeState(id: WeaponId = this.inventory.equippedWeapon, ownerId = "local"): WeaponRuntimeState {
     const charge = this.inventory.charge[id];
     const heat = charge?.heat ?? 0;
+    const machete = id === "machete" ? this.getMacheteState(ownerId) : { rangeBonus: 0, damageBonus: 0, redness: 0 };
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -527,6 +567,9 @@ export class CombatSystem {
       chamber: this.inventory.cooldowns[id] ?? 0,
       charging: charge?.charging ?? false,
       overheated: heat >= (id === "laser-blaster" ? COMBAT_TUNING.laser.overheatThreshold : 0.95),
+      rangeBonus: machete.rangeBonus,
+      damageBonus: machete.damageBonus,
+      redness: machete.redness,
     };
   }
 
@@ -584,14 +627,33 @@ export class CombatSystem {
           weaponId: event.weaponId,
           hitLocation: event.hitLocation,
           skipHitLocationScaling: true,
+          skipSourceScaling: true,
           emitEvent: false,
         });
         if (!hit.applied) {
           target.invulnerable = previousInvulnerable;
+        } else if (event.weaponId === "machete") {
+          this.growMachete(event.ownerId, hit.remainingHp <= 0);
         }
       }
     }
-    this.addEffect(event.action === "reload" ? "reload" : weapon.kind === "beam" ? "laser" : weapon.kind === "melee" ? "whip" : "tracer", event.x, event.y, event.x + event.ax * weapon.primary.range, event.y + event.ay * weapon.primary.range, colorForWeapon(event.weaponId), event.label);
+    this.addEffect(
+      event.action === "reload"
+        ? "reload"
+        : event.weaponId === "lightning-rod" && event.label === "Sky Strike"
+          ? "lightning"
+          : weapon.kind === "beam"
+            ? "laser"
+            : weapon.kind === "melee"
+              ? "whip"
+              : "tracer",
+      event.x,
+      event.y,
+      event.x + event.ax * weapon.primary.range,
+      event.weaponId === "lightning-rod" && event.label === "Sky Strike" ? event.y - 560 : event.y + event.ay * weapon.primary.range,
+      event.weaponId === "machete" ? macheteColor(this.getMacheteState(event.ownerId).redness) : colorForWeapon(event.weaponId),
+      event.label,
+    );
   }
 
   getSnapshot(): CombatSnapshot {
@@ -817,6 +879,7 @@ export class CombatSystem {
     if (weaponId === "machete") {
       const dashCleave = context.player.sliding || context.player.lowSliding || context.player.action === "slide" || context.player.action === "lowSlide";
       const airSlash = !context.player.grounded;
+      const growth = this.getMacheteState(context.ownerId);
       if (airSlash && slot === "primary") {
         context.player.velocityY = Math.min(context.player.velocityY, 90);
       }
@@ -825,9 +888,10 @@ export class CombatSystem {
       }
       return {
         ...profile,
-        range: profile.range + (dashCleave ? 24 : 0),
-        knockback: profile.knockback * (slot === "secondary" ? 1.12 : dashCleave ? 1.22 : 1),
-        stun: profile.stun + (slot === "secondary" ? 0.05 : 0),
+        damage: profile.damage + growth.damageBonus,
+        range: profile.range + growth.rangeBonus + (dashCleave ? 24 : 0),
+        knockback: profile.knockback * (slot === "secondary" ? 1.12 : dashCleave ? 1.22 : 1) * (1 + growth.damageBonus * 0.025),
+        stun: profile.stun + (slot === "secondary" ? 0.05 : 0) + Math.min(0.18, growth.damageBonus * 0.01),
       };
     }
 
@@ -918,6 +982,54 @@ export class CombatSystem {
     return { kind: "utility", weaponId, label: "Cancel teleport" };
   }
 
+  private callLightningSkyStrike(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "lightning-rod";
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Lightning cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId, label: "No target" };
+    }
+
+    const state = this.lightning.get(context.ownerId) ?? {
+      chargeTimer: 0,
+      empoweredTimer: 0,
+      strain: 0,
+      pulseTimer: 0,
+      shockCooldowns: new Map<string, number>(),
+    };
+    state.chargeTimer = 0;
+    state.empoweredTimer = lightningBuffDuration;
+    state.strain = Math.min(1.8, state.strain + 0.42);
+    state.pulseTimer = 0;
+    this.lightning.set(context.ownerId, state);
+    this.inventory.cooldowns[weaponId] = 1.2;
+
+    const center = this.muzzle(context.player);
+    const previousInvulnerable = owner.invulnerable;
+    owner.invulnerable = 0;
+    this.applyDamage({
+      sourceId: context.ownerId,
+      targetId: context.ownerId,
+      damage: lightningSelfDamage,
+      knockback: { x: 0, y: -210 },
+      stun: 0.16,
+      label: "SKY CHARGE",
+      status: "empowered",
+      weaponId,
+    });
+    owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
+    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: lightningBuffDuration, stacks: 1 });
+
+    this.addEffect("lightning", center.x, center.y + 12, center.x, center.y - 560, "#fff4a8", "Sky Strike");
+    this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 70, "#ffd84d", "Energized");
+    this.queueSound("lightning-strike");
+    this.queueSound("lightning-pulse");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, { x: 0, y: -1 }, "Sky Strike", context.now));
+    return { kind: "utility", weaponId, label: "Sky Strike" };
+  }
+
   private startLightningCall(context: WeaponUseContext): WeaponUseResult {
     const weaponId = "lightning-rod";
     const existing = this.lightning.get(context.ownerId) ?? {
@@ -953,19 +1065,20 @@ export class CombatSystem {
     this.applyDamage({
       sourceId: ownerId,
       targetId: ownerId,
-      damage: 5 + Math.round(state.strain * 3),
+      damage: lightningSelfDamage,
       knockback: { x: 0, y: -140 },
       stun: state.strain > 0.95 ? 0.35 : 0.05,
       label: "SELF STRIKE",
       status: "empowered",
+      weaponId: "lightning-rod",
     });
     owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
-    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: 5.8, stacks: 1 });
+    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: lightningBuffDuration, stacks: 1 });
     if (state.strain > 1) {
       owner.statuses = upsertStatusEffect(owner.statuses, { id: "daze", label: "Strained", duration: 0.55, stacks: 1 });
       owner.hitstun = Math.max(owner.hitstun, 0.55);
     }
-    state.empoweredTimer = 5.8;
+    state.empoweredTimer = lightningBuffDuration;
     state.pulseTimer = 0;
     this.addEffect("lightning", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 170, "#ffd84d", "Strike");
     this.queueSound("lightning-strike");
@@ -1148,6 +1261,9 @@ export class CombatSystem {
       status?: StatusEffectId;
       sound: SoundId;
       effect: CombatEffect["kind"];
+      weaponId?: WeaponId;
+      color?: string;
+      cooldown?: number;
     },
   ): boolean {
     const key = `${sourceId}:${target.id}:${kind}`;
@@ -1164,13 +1280,14 @@ export class CombatSystem {
       stun: request.stun,
       label: request.label,
       status: request.status,
+      weaponId: request.weaponId,
     });
     if (!hit.applied) {
       target.invulnerable = previousInvulnerable;
       return false;
     }
-    this.bodyContactCooldowns.set(key, kind === "stomp" ? COMBAT_TUNING.headStomp.cooldown : kind.includes("slam") ? 0.45 : 0.32);
-    this.addEffect(request.effect, target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y, request.effect === "trip" ? "#7cff6b" : "#ffd84d", request.label);
+    this.bodyContactCooldowns.set(key, request.cooldown ?? (kind === "stomp" ? COMBAT_TUNING.headStomp.cooldown : kind.includes("slam") ? 0.45 : 0.32));
+    this.addEffect(request.effect, target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y, request.color ?? (request.effect === "trip" ? "#7cff6b" : "#ffd84d"), request.label);
     this.queueSound(request.sound);
     return true;
   }
@@ -1264,6 +1381,8 @@ export class CombatSystem {
     const isMachete = weaponId === "machete";
     const isMacheteChop = isMachete && label === "Machete Chop";
     const isHammer = weaponId === "sledgehammer";
+    const macheteState = isMachete ? this.getMacheteState(context.ownerId) : undefined;
+    const attackColor = macheteState ? macheteColor(macheteState.redness) : colorForWeapon(weaponId);
     const knifeStep = isKnife ? this.registerKnifeSwing() : 0;
     const lowTrip = isWhip && (context.player.ducking || context.player.lowSliding || context.player.action === "duck" || context.player.action === "lowSlide");
     const width = isKnife ? profile.range + (knifeStep === 3 ? 10 : 0) : profile.range;
@@ -1294,16 +1413,16 @@ export class CombatSystem {
       age: 0,
       duration: Math.max(0.08, profile.cooldown * 0.46),
       label: hitLabel,
-      color: colorForWeapon(weaponId),
+      color: attackColor,
       status: lowTrip ? "tripped" : profile.status,
       sweetSpot: isWhip || isMachete ? "tip" : undefined,
       lowTrip,
       heavy: isHammer || isMacheteChop,
       hits: [],
     });
-    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, colorForWeapon(weaponId), hitLabel);
+    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, attackColor, hitLabel);
     if (isMacheteChop) {
-      this.addEffect("spark", x + width * 0.5, y + height, x + width * 0.5, y + height + 18, colorForWeapon(weaponId), "Chop");
+      this.addEffect("spark", x + width * 0.5, y + height, x + width * 0.5, y + height + 18, attackColor, "Chop");
     }
   }
 
@@ -1696,8 +1815,9 @@ export class CombatSystem {
               this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 18, hitY, colorForWeapon(hitbox.weaponId), backstab ? "Backstab" : "Cut");
             }
             if (macheteHit) {
+              const growth = this.growMachete(hitbox.ownerId, hit.remainingHp <= 0);
               this.queueSound("machete-hit");
-              this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 26, hitY, colorForWeapon(hitbox.weaponId), macheteTipHit ? "Tip" : "Cleave");
+              this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 26, hitY, macheteColor(growth.redness), hit.remainingHp <= 0 ? "Growth KO" : macheteTipHit ? "Tip" : "Cleave");
             }
             if (rodHit) {
               this.queueSound("lightning-shock");
@@ -1782,10 +1902,15 @@ export class CombatSystem {
 
       const owner = this.combatants.get(ownerId);
       const player = players.find((item) => item.id === ownerId);
-      if (!owner || !owner.statuses.some((status) => status.id === "empowered")) {
+      if (state.empoweredTimer > 0) {
+        state.empoweredTimer = Math.max(0, state.empoweredTimer - dt);
+      }
+      if (state.empoweredTimer === 0 && owner?.statuses.some((status) => status.id === "empowered")) {
+        this.clearStatus(ownerId, "empowered");
+      }
+      if (!owner || state.empoweredTimer <= 0 || !owner.statuses.some((status) => status.id === "empowered")) {
         continue;
       }
-      state.empoweredTimer = Math.max(0, state.empoweredTimer - dt);
       if (player) {
         player.velocityX *= player.grounded ? 1.012 : 1.006;
       }
@@ -1838,6 +1963,21 @@ export class CombatSystem {
             status: "tripped",
             sound: low ? "low-slide" : "player-stunned",
             effect: "trip",
+          });
+        }
+
+        if (this.inventory.equippedWeapon === "knife" && intersectsRect(knifeContactRect(owner, player.facing), target)) {
+          this.applyBodyHit(player.id, target, "knife-contact", {
+            damage: knifeContactDamage,
+            knockback: { x: player.facing * 92, y: -34 },
+            stun: 0.06,
+            label: "Knife Contact",
+            status: "bleed",
+            sound: "knife-contact",
+            effect: "spark",
+            weaponId: "knife",
+            color: colorForWeapon("knife"),
+            cooldown: knifeContactCooldown,
           });
         }
 
@@ -1920,6 +2060,16 @@ export class CombatSystem {
         this.bodyContactCooldowns.set(key, next);
       }
     }
+  }
+
+  private growMachete(ownerId: string, ko: boolean): MacheteRuntimeState {
+    const state = this.machetes.get(ownerId) ?? { rangeBonus: 0, damageBonus: 0 };
+    state.rangeBonus += ko ? macheteKoGrowth : macheteHitGrowth;
+    if (ko) {
+      state.damageBonus += macheteKoDamageBonus;
+    }
+    this.machetes.set(ownerId, state);
+    return this.getMacheteState(ownerId);
   }
 
   private updateDroppedWeapons(dt: number): void {
@@ -2040,6 +2190,17 @@ function isWhipTipHit(hitbox: Hitbox, target: Combatant): boolean {
   return hitbox.knockback.x >= 0 ? targetCenter >= tipStart : targetCenter <= tipStart;
 }
 
+function knifeContactRect(owner: Combatant, facing: number): { x: number; y: number; width: number; height: number } {
+  const reach = 20;
+  const direction = Math.sign(facing || 1);
+  return {
+    x: direction >= 0 ? owner.x - 4 : owner.x - reach,
+    y: owner.y + 4,
+    width: owner.width + reach + 4,
+    height: owner.height - 8,
+  };
+}
+
 const neutralLocationModifier = {
   damageScale: 1,
   knockbackScale: 1,
@@ -2137,6 +2298,18 @@ function colorForWeapon(id: WeaponId): string {
   }
 }
 
+function macheteRedness(state: MacheteGrowthState): number {
+  return clamp(state.rangeBonus / 240 + state.damageBonus / 24, 0, 1);
+}
+
+function macheteColor(redness: number): string {
+  const clamped = clamp(redness, 0, 1);
+  const r = Math.round(158 + (255 - 158) * clamped);
+  const g = Math.round(231 + (70 - 231) * clamped);
+  const b = Math.round(195 + (88 - 195) * clamped);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function dryFireSoundFor(id: WeaponId): SoundId {
   switch (id) {
     case "pistol":
@@ -2191,7 +2364,7 @@ function createStatus(id: StatusEffectId): StatusEffect {
     case "tripped":
       return { id, label: "Tripped", duration: 0.7, stacks: 1 };
     case "empowered":
-      return { id, label: "Empowered", duration: 5, stacks: 1 };
+      return { id, label: "Empowered", duration: lightningBuffDuration, stacks: 1 };
     case "marked":
       return { id, label: "Marked", duration: 4, stacks: 1 };
     case "steady":

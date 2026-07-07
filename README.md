@@ -17,12 +17,12 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Twelve enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, and machete.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
-- Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
+- Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
 - Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots. Volume constants are fed from the central combat tuning file.
 - Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, melee hits, slide trips, stomps, dives, and ground-slam interactions.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
-The client creates a WebRTC data-channel mesh between peers for gameplay packets. Until a data channel is open, the Worker relays compact state/combat packets only to the peers that still need fallback delivery. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
+The client creates a WebRTC data-channel mesh between all peers for gameplay packets. Until a data channel is open, or when one direct peer connection hiccups, the Worker relays compact state/combat packets only to the peers that still need fallback delivery. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
 
 ## Controls
 
@@ -49,7 +49,7 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Pistol: 20-shot tap-fire sidearm. Left click fires one bullet for 10 damage, `R` reloads, a late `R` press during reload grants three perfect shots, air shots recoil the player, slide shots get extra speed/knockback, close shots knock harder, and right click throws the pistol as a pickup object.
 - Whip: Very long mouse-aimed control weapon. The body hit deals light damage, the tip sweet spot adds stun/knockback, low/duck whip trips, air whip stalls slightly, and the same target is pulled only after two quick whip hits inside the combo window.
 - Teleporting Ball: Left click throws an arcing marker. After three seconds the player teleports to the ball unless right click cancels it. Direct hits deal small damage and speed up the teleport. Arrival creates a small burst that damages and knocks enemies away.
-- Lightning Rod: Left click pokes with shock. Right click raises the rod and calls lightning after a short delay, slightly damaging the player but granting empowered movement and a visible electric aura. Touching an empowered player shocks and briefly stuns targets on a per-target cooldown. Thrown rods shock on hit or landing.
+- Lightning Rod: Left click calls a giant sky-to-rod lightning strike, deals significant self-damage, and grants a 60-second empowered state with faster movement, stronger attacks, a visible aura, and touch shocks on a per-target cooldown. Right click still raises the rod for the delayed call-lightning behavior. Thrown rods shock on hit or landing.
 - Sledgehammer: Heavy slow weapon with a large pixel hammer. Holding left click charges an overhead slam, full charge creates a shockwave, air attacks pull downward, right click shoves, and heavy impacts add recovery, screen shake, sound, big damage, and knockback.
 - Slingshot: Light five-stone volley weapon. Hold left click to stretch and release five fast stones, right click fires a wider five-stone scatter, each volley consumes five ammo, stones travel far with low gravity, and they ricochet many times with clack feedback instead of vanishing quickly.
 - Laser Blaster: Heat and charge weapon. Hold left click to build charge, release to fire a visible piercing bolt even from short or overheated charge, right click vents heat with a short radial blast, and holding to maximum risks an overcharge burst.
@@ -57,8 +57,8 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds with stronger self-recoil, the last bullet hits harder with extra kick, and head/leg hits become especially dangerous or slowing.
 - Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, and it must spin for five seconds before firing. Heat rises while firing, overheat locks the gun briefly, the barrels glow red, and recoil pushes the player back.
 - Sniper: Heavy precision weapon. Hold right click to enter steady mode, locking movement and making the player fully invisible to local and remote players for up to 15 seconds. Left click reveals and fires the chambered shot; steady shots deal more damage, mark targets, and pierce harder. Head shots are near lethal, and lower-body shots apply a 10-second leg-shot slow with pixel blood flecks.
-- Knife: Infinite throwing knife in slot 11. Right click or `G` throws a fast spinning knife without ammo or inventory loss, with a short cooldown and noticeable recoil; airborne throws kick much harder for movement tricks. Left click still chains quick close slashes/stabs that can bleed.
-- Machete: Heavy close-range blade in slot 12. Left click swings a wide pushing slash with a tip bonus, slide slashes cleave farther, air slashes slow falling slightly, and right click uses a slower overhead chop with stronger damage, knockback, hit sparks, and a small ground-chop effect.
+- Knife: Infinite throwing knife in slot 11. Right click or `G` throws a fast spinning knife without ammo or inventory loss, with a short cooldown and noticeable recoil; airborne throws kick much harder for movement tricks. Touching another combatant while Knife is equipped deals small bleed contact damage on a short per-target cooldown. Left click still chains quick close slashes/stabs that can bleed.
+- Machete: Heavy blade in slot 12. Left click swings a wide pushing slash with a tip bonus, slide slashes cleave farther, air slashes slow falling slightly, and right click uses a slower overhead chop. Every successful Machete damage hit permanently grows its range for the current weapon state with no gameplay cap; every Machete KO grows it much more and adds permanent damage. As it gains range/power, the blade and slash visuals heat from green toward red.
 
 ## Movement Combat
 
@@ -77,6 +77,7 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Teleporting Ball: The marker bounces/sticks above the floor and remains usable for the delayed teleport instead of falling into the void.
 - Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
 - Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, show a brief stick/spark, then clean up automatically because Knife has infinite throws.
+- Machete Growth: Machete hitboxes use the current grown range and damage bonus, and each swing records targets already hit so long blades do not damage the same target multiple times per swing.
 
 ## Loading Screen And Sound
 
@@ -128,15 +129,16 @@ The Worker runs at `http://localhost:8787` by default. The front end uses that U
 6. In window two, press **Play**, set name/color, choose **Join**, then enter the private room code or refresh and join a public server.
 7. Press `Escape` in game to view players, leave, or host-manage the server.
 8. Shoot, whip, hammer, slide, stomp, dive, and ground slam the other player. Remote players should take HP damage, knockback, hitstun/status effects, damage numbers, KO, and respawn.
-9. Open more windows to test room capacity. Public and private rooms allow up to 10 players, public rows show `1/10`, `2/10`, and so on, and joining is blocked only once the room reaches `10/10`.
+9. Open a third browser window or context, join the same room, and verify all three pages show two remote players in the F3/debug data. The automated 3-page test checks `window.__PIXEL_BRAWLER_DEBUG__`, not just UI text.
+10. For a five-player smoke test, host a public room, join four more browser contexts by code, then open a fresh Join screen and confirm the public row shows `5/10 players`. Public and private rooms allow up to 10 players, public rows show `1/10`, `2/10`, `3/10`, and so on, and joining is blocked only once the room reaches `10/10`.
 
-You can also run the automated two-browser smoke test after both dev servers are running:
+You can also run the automated multiplayer smoke tests after both dev servers are running. They include two-browser regression coverage, a three-page private-room mesh test, and a five-page public-room count smoke:
 
 ```bash
 npm run test:multiplayer
 ```
 
-Press `F3` in a local/dev browser to toggle the compact network debug overlay. The same safe state is exposed as `window.__PIXEL_BRAWLER_DEBUG__` for Playwright and manual console checks. It includes the signaling URL, room code, client/peer IDs, WebSocket status, WebRTC peer status, data-channel status, connected peer count, fallback count, and remote player count/positions.
+Press `F3` in a local/dev browser to toggle the compact network debug overlay. The same safe state is exposed as `window.__PIXEL_BRAWLER_DEBUG__` for Playwright and manual console checks. It includes the signaling URL, room code, client/peer IDs, WebSocket status, WebRTC peer status, data-channel status, connected peer count, room player count, fallback count, and remote player count/positions.
 
 If players do not appear or combat packets do not apply, check both browser consoles, the F3 overlay, and the Worker terminal. Gameplay packets prefer WebRTC data channels and use the room WebSocket as a targeted fallback while channels connect. On the deployed Pages site, the client falls back to `https://pixel-brawler-p2p-signaling.2ndsebastiantablet.workers.dev` when `VITE_SIGNALING_URL` is not set; local dev still falls back to `http://localhost:8787`.
 
@@ -190,7 +192,7 @@ npm run worker:deploy
 
 Wrangler will create the Durable Object classes declared in the `v1` migration on first deploy. The npm scripts pass `-c wrangler.toml` explicitly so Wrangler does not pick up a parent directory config when this repo sits inside another workspace.
 
-If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This multiplayer connection update changes Worker relay behavior but does not require a new Durable Object migration. In non-interactive terminals, Wrangler requires `CLOUDFLARE_API_TOKEN`. After deploy, `GET /health` should include `"signalingProtocolVersion":2`; if live `/health` only returns `{"ok":true}`, the Worker is still on an older deployment.
+If Worker or Durable Object code changes, run `npm run worker:deploy` after tests pass. This patch keeps Worker source unchanged, so deploying the Worker is not required for the checked-in code changes; deploy Pages/front-end assets so the live site gets the updated mesh status/debug and combat behavior. In non-interactive terminals, Wrangler requires `CLOUDFLARE_API_TOKEN`.
 
 ## Useful scripts
 
@@ -200,7 +202,7 @@ npm run build        # TypeScript check and production build
 npm run preview      # Preview built dist
 npm run check        # TypeScript check and Vitest unit tests
 npm test             # Vitest unit tests only
-npm run test:multiplayer # Playwright two-browser multiplayer smoke test
+npm run test:multiplayer # Playwright multiplayer smoke tests, including 3-page and 5-page rooms
 npm run worker:dev   # Local Cloudflare Worker/Durable Object signaling server
 npm run worker:deploy
 ```

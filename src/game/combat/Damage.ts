@@ -19,6 +19,7 @@ export interface DamageRequest {
   hitY?: number;
   hitLocation?: HitLocation;
   skipHitLocationScaling?: boolean;
+  skipSourceScaling?: boolean;
   emitEvent?: boolean;
 }
 

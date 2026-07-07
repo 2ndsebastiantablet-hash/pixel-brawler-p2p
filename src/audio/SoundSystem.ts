@@ -68,6 +68,7 @@ export type SoundId =
   | "knife-stab"
   | "knife-throw"
   | "knife-hit"
+  | "knife-contact"
   | "knife-pickup"
   | "machete-slash"
   | "machete-chop"
@@ -148,6 +149,7 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "knife-stab": { category: "weapon", frequency: 780, endFrequency: 180, duration: 0.085, noise: true, minInterval: 0.06 },
   "knife-throw": { category: "weapon", frequency: 520, endFrequency: 260, duration: 0.09, noise: true, minInterval: 0.08 },
   "knife-hit": { category: "combat", frequency: 360, endFrequency: 170, duration: 0.06, noise: true, minInterval: 0.05 },
+  "knife-contact": { category: "combat", frequency: 540, endFrequency: 210, duration: 0.045, noise: true, minInterval: 0.12 },
   "knife-pickup": { category: "weapon", frequency: 460, endFrequency: 720, duration: 0.07, type: "triangle", minInterval: 0.08 },
   "machete-slash": { category: "weapon", frequency: 410, endFrequency: 170, duration: 0.105, noise: true, minInterval: 0.08 },
   "machete-chop": { category: "heavy", frequency: 280, endFrequency: 75, duration: 0.17, noise: true, minInterval: 0.12 },

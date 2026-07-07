@@ -547,6 +547,9 @@ export class Game {
     if (result.weaponId === "laser-blaster" && result.label === "Overcharge") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.24);
     }
+    if (result.weaponId === "lightning-rod" && result.label === "Sky Strike") {
+      this.shakeTimer = Math.max(this.shakeTimer, 0.28);
+    }
     if (result.weaponId === "machete" && kind === "secondary") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.08);
     }
@@ -564,7 +567,7 @@ export class Game {
         break;
       case "lightning-strike":
       case "sniper-shot":
-        this.shakeTimer = Math.max(this.shakeTimer, 0.14);
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "lightning-strike" ? 0.28 : 0.14);
         break;
       case "revolver-last":
       case "minigun-overheat":
@@ -674,7 +677,7 @@ export class Game {
   private getWeightedPhysics(): PhysicsConfig {
     const weapon = weaponRegistry.get(this.combat.getPlayerInventory().equippedWeapon);
     const weight = weapon.weight;
-    const runtime = this.combat.getWeaponRuntimeState(weapon.id);
+    const runtime = this.combat.getWeaponRuntimeState(weapon.id, this.localPlayer.state.id);
     const local = this.combat.getCombatant(this.localPlayer.state.id);
     const legSlow = local?.statuses.some((status) => status.id === "legShotSlow") ? COMBAT_TUNING.sniper.legShotMoveMultiplier : 1;
     const legStagger = local?.statuses.some((status) => status.id === "legStagger") ? 0.72 : 1;
@@ -685,14 +688,15 @@ export class Game {
       : weapon.id === "minigun" && runtime.spin > 0.02
         ? COMBAT_TUNING.minigun.spinSlowMultiplier
         : 1;
-    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow;
+    const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
+    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered;
     return {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
       acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale,
       airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale,
-      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier,
-      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier,
+      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1),
+      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1),
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
@@ -850,20 +854,25 @@ export class Game {
         this.pixelRect(ctx, x + facing * 18, y - 12, facing * 34, 24);
       }
     } else if (weaponId === "machete") {
+      const runtime = this.combat.getWeaponRuntimeState("machete", state.id);
       const chop = this.attackVisual?.weaponId === "machete" && this.attackVisual.kind === "secondary";
-      const reach = active > 0 ? (chop ? 46 : 34) : 10;
+      const visualGrowth = Math.min(runtime.rangeBonus, 360);
+      const reach = active > 0 ? (chop ? 46 : 34) + visualGrowth : 10 + Math.min(visualGrowth, 90);
       const x = Math.round(centerX + facing * (16 + reach));
       const y = Math.round(centerY + (chop ? -18 : -2) + aim.y * 12);
       ctx.fillStyle = "#344136";
       this.pixelRect(ctx, x - facing * 18, y + 6, facing * 20, 8);
-      ctx.fillStyle = "#9ee7c3";
-      this.pixelRect(ctx, x, y - 7, facing * 42, 14);
-      this.pixelRect(ctx, x + facing * 30, y - 13, facing * 14, 20);
+      ctx.fillStyle = machetePowerColor(runtime.redness);
+      const bladeLength = 42 + visualGrowth;
+      this.pixelRect(ctx, x, y - 7, facing * bladeLength, 14);
+      this.pixelRect(ctx, x + facing * (bladeLength - 12), y - 13, facing * 14, 20);
       ctx.fillStyle = "#f0fff7";
-      this.pixelRect(ctx, x + facing * 35, y - 4, facing * 12, 6);
+      this.pixelRect(ctx, x + facing * Math.max(24, bladeLength - 7), y - 4, facing * 12, 6);
       if (active > 0) {
-        ctx.fillStyle = chop ? "rgba(158, 231, 195, 0.5)" : "rgba(158, 231, 195, 0.34)";
-        this.pixelRect(ctx, x + facing * 24, y - (chop ? 22 : 16), facing * (chop ? 58 : 44), chop ? 44 : 30);
+        ctx.fillStyle = runtime.redness > 0.35
+          ? `rgba(255, ${Math.round(90 + (1 - runtime.redness) * 110)}, 110, ${chop ? 0.52 : 0.38})`
+          : chop ? "rgba(158, 231, 195, 0.5)" : "rgba(158, 231, 195, 0.34)";
+        this.pixelRect(ctx, x + facing * 24, y - (chop ? 22 : 16), facing * (chop ? 58 + visualGrowth : 44 + visualGrowth), chop ? 44 : 30);
       }
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
@@ -1131,9 +1140,14 @@ export class Game {
       ctx.fillRect(x + radius - 2, y - 2, 4, 12);
     } else if (effect.kind === "lightning") {
       ctx.beginPath();
-      ctx.moveTo(x, y - 70);
-      ctx.lineTo(x + 10, y - 38);
-      ctx.lineTo(x - 8, y - 12);
+      const topY = Math.min(ty, y - 70);
+      const segments = Math.max(3, Math.min(12, Math.ceil((y - topY) / 54)));
+      ctx.moveTo(x, topY);
+      for (let index = 1; index < segments; index += 1) {
+        const t = index / segments;
+        const jitter = (index % 2 === 0 ? -1 : 1) * (8 + (index % 3) * 5);
+        ctx.lineTo(x + jitter, topY + (y - topY) * t);
+      }
       ctx.lineTo(x, y);
       ctx.stroke();
     } else if (effect.kind === "teleport") {
@@ -1206,7 +1220,7 @@ export class Game {
     const weapon = weaponRegistry.get(inventory.equippedWeapon);
     const ammo = inventory.ammo[weapon.id];
     const charge = inventory.charge[weapon.id];
-    const runtime = this.combat.getWeaponRuntimeState(weapon.id);
+    const runtime = this.combat.getWeaponRuntimeState(weapon.id, this.localPlayer.state.id);
     const local = this.combat.getCombatant(this.localPlayer.state.id);
     const teleport = this.combat.getTeleportState(this.localPlayer.state.id);
     const lightning = this.combat.getLightningState(this.localPlayer.state.id);
@@ -1365,6 +1379,14 @@ function colorForWeapon(id: WeaponId): string {
   }
 }
 
+function machetePowerColor(redness: number): string {
+  const clamped = Math.min(Math.max(redness, 0), 1);
+  const r = Math.round(158 + (255 - 158) * clamped);
+  const g = Math.round(231 + (70 - 231) * clamped);
+  const b = Math.round(195 + (88 - 195) * clamped);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 function weaponHudDetail(
   id: WeaponId,
   runtime: ReturnType<CombatSystem["getWeaponRuntimeState"]>,
@@ -1386,11 +1408,11 @@ function weaponHudDetail(
     case "knife":
       return "Infinite throw - recoil kick";
     case "machete":
-      return "Wide slash - heavy chop";
+      return `Growth +${Math.round(runtime.rangeBonus)} range - Power +${Math.round(runtime.damageBonus)}`;
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
-      return `Rod contact shocks - Chamber ${runtime.chamber.toFixed(1)}s`;
+      return `Sky strike buffs 60s - Chamber ${runtime.chamber.toFixed(1)}s`;
     case "sledgehammer":
       return `Sledge charge ${Math.round(Math.min(primaryHeldMs / 900, 1) * 100)}% - shockwave`;
     default:
@@ -1407,7 +1429,7 @@ function weaponHelper(id: WeaponId): string {
     case "teleport-ball":
       return "Left throw - 3s teleport - Right cancel";
     case "lightning-rod":
-      return "Left poke electrocutes - Hold/right raise - Touch shocks";
+      return "Left sky strike - Right raise - Buff shocks touch";
     case "sledgehammer":
       return "Hold left charge - Air drop - Right shove";
     case "slingshot":
@@ -1423,7 +1445,7 @@ function weaponHelper(id: WeaponId): string {
     case "knife":
       return "Infinite throws - Right/G kick back";
     case "machete":
-      return "Wide slash - Right heavy overhead chop";
+      return "Grows on hit - KO adds power - Right chop";
     default:
       return "";
   }

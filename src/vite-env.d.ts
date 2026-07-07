@@ -6,6 +6,7 @@ interface PixelBrawlerDebugSnapshot {
   clientId: string;
   peerId?: string;
   connectedPeers: number;
+  roomPlayerCount: number;
   connectionStatus: string;
   webSocketStatus: string;
   webRtcPeerStatus: Record<string, string>;

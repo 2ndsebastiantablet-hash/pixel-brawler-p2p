@@ -304,7 +304,8 @@ function buildDebugSnapshot(): PixelBrawlerDebugSnapshot {
     roomCode: currentSession?.roomCode,
     clientId: profile.clientId,
     peerId: rtc?.peerId ?? currentSession?.localPeerId,
-    connectedPeers: currentSession?.peers.length ?? 0,
+    connectedPeers: netDebug?.connectedPeerCount ?? Math.max(0, (currentSession?.peers.length ?? 1) - 1),
+    roomPlayerCount: currentSession?.peers.length ?? 0,
     connectionStatus: currentStatus,
     webSocketStatus: netDebug?.webSocketStatus ?? "closed",
     webRtcPeerStatus: netDebug?.peerStatus ?? {},
@@ -331,7 +332,7 @@ function renderDebugOverlay(): void {
   debugOverlay.textContent = [
     `signaling ${debug.signalingUrl}`,
     `room ${debug.roomCode ?? "-"} client ${debug.clientId}`,
-    `peer ${debug.peerId ?? "-"} connected ${debug.connectedPeers}`,
+    `peer ${debug.peerId ?? "-"} connected ${debug.connectedPeers} room ${debug.roomPlayerCount}`,
     `ws ${debug.webSocketStatus} status ${debug.connectionStatus}`,
     `rtc ${JSON.stringify(debug.webRtcPeerStatus)}`,
     `dc ${JSON.stringify(debug.dataChannels)} fallback ${debug.relayFallbackPeerCount}`,

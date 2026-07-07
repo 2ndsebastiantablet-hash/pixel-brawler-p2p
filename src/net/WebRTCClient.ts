@@ -440,7 +440,7 @@ export class WebRTCClient {
       if (state === "connected") {
         this.setStatus("Connected");
       } else if (state === "failed" || state === "disconnected") {
-        this.setStatus("Disconnected / failed");
+        this.updateAggregatePeerStatus();
       }
     };
 
@@ -484,6 +484,18 @@ export class WebRTCClient {
         peer.dataChannel = null;
       }
     });
+  }
+
+  private updateAggregatePeerStatus(): void {
+    if (this.webSocketStatus !== "open") {
+      this.setStatus("Disconnected / failed");
+      return;
+    }
+    if (this.peers.size > 0) {
+      this.setStatus("Connected");
+      return;
+    }
+    this.setStatus(this.isHost ? "Waiting for peer" : "Connecting");
   }
 
   private handleDataChannelMessage(fromPeerId: string, data: unknown): void {
