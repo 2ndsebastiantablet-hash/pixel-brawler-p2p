@@ -13,8 +13,8 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Escape server menu with player list, leave/end server, and host kick/ban controls.
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
-- Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, damage numbers, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, and an offline training dummy.
-- Ten enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, and sniper. Knife and machete remain registered for compatibility but hidden from the armory/loadout.
+- Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
+- Eleven enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, and knife. Machete remains registered for compatibility but hidden from the armory/loadout.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
@@ -51,12 +51,13 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 - Teleporting Ball: Left click throws an arcing marker. After three seconds the player teleports to the ball unless right click cancels it. Direct hits deal small damage and speed up the teleport. Arrival creates a small burst that damages and knocks enemies away.
 - Lightning Rod: Left click pokes with shock. Right click raises the rod and calls lightning after a short delay, slightly damaging the player but granting empowered movement and a visible electric aura. Touching an empowered player shocks and briefly stuns targets on a per-target cooldown. Thrown rods shock on hit or landing.
 - Sledgehammer: Heavy slow weapon with a large pixel hammer. Holding left click charges an overhead slam, full charge creates a shockwave, air attacks pull downward, right click shoves, and heavy impacts add recovery, screen shake, sound, big damage, and knockback.
-- Slingshot: Light arcing projectile weapon. Hold left click to stretch and release a harder charged stone, right click fires scatter pebbles, stones bounce with clack feedback, and low-slide shots skip with extra ricochet pressure.
-- Laser Blaster: Heat and charge weapon. Hold left click to build charge, release to fire a brighter piercing bolt, right click vents heat with a short radial blast, and holding too long risks an overcharge burst.
+- Slingshot: Light five-stone volley weapon. Hold left click to stretch and release five fast stones, right click fires a wider five-stone scatter, each volley consumes five ammo, stones travel far with low gravity, and they ricochet many times with clack feedback instead of vanishing quickly.
+- Laser Blaster: Heat and charge weapon. Hold left click to build charge, release to fire a visible piercing bolt even from short or overheated charge, right click vents heat with a short radial blast, and holding to maximum risks an overcharge burst.
 - Laser charge now scales damage, beam width, beam length, enemy knockback, self-recoil, heat, visual brightness, and shake. Heat turns the blaster red, venting cools it, and overcharge creates a small damaging particle burst.
-- Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds, and the last bullet hits harder with extra kick.
+- Revolver: Six-shot high-knockback sidearm. Left click fires deliberate tap shots, right click fan-fires several rounds with stronger self-recoil, the last bullet hits harder with extra kick, and head/leg hits become especially dangerous or slowing.
 - Minigun: Very heavy sustained-fire weapon. Hold right click to pre-spin, hold left click to spin/fire, and it must spin for five seconds before firing. Heat rises while firing, overheat locks the gun briefly, the barrels glow red, and recoil pushes the player back.
-- Sniper: Heavy precision weapon. Hold right click to enter steady mode, locking movement and making the player faint/outlined and damage-resistant. Left click fires the chambered shot; steady shots deal more damage, mark targets, and pierce harder. Lower-body shots apply a 10-second leg-shot slow and show pixel blood flecks.
+- Sniper: Heavy precision weapon. Hold right click to enter steady mode, locking movement and making the player fully invisible to local and remote players for up to 15 seconds. Left click reveals and fires the chambered shot; steady shots deal more damage, mark targets, and pierce harder. Head shots are near lethal, and lower-body shots apply a 10-second leg-shot slow with pixel blood flecks.
+- Knife: Fast close-range combo weapon in slot 11. Left click chains slash, slash, stab; the third hit deals more damage/stun, air slashes stall slightly, dash slashes reach farther, repeated cuts bleed, and right click or `G` throws a pickupable knife that sticks briefly on hit/impact.
 
 ## Movement Combat
 
@@ -70,10 +71,11 @@ The client creates a WebRTC data-channel mesh between peers for gameplay packets
 ## Projectile And Status Rules
 
 - Floor Collision: Projectiles resolve against the platform floor. Non-ricochet shots impact and expire, ricochet shots have limited bounces, and safety cleanup removes anything that escapes world bounds.
-- Ricochet: Slingshot stones bounce once. Revolver crouch/low shots can ricochet once. Normal bullets do not bounce forever.
+- Hit Locations: Weapon and body hits classify contact as head/top 25%, body/middle 45%, or leg/bottom 30%. Head hits deal 1.8x damage with extra stun/knockback, body hits use normal damage, and leg hits deal 0.65x damage with reduced vertical knockback plus weapon-specific slows or suppression.
+- Ricochet: Slingshot stones can bounce many times. Revolver crouch/low shots can ricochet once. Normal bullets do not bounce forever.
 - Teleporting Ball: The marker bounces/sticks above the floor and remains usable for the delayed teleport instead of falling into the void.
 - Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
-- No New Weapons: This update keeps the same 10 enabled weapons and does not add Knife, Machete, or any other new weapon.
+- Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, stick briefly, then become pickupable with `F`.
 
 ## Loading Screen And Sound
 
@@ -103,7 +105,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the ten-weapon armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons, then attack with the mouse.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the enabled armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons; Knife is after Sniper and is easiest to reach with `E`.
 
 ## Run the signaling Worker locally
 
@@ -204,7 +206,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable ten-weapon vertical slice, not final balance.
+- Combat is a playable eleven-weapon vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
 - The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.

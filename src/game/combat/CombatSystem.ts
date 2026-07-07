@@ -1,5 +1,5 @@
 import { DEFAULT_PHYSICS, type PlayerPhysicsState } from "../Physics";
-import type { DamageNumber, DamageRequest, DamageResult, Vec2 } from "./Damage";
+import type { DamageNumber, DamageRequest, DamageResult, HitLocation, Vec2 } from "./Damage";
 import type { Hitbox } from "./Hitbox";
 import { intersectsRect } from "./Hitbox";
 import type { Projectile } from "./Projectile";
@@ -99,6 +99,7 @@ export interface CombatEventPacket {
   ky?: number;
   stun?: number;
   status?: string;
+  hitLocation?: HitLocation;
 }
 
 interface CombatOptions {
@@ -379,12 +380,7 @@ export class CombatSystem {
     if (!best) {
       return null;
     }
-    this.inventory.equippedWeapon = best.weapon.weaponId;
-    const index = this.droppedWeapons.indexOf(best.weapon);
-    this.droppedWeapons.splice(index, 1);
-    this.addEffect("pickup", best.weapon.x, best.weapon.y, best.weapon.x, best.weapon.y, "#ffd84d", weaponRegistry.get(best.weapon.weaponId).name);
-    this.queueSound("weapon-pickup");
-    return best.weapon.weaponId;
+    return this.collectDroppedWeapon(best.weapon);
   }
 
   applyDamage(request: DamageRequest): DamageResult {
@@ -393,30 +389,39 @@ export class CombatSystem {
       return { applied: false, remainingHp: target?.hp ?? 0 };
     }
 
+    const hitLocation = request.hitLocation ?? classifyHitLocation(target, request.hitY);
+    const locationModifier = request.skipHitLocationScaling ? neutralLocationModifier : modifierForHitLocation(hitLocation);
+    const effectiveStun = request.stun + locationModifier.stunBonus;
+    const finalStatus = statusForHit(request.weaponId, hitLocation, request.status);
+    const finalLabel = hitLocation ? `${labelForHitLocation(hitLocation)} ${request.label}` : request.label;
     const steadyResist = target.statuses.some((status) => status.id === "steady") && request.sourceId !== target.id;
     const damageScale = steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1;
-    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1);
-    const verticalLift = request.damage >= 20 ? -26 : request.stun >= 0.3 ? -16 : 0;
-    const damage = Math.max(1, Math.round(request.damage * damageScale));
+    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1) * locationModifier.knockbackScale;
+    const verticalLift = request.damage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
+    const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
     target.velocityX += request.knockback.x * knockbackScale;
-    target.velocityY += request.knockback.y * knockbackScale + verticalLift;
-    target.hitstun = Math.max(target.hitstun, request.stun * (request.label === "DOT" ? 1 : 1.08));
-    target.invulnerable = Math.max(0.24, request.stun * 1.2);
-    if (request.status) {
-      target.statuses = upsertStatusEffect(target.statuses, createStatus(request.status as StatusEffectId));
+    target.velocityY += request.knockback.y * knockbackScale * locationModifier.verticalScale + verticalLift * locationModifier.verticalScale;
+    target.hitstun = Math.max(target.hitstun, effectiveStun * (request.label === "DOT" ? 1 : 1.08));
+    target.invulnerable = Math.max(0.24, effectiveStun * 1.2);
+    if (finalStatus) {
+      target.statuses = upsertStatusEffect(target.statuses, createStatus(finalStatus as StatusEffectId));
     }
     this.queueSound("player-hit");
     this.queueSound("damage-pop");
     if (request.damage >= 24 || Math.abs(request.knockback.x) + Math.abs(request.knockback.y) >= 560) {
       this.queueSound("player-stunned");
     }
-    if (request.status === "tripped" || request.status === "daze") {
+    if (finalStatus === "tripped" || finalStatus === "daze") {
       this.queueSound("player-stunned");
-      this.addEffect("stun", target.x + target.width / 2, target.y + 12, target.x + target.width / 2, target.y + 12, "#ffd84d", request.status === "tripped" ? "Trip" : "Stun");
+      this.addEffect("stun", target.x + target.width / 2, target.y + 12, target.x + target.width / 2, target.y + 12, "#ffd84d", finalStatus === "tripped" ? "Trip" : "Stun");
     }
-    if (request.status === "shock") {
+    if (finalStatus === "shock") {
       this.queueSound("lightning-shock");
+    }
+    if (hitLocation === "head" || hitLocation === "leg" || finalStatus === "bleed") {
+      const bloodY = typeof request.hitY === "number" ? request.hitY : target.y + target.height / 2;
+      this.addEffect("blood", target.x + target.width / 2, bloodY, target.x + target.width / 2 + Math.sign(request.knockback.x || 1) * 28, bloodY + 10, "#c71943", labelForHitLocation(hitLocation));
     }
 
     this.damageNumbers.push({
@@ -425,10 +430,11 @@ export class CombatSystem {
       y: target.y - 10,
       amount: damage,
       age: 0,
-      label: request.label,
-      color: request.damage >= 25 ? "#ffd84d" : "#ffffff",
+      label: finalLabel,
+      color: hitLocation === "head" ? "#ffd84d" : hitLocation === "leg" ? "#7cff6b" : request.damage >= 25 ? "#ffd84d" : "#ffffff",
+      hitLocation,
     });
-    this.addEffect("spark", target.x + target.width / 2, target.y + 18, target.x + target.width / 2, target.y + 18, "#ffffff", request.label);
+    this.addEffect("spark", target.x + target.width / 2, target.y + 18, target.x + target.width / 2, target.y + 18, "#ffffff", finalLabel);
     if (request.emitEvent !== false && request.sourceId !== "status") {
       this.recentEvents.push(this.createEvent(
         request.sourceId,
@@ -443,8 +449,9 @@ export class CombatSystem {
           damage,
           kx: request.knockback.x,
           ky: request.knockback.y,
-          stun: request.stun,
-          status: request.status,
+          stun: effectiveStun,
+          status: finalStatus,
+          hitLocation,
         },
       ));
     }
@@ -456,7 +463,7 @@ export class CombatSystem {
       this.queueSound("respawn");
     }
 
-    return { applied: true, remainingHp: target.hp };
+    return { applied: true, remainingHp: target.hp, hitLocation };
   }
 
   update(dt: number, players: PlayerPhysicsState[]): void {
@@ -519,7 +526,7 @@ export class CombatSystem {
       steady: id === "sniper" ? charge?.charge ?? 0 : 0,
       chamber: this.inventory.cooldowns[id] ?? 0,
       charging: charge?.charging ?? false,
-      overheated: heat >= 0.95,
+      overheated: heat >= (id === "laser-blaster" ? COMBAT_TUNING.laser.overheatThreshold : 0.95),
     };
   }
 
@@ -575,6 +582,8 @@ export class CombatSystem {
           label: event.label,
           status: event.status,
           weaponId: event.weaponId,
+          hitLocation: event.hitLocation,
+          skipHitLocationScaling: true,
           emitEvent: false,
         });
         if (!hit.applied) {
@@ -658,6 +667,9 @@ export class CombatSystem {
     if (weapon.id === "sledgehammer") {
       this.queueSound(context.heldMs >= 650 ? "sledge-slam" : "sledge-swing");
     }
+    if (weapon.id === "knife") {
+      this.queueSound(this.peekKnifeComboStep() === 3 ? "knife-stab" : "knife-slash");
+    }
 
     this.spawnMeleeHitbox(context, chargedProfile, slot === "secondary" ? "Heavy" : weapon.name);
     if (weapon.id === "sledgehammer" && context.heldMs >= 650) {
@@ -707,32 +719,35 @@ export class CombatSystem {
         const charge = Math.min(Math.max(context.heldMs / 850, 0), 1);
         return {
           ...profile,
-          damage: Math.round(profile.damage * (1 + charge * 1.35)),
-          speed: (profile.speed ?? 620) * (1 + charge * 0.28),
-          knockback: profile.knockback * (1 + charge * 0.8),
+          damage: Math.round(profile.damage * (1 + charge * 0.55)),
+          speed: Math.min(1400, (profile.speed ?? 1280) * (1 + charge * 0.08)),
+          knockback: profile.knockback * (1 + charge * 0.42),
           stun: profile.stun + charge * 0.08,
-          radius: (profile.radius ?? 5) + charge * 2,
+          radius: (profile.radius ?? 5) + charge,
           bounces: COMBAT_TUNING.projectiles.slingshotBounces,
         };
       }
       return {
         ...profile,
         bounces: COMBAT_TUNING.projectiles.slingshotBounces,
-        knockback: profile.knockback * 1.2,
+        knockback: profile.knockback * 1.18,
       };
     }
 
     if (weaponId === "laser-blaster") {
-      const charge = this.inventory.charge[weaponId]?.charge ?? 0;
-      const chargeRatio = Math.min(charge / 12, 1);
+      const state = this.inventory.charge[weaponId];
+      const charge = state?.charge ?? 0;
+      const overheated = (state?.heat ?? 0) >= COMBAT_TUNING.laser.overheatThreshold;
+      const chargeRatio = overheated ? Math.min(charge / (state?.maxCharge ?? 80), 1) * 0.2 : Math.min(charge / (state?.maxCharge ?? 80), 1);
+      const weakScale = overheated ? 0.65 : 1;
       return {
         ...profile,
-        damage: Math.round(profile.damage * (1 + chargeRatio * COMBAT_TUNING.laser.chargeDamageScale)),
-        range: profile.range + chargeRatio * COMBAT_TUNING.laser.chargeLengthScale,
-        knockback: profile.knockback * (1 + chargeRatio * 0.95),
+        damage: Math.max(1, Math.round(profile.damage * weakScale * (1 + chargeRatio * COMBAT_TUNING.laser.chargeDamageScale))),
+        range: (profile.range + chargeRatio * COMBAT_TUNING.laser.chargeLengthScale) * (overheated ? 0.62 : 1),
+        knockback: profile.knockback * weakScale * (1 + chargeRatio * 0.95),
         stun: profile.stun + chargeRatio * 0.08,
         radius: (profile.radius ?? 6) + chargeRatio * COMBAT_TUNING.laser.chargeWidthScale,
-        pierce: (profile.pierce ?? 0) + (charge >= 6 ? 1 : 0) + (charge >= 12 ? 1 : 0),
+        pierce: (profile.pierce ?? 0) + (chargeRatio >= 0.35 ? 1 : 0) + (chargeRatio >= 0.7 ? 1 : 0),
       };
     }
 
@@ -743,15 +758,16 @@ export class CombatSystem {
           ...profile,
           pellets: Math.max(2, Math.min(6, bullets)),
           spread: 0.13 + Math.min(bullets, 6) * 0.025,
+          knockback: profile.knockback * 1.18,
           bounces: context.player.ducking || context.player.action === "duck" || context.player.lowSliding ? COMBAT_TUNING.projectiles.revolverRicochetBounces : profile.bounces,
         };
       }
       if (ammoBefore === 1) {
         return {
           ...profile,
-          damage: Math.round(profile.damage * 1.65),
-          knockback: profile.knockback * 1.42,
-          stun: profile.stun + 0.09,
+          damage: Math.round(profile.damage * 1.8),
+          knockback: profile.knockback * 1.68,
+          stun: profile.stun + 0.13,
           pierce: (profile.pierce ?? 0) + 1,
         };
       }
@@ -776,6 +792,22 @@ export class CombatSystem {
         radius: (profile.radius ?? 3) + steady * 2,
         pierce: (profile.pierce ?? 0) + (steady > 0.85 ? 1 : 0),
         status: steady > 0.85 ? "marked" : profile.status,
+      };
+    }
+
+    if (weaponId === "knife" && slot === "primary") {
+      const step = this.peekKnifeComboStep();
+      const dashStab = context.player.sliding || context.player.lowSliding || context.player.action === "slide" || context.player.action === "lowSlide";
+      const airSlash = !context.player.grounded;
+      if (airSlash) {
+        context.player.velocityY = Math.min(context.player.velocityY, 55);
+      }
+      return {
+        ...profile,
+        damage: step === 3 ? profile.damage + 6 : profile.damage,
+        range: profile.range + (dashStab ? 22 : 0) + (airSlash ? 8 : 0),
+        knockback: profile.knockback * (step === 3 ? 1.55 : dashStab ? 1.32 : 1),
+        stun: profile.stun + (step === 3 ? 0.16 : dashStab ? 0.05 : 0),
       };
     }
 
@@ -806,12 +838,15 @@ export class CombatSystem {
         this.queueSound(slot === "secondary" ? "slingshot-scatter" : "slingshot-shot");
         break;
       case "laser-blaster":
-        this.applySelfRecoil(context.player, aim, 92 + Math.min(context.heldMs / 2200, 1) * 120, 58 + Math.min(context.heldMs / 2200, 1) * 58);
+        {
+          const ratio = Math.min((charge?.charge ?? 0) / (charge?.maxCharge ?? 80), 1);
+          this.applySelfRecoil(context.player, aim, 88 + ratio * 190, 48 + ratio * 95);
+        }
         this.queueSound("laser-fire");
         break;
       case "revolver":
         this.queueSound(slot === "secondary" ? "revolver-fan" : ammoBefore === 1 ? "revolver-last" : "revolver-shot");
-        this.applySelfRecoil(context.player, aim, ammoBefore === 1 ? 145 : 72, 24);
+        this.applySelfRecoil(context.player, aim, slot === "secondary" ? 120 + Math.min(ammoBefore, 6) * 8 : ammoBefore === 1 ? 190 : 96, slot === "secondary" ? 34 : ammoBefore === 1 ? 48 : 28);
         break;
       case "minigun":
         if (charge) {
@@ -830,6 +865,8 @@ export class CombatSystem {
           charge.heat = 0.18;
         }
         this.clearStatus(context.ownerId, "steady");
+        this.addEffect("aura", context.player.x + context.player.width / 2, context.player.y + 12, context.player.x + context.player.width / 2, context.player.y - 32, colorForWeapon(weaponId), "Reveal");
+        this.queueSound("sniper-reveal");
         this.applySelfRecoil(context.player, aim, steady > 0.95 ? 130 : 210, 82);
         this.queueSound("sniper-shot");
         this.queueSound("sniper-chamber");
@@ -973,8 +1010,9 @@ export class CombatSystem {
     if (!owner) {
       return;
     }
-    owner.statuses = upsertStatusEffect(owner.statuses, { id: "steady", label: "Steady", duration: COMBAT_TUNING.sniper.steadySeconds + 0.55, stacks: 1 });
+    owner.statuses = upsertStatusEffect(owner.statuses, { id: "steady", label: "Steady", duration: COMBAT_TUNING.sniper.invisibilitySeconds, stacks: 1 });
     owner.invulnerable = Math.max(owner.invulnerable, 0.08);
+    this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 32, colorForWeapon("sniper"), "Vanish");
   }
 
   private clearStatus(targetId: string, id: StatusEffectId): void {
@@ -983,6 +1021,34 @@ export class CombatSystem {
       return;
     }
     target.statuses = target.statuses.filter((status) => status.id !== id);
+  }
+
+  private collectDroppedWeapon(dropped: DroppedWeapon): WeaponId {
+    this.inventory.equippedWeapon = dropped.weaponId;
+    const index = this.droppedWeapons.indexOf(dropped);
+    if (index >= 0) {
+      this.droppedWeapons.splice(index, 1);
+    }
+    this.addEffect("pickup", dropped.x, dropped.y, dropped.x, dropped.y - 34, "#ffd84d", weaponRegistry.get(dropped.weaponId).name);
+    this.addEffect("tracer", dropped.x, dropped.y, dropped.x, dropped.y - 18, colorForWeapon(dropped.weaponId), "Snap");
+    this.queueSound("weapon-pickup");
+    if (dropped.weaponId === "knife") {
+      this.queueSound("knife-pickup");
+    }
+    return dropped.weaponId;
+  }
+
+  private pickUpDroppedWeaponsInHitbox(hitbox: Hitbox): void {
+    for (const dropped of [...this.droppedWeapons]) {
+      if (!dropped.pickupable) {
+        continue;
+      }
+      const bounds = { x: dropped.x - 10, y: dropped.y - 10, width: 20, height: 20 };
+      if (intersectsRect(hitbox, bounds)) {
+        this.collectDroppedWeapon(dropped);
+        this.addEffect("whip-pull", hitbox.x, hitbox.y + hitbox.height / 2, dropped.x, dropped.y, colorForWeapon(hitbox.weaponId), "Pickup");
+      }
+    }
   }
 
   private registerWhipHit(targetId: string): { count: number; pulled: boolean } {
@@ -994,6 +1060,20 @@ export class CombatSystem {
       count,
     };
     return { count, pulled: count >= 2 };
+  }
+
+  private peekKnifeComboStep(): number {
+    const combo = this.inventory.combo.knife;
+    return combo && combo.timer > 0 ? (combo.count % 3) + 1 : 1;
+  }
+
+  private registerKnifeSwing(): number {
+    const step = this.peekKnifeComboStep();
+    this.inventory.combo.knife = {
+      timer: 0.62,
+      count: step,
+    };
+    return step;
   }
 
   private applyBurstDamage(
@@ -1099,7 +1179,7 @@ export class CombatSystem {
     const muzzle = this.muzzle(context.player);
     const pellets = Math.max(1, profile.pellets ?? 1);
     const chargeState = this.inventory.charge[weaponId];
-    const chargeMultiplier = weaponId === "laser-blaster" && chargeState && !chargeState.charging ? 1 + Math.min(chargeState.charge / 12, profile.chargeScale ?? 1) : 1;
+    const chargeMultiplier = 1;
     const speedBonus = context.player.sliding ? 1.18 : context.player.action === "lowSlide" ? 1.26 : 1;
 
     for (let index = 0; index < pellets; index += 1) {
@@ -1144,8 +1224,9 @@ export class CombatSystem {
     }
 
     if (weaponId === "laser-blaster" && chargeState) {
+      const wasOverheated = chargeState.heat >= COMBAT_TUNING.laser.overheatThreshold;
       chargeState.charge = 0;
-      chargeState.heat = Math.min(1, chargeState.heat + COMBAT_TUNING.laser.heatPerShot);
+      chargeState.heat = wasOverheated ? 0.72 : Math.min(1, chargeState.heat + COMBAT_TUNING.laser.heatPerShot);
       chargeState.charging = false;
     }
     if (weaponId === "teleport-ball") {
@@ -1159,12 +1240,15 @@ export class CombatSystem {
     const aim = normalize(context.aim);
     const center = this.muzzle(context.player);
     const isWhip = weaponId === "whip";
+    const isKnife = weaponId === "knife";
     const isHammer = weaponId === "sledgehammer";
+    const knifeStep = isKnife ? this.registerKnifeSwing() : 0;
     const lowTrip = isWhip && (context.player.ducking || context.player.lowSliding || context.player.action === "duck" || context.player.action === "lowSlide");
-    const width = profile.range;
-    const height = isWhip ? Math.max(32, (profile.radius ?? 14) * 2.4) : Math.max(22, (profile.radius ?? 14) * 2);
+    const width = isKnife ? profile.range + (knifeStep === 3 ? 10 : 0) : profile.range;
+    const height = isWhip ? Math.max(32, (profile.radius ?? 14) * 2.4) : isKnife ? Math.max(24, (profile.radius ?? 14) * 2.2) : Math.max(22, (profile.radius ?? 14) * 2);
     const x = aim.x >= 0 ? center.x : center.x - width;
     const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : 18);
+    const hitLabel = isKnife ? (knifeStep === 3 ? "Knife Stab" : "Knife Slash") : lowTrip ? "Low Whip" : label;
     this.hitboxes.push({
       id: this.makeId("hit"),
       ownerId: context.ownerId,
@@ -1178,7 +1262,7 @@ export class CombatSystem {
       stun: profile.stun,
       age: 0,
       duration: Math.max(0.08, profile.cooldown * 0.46),
-      label: lowTrip ? "Low Whip" : label,
+      label: hitLabel,
       color: colorForWeapon(weaponId),
       status: lowTrip ? "tripped" : profile.status,
       sweetSpot: isWhip ? "tip" : undefined,
@@ -1186,7 +1270,7 @@ export class CombatSystem {
       heavy: isHammer,
       hits: [],
     });
-    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, colorForWeapon(weaponId), lowTrip ? "Low trip" : label);
+    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, colorForWeapon(weaponId), hitLabel);
   }
 
   private addRadialHitbox(context: WeaponUseContext, profile: AttackProfile, label: string): void {
@@ -1217,16 +1301,18 @@ export class CombatSystem {
     const weapon = weaponRegistry.get(weaponId);
     const aim = normalize(aimInput);
     const start = this.muzzle(player);
-    this.droppedWeapons.push({
-      id: this.makeId("drop"),
-      weaponId,
-      x: start.x,
-      y: start.y,
-      vx: aim.x * weapon.throw.speed,
-      vy: aim.y * weapon.throw.speed - 80,
-      age: 0,
-      pickupable: false,
-    });
+    if (weaponId !== "knife") {
+      this.droppedWeapons.push({
+        id: this.makeId("drop"),
+        weaponId,
+        x: start.x,
+        y: start.y,
+        vx: aim.x * weapon.throw.speed,
+        vy: aim.y * weapon.throw.speed - 80,
+        age: 0,
+        pickupable: false,
+      });
+    }
     this.projectiles.push({
       id: this.makeId("throw"),
       ownerId,
@@ -1235,14 +1321,14 @@ export class CombatSystem {
       y: start.y,
       vx: aim.x * weapon.throw.speed,
       vy: aim.y * weapon.throw.speed - 80,
-      radius: 8,
+      radius: weaponId === "knife" ? 6 : 8,
       damage: emptyToss ? Math.max(3, weapon.throw.damage - 4) : weapon.throw.damage,
       knockback: { x: aim.x * weapon.throw.knockback, y: aim.y * weapon.throw.knockback - 40 },
       stun: emptyToss ? weapon.throw.stun + 0.1 : weapon.throw.stun,
       age: 0,
-      lifetime: 0.85,
-      gravity: 900,
-      bounces: 1,
+      lifetime: weaponId === "knife" ? 0.95 : 0.85,
+      gravity: weaponId === "knife" ? 760 : 900,
+      bounces: weaponId === "knife" ? 0 : 1,
       pierce: 0,
       label: `${weapon.name} throw`,
       color: colorForWeapon(weaponId),
@@ -1250,9 +1336,32 @@ export class CombatSystem {
       hits: [],
     });
     this.addEffect("tracer", start.x, start.y, start.x + aim.x * 70, start.y + aim.y * 70, colorForWeapon(weaponId), "Throw");
-    this.queueSound(weaponId === "pistol" ? "pistol-throw" : "weapon-drop");
+    this.queueSound(weaponId === "pistol" ? "pistol-throw" : weaponId === "knife" ? "knife-throw" : "weapon-drop");
     this.recentEvents.push(this.createEvent(ownerId, weaponId, "throw", start, aim, "Throw", now));
     return { kind: "fired", weaponId, label: "Throw" };
+  }
+
+  private stickThrownKnife(projectile: Projectile): void {
+    const existing = this.droppedWeapons.find((dropped) => dropped.weaponId === "knife" && Math.hypot(dropped.x - projectile.x, dropped.y - projectile.y) < 16);
+    if (existing) {
+      existing.x = projectile.x;
+      existing.y = projectile.y;
+      existing.vx = 0;
+      existing.vy = 0;
+      existing.pickupable = true;
+      return;
+    }
+    this.droppedWeapons.push({
+      id: this.makeId("drop"),
+      weaponId: "knife",
+      x: projectile.x,
+      y: projectile.y,
+      vx: 0,
+      vy: 0,
+      age: 0.3,
+      pickupable: true,
+    });
+    this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
   }
 
   private updateInventory(dt: number): void {
@@ -1354,8 +1463,13 @@ export class CombatSystem {
         }
         continue;
       }
+      const hadSteady = combatant.statuses.some((status) => status.id === "steady");
       const statusUpdate = updateStatusEffects(combatant.statuses, dt);
       combatant.statuses = statusUpdate.effects;
+      if (hadSteady && !combatant.statuses.some((status) => status.id === "steady")) {
+        this.addEffect("aura", combatant.x + combatant.width / 2, combatant.y + 16, combatant.x + combatant.width / 2, combatant.y - 28, colorForWeapon("sniper"), "Reveal");
+        this.queueSound("sniper-reveal");
+      }
       if (combatant.statuses.some((status) => status.id === "shock")) {
         this.addEffect("aura", combatant.x + combatant.width / 2, combatant.y + combatant.height / 2, combatant.x + combatant.width / 2, combatant.y - 16, "#c8c4a8", "Shock Aura");
         this.addEffect("spark", combatant.x + combatant.width / 2, combatant.y + 16, combatant.x + combatant.width / 2 + Math.sin(performanceNow() * 0.02) * 18, combatant.y - 8, "#ffd84d", "Spark");
@@ -1402,6 +1516,10 @@ export class CombatSystem {
             this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), projectile.weaponId === "revolver" ? "Ricochet" : "Bounce");
             this.queueSound(projectile.weaponId === "slingshot" ? "slingshot-bounce" : "revolver-shot");
           }
+        } else if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
+          this.stickThrownKnife(projectile);
+          projectile.age = projectile.lifetime + 1;
+          continue;
         } else if (projectile.weaponId === "teleport-ball") {
           projectile.vx = 0;
           projectile.vy = 0;
@@ -1418,7 +1536,8 @@ export class CombatSystem {
         }
         if (intersectsRect(projectileBounds(projectile), target)) {
           const closePistolShot = projectile.weaponId === "pistol" && projectile.age < 0.13;
-          const sniperLegShot = projectile.weaponId === "sniper" && projectile.y >= target.y + target.height * 0.58;
+          const hitLocation = classifyHitLocation(target, projectile.y);
+          const sniperLegShot = projectile.weaponId === "sniper" && hitLocation === "leg";
           const knockback = closePistolShot
             ? { x: projectile.knockback.x * 1.55, y: projectile.knockback.y - 35 }
             : projectile.knockback;
@@ -1431,6 +1550,8 @@ export class CombatSystem {
             label: projectile.label,
             status: projectile.weaponId === "lightning-rod" ? "shock" : sniperLegShot ? "legShotSlow" : projectile.status,
             weaponId: projectile.weaponId,
+            hitY: projectile.y,
+            hitLocation,
           });
           if (hit.applied) {
             projectile.hits.push(target.id);
@@ -1460,8 +1581,14 @@ export class CombatSystem {
             if (projectile.weaponId === "minigun") {
               this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y, colorForWeapon(projectile.weaponId), "Suppress");
             }
+            if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
+              this.stickThrownKnife(projectile);
+              this.queueSound("knife-hit");
+            }
             if (projectile.weaponId === "teleport-ball") {
               continue;
+            } else if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
+              projectile.age = projectile.lifetime + 1;
             } else if (projectile.pierce <= 0) {
               projectile.age = projectile.lifetime + 1;
             } else {
@@ -1481,6 +1608,9 @@ export class CombatSystem {
   private updateHitboxes(dt: number): void {
     for (const hitbox of this.hitboxes) {
       hitbox.age += dt;
+      if (hitbox.weaponId === "whip") {
+        this.pickUpDroppedWeaponsInHitbox(hitbox);
+      }
       for (const target of this.combatants.values()) {
         if (target.id === hitbox.ownerId || hitbox.hits.includes(target.id)) {
           continue;
@@ -1489,26 +1619,30 @@ export class CombatSystem {
           const owner = this.combatants.get(hitbox.ownerId);
           const whipHit = hitbox.weaponId === "whip";
           const rodHit = hitbox.weaponId === "lightning-rod";
+          const knifeHit = hitbox.weaponId === "knife";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const combo = whipHit ? this.registerWhipHit(target.id) : { count: 0, pulled: false };
           const rodEmpowered = rodHit && owner?.statuses.some((status) => status.id === "empowered");
+          const backstab = knifeHit && owner ? isBackstab(owner, target, hitbox.knockback.x) : false;
           const pull = whipHit && combo.pulled && owner
             ? {
                 x: Math.sign((owner.x + owner.width / 2) - (target.x + target.width / 2)) * 380,
                 y: -135,
               }
             : undefined;
-          const damage = whipHit && tipHit ? hitbox.damage + 4 : rodEmpowered ? hitbox.damage + 6 : hitbox.damage;
-          const stun = whipHit && tipHit ? hitbox.stun + 0.14 : rodEmpowered ? hitbox.stun + 0.12 : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
+          const damage = whipHit && tipHit ? hitbox.damage + 4 : rodEmpowered ? hitbox.damage + 6 : knifeHit && backstab ? hitbox.damage + 5 : hitbox.damage;
+          const stun = whipHit && tipHit ? hitbox.stun + 0.14 : rodEmpowered ? hitbox.stun + 0.12 : knifeHit && backstab ? hitbox.stun + 0.08 : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
+          const hitY = clamp(hitbox.y + hitbox.height / 2, target.y, target.y + target.height - 1);
           const hit = this.applyDamage({
             sourceId: hitbox.ownerId,
             targetId: target.id,
             damage,
             knockback: pull ?? (rodHit ? { x: hitbox.knockback.x * 1.28, y: hitbox.knockback.y - 75 } : hitbox.knockback),
             stun,
-            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : hitbox.label,
+            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : knifeHit && backstab ? `${hitbox.label} Backstab` : hitbox.label,
             status: rodHit ? "shock" : hitbox.lowTrip ? "tripped" : hitbox.status,
             weaponId: hitbox.weaponId,
+            hitY,
           });
           if (hit.applied) {
             hitbox.hits.push(target.id);
@@ -1518,6 +1652,10 @@ export class CombatSystem {
             }
             if (hitbox.weaponId === "sledgehammer") {
               this.queueSound("sledge-impact");
+            }
+            if (knifeHit) {
+              this.queueSound("knife-hit");
+              this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 18, hitY, colorForWeapon(hitbox.weaponId), backstab ? "Backstab" : "Cut");
             }
             if (rodHit) {
               this.queueSound("lightning-shock");
@@ -1740,6 +1878,9 @@ export class CombatSystem {
   private updateDroppedWeapons(dt: number): void {
     for (const dropped of this.droppedWeapons) {
       dropped.age += dt;
+      if (dropped.weaponId === "knife" && dropped.pickupable && dropped.vx === 0 && dropped.vy === 0 && dropped.age < 0.75) {
+        continue;
+      }
       dropped.vy += 900 * dt;
       dropped.x += dropped.vx * dt;
       dropped.y += dropped.vy * dt;
@@ -1784,7 +1925,7 @@ export class CombatSystem {
     aim: Vec2,
     label: string,
     now: number,
-    extra: Partial<Pick<CombatEventPacket, "targetId" | "damage" | "kx" | "ky" | "stun" | "status">> = {},
+    extra: Partial<Pick<CombatEventPacket, "targetId" | "damage" | "kx" | "ky" | "stun" | "status" | "hitLocation">> = {},
   ): CombatEventPacket {
     return {
       t: "c",
@@ -1852,6 +1993,74 @@ function isWhipTipHit(hitbox: Hitbox, target: Combatant): boolean {
   return hitbox.knockback.x >= 0 ? targetCenter >= tipStart : targetCenter <= tipStart;
 }
 
+const neutralLocationModifier = {
+  damageScale: 1,
+  knockbackScale: 1,
+  verticalScale: 1,
+  stunBonus: 0,
+};
+
+function classifyHitLocation(target: Combatant, hitY?: number): HitLocation | undefined {
+  if (typeof hitY !== "number") {
+    return undefined;
+  }
+  const ratio = clamp((hitY - target.y) / Math.max(target.height, 1), 0, 1);
+  if (ratio <= 0.25) {
+    return "head";
+  }
+  if (ratio >= 0.7) {
+    return "leg";
+  }
+  return "body";
+}
+
+function modifierForHitLocation(location?: HitLocation): typeof neutralLocationModifier {
+  switch (location) {
+    case "head":
+      return { damageScale: 1.8, knockbackScale: 1.28, verticalScale: 1.18, stunBonus: 0.14 };
+    case "leg":
+      return { damageScale: 0.65, knockbackScale: 0.72, verticalScale: 0.42, stunBonus: 0 };
+    case "body":
+    default:
+      return neutralLocationModifier;
+  }
+}
+
+function labelForHitLocation(location?: HitLocation): string {
+  switch (location) {
+    case "head":
+      return "HEAD";
+    case "leg":
+      return "LEG";
+    case "body":
+      return "BODY";
+    default:
+      return "HIT";
+  }
+}
+
+function statusForHit(weaponId: WeaponId | undefined, location: HitLocation | undefined, status: string | undefined): string | undefined {
+  if (location !== "leg") {
+    return status;
+  }
+  if (weaponId === "sniper") {
+    return "legShotSlow";
+  }
+  if (weaponId === "minigun") {
+    return "suppressed";
+  }
+  return status ?? "legStagger";
+}
+
+function isBackstab(owner: Combatant, target: Combatant, attackDirection: number): boolean {
+  const direction = Math.sign(attackDirection || target.x - owner.x || 1);
+  const ownerCenter = owner.x + owner.width / 2;
+  const targetCenter = target.x + target.width / 2;
+  const ownerBehind = direction > 0 ? ownerCenter < targetCenter : ownerCenter > targetCenter;
+  const targetFacingGuess = Math.sign(target.velocityX);
+  return ownerBehind && targetFacingGuess !== 0 && targetFacingGuess === direction;
+}
+
 function colorForWeapon(id: WeaponId): string {
   switch (id) {
     case "slingshot":
@@ -1872,6 +2081,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff8f3d";
     case "whip":
       return "#f65bd8";
+    case "knife":
+      return "#d8f0ff";
     default:
       return "#ffffff";
   }
@@ -1904,6 +2115,8 @@ function projectileLabelFor(id: WeaponId, slot: "primary" | "secondary"): string
       return "Suppressing Round";
     case "sniper":
       return "Sniper Shot";
+    case "knife":
+      return "Knife throw";
     default:
       return weaponRegistry.get(id).name;
   }
@@ -1926,9 +2139,11 @@ function createStatus(id: StatusEffectId): StatusEffect {
     case "marked":
       return { id, label: "Marked", duration: 4, stacks: 1 };
     case "steady":
-      return { id, label: "Steady", duration: COMBAT_TUNING.sniper.steadySeconds + 0.55, stacks: 1 };
+      return { id, label: "Steady", duration: COMBAT_TUNING.sniper.invisibilitySeconds, stacks: 1 };
     case "legShotSlow":
       return { id, label: "Leg Shot", duration: COMBAT_TUNING.sniper.legShotSlowDuration, stacks: 1 };
+    case "legStagger":
+      return { id, label: "Leg Stagger", duration: 2.4, stacks: 1 };
   }
 }
 
@@ -1942,6 +2157,10 @@ function removeWhere<T>(items: T[], predicate: (item: T) => boolean): void {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function performanceNow(): number {

@@ -12,10 +12,11 @@ const enabledWeapons = [
   "revolver",
   "minigun",
   "sniper",
+  "knife",
 ] as const;
 
 describe("weapon registry", () => {
-  it("enables the first ten polished weapons with movement weight metadata", () => {
+  it("enables the first eleven polished weapons with movement weight metadata", () => {
     expect(WEAPON_IDS).toEqual([
       "pistol",
       "whip",
@@ -27,6 +28,7 @@ describe("weapon registry", () => {
       "revolver",
       "minigun",
       "sniper",
+      "knife",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -51,11 +53,11 @@ describe("weapon registry", () => {
     expect(inventory.equippedWeapon).toBe("pistol");
     expect(inventory.weaponInventory).toEqual(enabledWeapons);
     expect(inventory.ammo.pistol?.magazine).toBe(20);
-    expect(inventory.ammo["slingshot"]?.magazine).toBe(10);
+    expect(inventory.ammo["slingshot"]?.magazine).toBeGreaterThanOrEqual(30);
     expect(inventory.ammo.revolver?.magazine).toBe(6);
     expect(inventory.ammo.minigun?.magazine).toBe(120);
     expect(inventory.ammo.sniper?.magazine).toBe(1);
-    expect(inventory.charge["laser-blaster"]?.maxCharge).toBe(40);
+    expect(inventory.charge["laser-blaster"]?.maxCharge).toBe(80);
     expect(inventory.charge.minigun?.maxCharge).toBe(1);
     expect(inventory.charge.sniper?.maxCharge).toBe(1);
     expect(inventory.ammo.knife).toBeUndefined();

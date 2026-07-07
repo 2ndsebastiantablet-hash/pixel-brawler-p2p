@@ -349,21 +349,18 @@ export class Game {
     this.drawBursts(ctx);
     this.drawCombatEntities(ctx);
     for (const remote of this.remotes.values()) {
+      if (remote.current.statuses?.includes("steady")) {
+        continue;
+      }
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
       this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
-    if (steady) {
-      ctx.save();
-      ctx.globalAlpha = 0.34;
+    if (!steady) {
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      ctx.restore();
-      this.drawSteadyOutline(ctx);
-    } else {
-      this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      this.drawLocalWeapon(ctx);
     }
-    this.drawLocalWeapon(ctx);
     this.drawLocalHealth(ctx);
     this.drawCrosshair(ctx);
     ctx.restore();
@@ -674,13 +671,15 @@ export class Game {
     const runtime = this.combat.getWeaponRuntimeState(weapon.id);
     const local = this.combat.getCombatant(this.localPlayer.state.id);
     const legSlow = local?.statuses.some((status) => status.id === "legShotSlow") ? COMBAT_TUNING.sniper.legShotMoveMultiplier : 1;
+    const legStagger = local?.statuses.some((status) => status.id === "legStagger") ? 0.72 : 1;
+    const suppressed = local?.statuses.some((status) => status.id === "suppressed") ? 0.82 : 1;
     const steadyLock = local?.statuses.some((status) => status.id === "steady") ? 0 : 1;
     const minigunSlow = weapon.id === "minigun" && runtime.heat > 0.02
       ? COMBAT_TUNING.minigun.firingSlowMultiplier
       : weapon.id === "minigun" && runtime.spin > 0.02
         ? COMBAT_TUNING.minigun.spinSlowMultiplier
         : 1;
-    const movementScale = legSlow * steadyLock * minigunSlow;
+    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow;
     return {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
@@ -830,6 +829,20 @@ export class Game {
         ctx.fillStyle = "rgba(214, 242, 255, 0.7)";
         this.pixelRect(ctx, x + facing * 80, y - 4, facing * 34, 8);
       }
+    } else if (weaponId === "knife") {
+      const activeReach = active > 0 ? 30 : 8;
+      const x = Math.round(centerX + facing * (18 + activeReach));
+      const y = Math.round(centerY - 1 + aim.y * 10);
+      ctx.fillStyle = "#2b3542";
+      this.pixelRect(ctx, x - facing * 12, y + 3, facing * 14, 6);
+      ctx.fillStyle = "#d8f0ff";
+      this.pixelRect(ctx, x, y - 4, facing * 26, 8);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x + facing * 18, y - 2, facing * 9, 4);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(216, 240, 255, 0.5)";
+        this.pixelRect(ctx, x + facing * 18, y - 12, facing * 34, 24);
+      }
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
       const lift = active > 0 || charge > 0.2 ? -34 - charge * 18 : -8;
@@ -873,14 +886,15 @@ export class Game {
       this.drawEffect(ctx, effect);
     }
     for (const number of snapshot.damageNumbers) {
-      ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      const text = number.hitLocation ? `${number.label} ${number.amount}` : `${number.amount}`;
+      ctx.font = number.hitLocation ? "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" : "16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.lineWidth = 4;
       ctx.strokeStyle = "rgba(0, 0, 0, 0.82)";
-      ctx.strokeText(`${number.amount}`, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
+      ctx.strokeText(text, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
       ctx.fillStyle = number.color;
-      ctx.fillText(`${number.amount}`, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
+      ctx.fillText(text, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
     }
   }
 
@@ -920,9 +934,16 @@ export class Game {
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(projectile.age * 8);
-      ctx.fillStyle = projectile.color;
-      ctx.fillRect(-12, -4, 24, 8);
-      ctx.fillRect(3, -10, 8, 20);
+      if (projectile.weaponId === "knife") {
+        ctx.fillStyle = "#d8f0ff";
+        ctx.fillRect(-18, -3, 30, 6);
+        ctx.fillStyle = "#2b3542";
+        ctx.fillRect(9, -5, 10, 10);
+      } else {
+        ctx.fillStyle = projectile.color;
+        ctx.fillRect(-12, -4, 24, 8);
+        ctx.fillRect(3, -10, 8, 20);
+      }
       ctx.restore();
       return;
     }
@@ -1017,6 +1038,11 @@ export class Game {
       ctx.fillRect(x - 30, y - 4, 60, 7);
       ctx.fillRect(x - 6, y - 15, 18, 7);
       ctx.fillRect(x - 25, y + 2, 18, 9);
+    } else if (dropped.weaponId === "knife") {
+      ctx.fillStyle = "#d8f0ff";
+      ctx.fillRect(x - 18, y - 3, 30, 6);
+      ctx.fillStyle = "#2b3542";
+      ctx.fillRect(x + 8, y - 5, 10, 10);
     } else {
       ctx.fillRect(x - 12, y - 4, 24, 8);
       ctx.fillRect(x + 3, y + 3, 7, 9);
@@ -1139,20 +1165,6 @@ export class Game {
     ctx.moveTo(x, y + 3);
     ctx.lineTo(x, y + 9);
     ctx.stroke();
-  }
-
-  private drawSteadyOutline(ctx: CanvasRenderingContext2D): void {
-    const state = this.localPlayer.state;
-    const x = Math.round(state.x - this.camera.x);
-    const y = Math.round(state.y - this.camera.y);
-    ctx.save();
-    ctx.strokeStyle = "rgba(214, 242, 255, 0.72)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x - 5, y - 5, state.width + 10, state.height + 10);
-    ctx.fillStyle = "rgba(214, 242, 255, 0.35)";
-    ctx.fillRect(x + state.width / 2 - 2, y - 18, 4, 12);
-    ctx.fillRect(x + state.width / 2 - 18, y + 12, 36, 3);
-    ctx.restore();
   }
 
   private renderCombatHud(): void {
@@ -1303,6 +1315,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#d6f2ff";
     case "whip":
       return "#f65bd8";
+    case "knife":
+      return "#d8f0ff";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1333,6 +1347,8 @@ function weaponHudDetail(
       return `Spin ${Math.round(runtime.spin * 100)}% - Heat ${Math.round(runtime.heat * 100)}%${runtime.overheated ? " - OVERHEAT" : ""}`;
     case "sniper":
       return `Steady ${Math.round(runtime.steady * 100)}% - Chamber ${runtime.chamber.toFixed(1)}s`;
+    case "knife":
+      return "Close combo - throw sticks";
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
@@ -1366,6 +1382,8 @@ function weaponHelper(id: WeaponId): string {
       return "Hold left fire - Hold/right pre-spin - Heat locks";
     case "sniper":
       return "Hold/right steady - Left chambered shot - Pierces";
+    case "knife":
+      return "Fast combo - Right/G throw - F pickup";
     default:
       return "";
   }

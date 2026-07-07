@@ -52,6 +52,7 @@ export const COMBAT_TUNING = {
     chargeWidthScale: 18,
     chargeLengthScale: 760,
     heatPerShot: 0.16,
+    overheatThreshold: 0.9,
     ventCooling: 0.75,
     overchargeRadius: 175,
     overchargeDamage: 30,
@@ -72,6 +73,7 @@ export const COMBAT_TUNING = {
   },
   sniper: {
     steadySeconds: 1,
+    invisibilitySeconds: 15,
     steadyDamageResistance: 0.18,
     legShotSlowDuration: 10,
     legShotMoveMultiplier: 0.52,

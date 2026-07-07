@@ -35,7 +35,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(10);
+    expect(fighter.weaponInventory).toHaveLength(11);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -128,6 +128,49 @@ describe("combat system", () => {
     combat.update(2.1, [playerState]);
     expect(combat.getCombatant(dummy.id)?.hp).toBe(100);
     expect(combat.getCombatant(dummy.id)?.x).toBe(dummy.spawnX);
+  });
+
+  it("classifies hit locations and scales damage, stun, knockback, labels, and hit events", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    const dummy = combat.spawnTrainingDummy({ x: 120, y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height });
+
+    const head = combat.applyDamage({
+      sourceId: "local",
+      targetId: dummy.id,
+      damage: 20,
+      knockback: { x: 200, y: -80 },
+      stun: 0.2,
+      label: "REVOLVER",
+      weaponId: "revolver",
+      hitY: dummy.y + dummy.height * 0.1,
+    });
+    expect(head).toMatchObject({ applied: true, hitLocation: "head" });
+    expect(head.remainingHp).toBe(64);
+    expect(combat.getCombatant(dummy.id)?.hitstun).toBeGreaterThan(0.3);
+    expect(combat.consumeEvents()[0]).toMatchObject({ hitLocation: "head", damage: 36 });
+    expect(combat.getSnapshot().damageNumbers.at(-1)?.label).toContain("HEAD");
+
+    const target = combat.getCombatant(dummy.id)!;
+    target.hp = 100;
+    target.invulnerable = 0;
+    target.hitstun = 0;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    combat.applyDamage({
+      sourceId: "local",
+      targetId: dummy.id,
+      damage: 20,
+      knockback: { x: 200, y: -160 },
+      stun: 0.2,
+      label: "REVOLVER",
+      weaponId: "revolver",
+      hitY: dummy.y + dummy.height * 0.86,
+    });
+    expect(target.hp).toBe(87);
+    expect(target.velocityY).toBeGreaterThan(-300);
+    expect(target.statuses.some((status) => status.id === "legStagger")).toBe(true);
+    expect(combat.getSnapshot().damageNumbers.at(-1)?.label).toContain("LEG");
   });
 
   it("adds pistol recoil to the shooter and boosts air recoil", () => {
@@ -303,6 +346,14 @@ describe("combat system", () => {
       afterSingleHit.invulnerable = 0;
     }
     combat.update(0.36, [playerState]);
+    const beforeSecondHit = combat.getCombatant(dummy.id);
+    if (beforeSecondHit) {
+      beforeSecondHit.x = 215;
+      beforeSecondHit.y = DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height;
+      beforeSecondHit.velocityX = 0;
+      beforeSecondHit.velocityY = 0;
+      beforeSecondHit.invulnerable = 0;
+    }
     combat.usePrimary({
       ownerId: "local",
       player: playerState,
@@ -314,6 +365,36 @@ describe("combat system", () => {
     combat.update(1 / 60, [playerState]);
 
     expect(combat.getCombatant(dummy.id)?.velocityX).toBeLessThan(0);
+  });
+
+  it("lets the active whip tip pick up a dropped weapon only when the hitbox touches it", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.syncLocalPlayer(playerState, "Tester", "#18dff5");
+
+    combat.dropCurrentWeapon("local", playerState, { x: 1, y: 0 }, 100);
+    const dropped = combat.getSnapshot().droppedWeapons[0];
+    dropped.x = playerState.x + 190;
+    dropped.y = playerState.y + 22;
+    dropped.vx = 0;
+    dropped.vy = 0;
+    dropped.pickupable = true;
+
+    combat.equip("whip");
+    combat.usePrimary({
+      ownerId: "local",
+      player: playerState,
+      aim: { x: 1, y: 0 },
+      now: 200,
+      heldMs: 0,
+      isNewPress: true,
+    });
+    combat.update(1 / 60, [playerState]);
+
+    expect(combat.getSnapshot().droppedWeapons).toHaveLength(0);
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
+    expect(combat.consumeSounds()).toContain("weapon-pickup");
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "pickup" && effect.label === "Pistol")).toBe(true);
   });
 
   it("teleports the player to the teleport ball after three seconds unless canceled", () => {
@@ -453,11 +534,12 @@ describe("combat system", () => {
     expect(combat.getCombatant(dummy.id)?.hp).toBeLessThan(100);
   });
 
-  it("fires charged slingshot stones and scatter pebbles with ricochet feedback", () => {
+  it("fires five fast slingshot stones and five wider scatter pebbles with long ricochet life", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     combat.equip("slingshot");
     const player = { ...playerState };
+    const startingAmmo = combat.getPlayerInventory().ammo.slingshot!.magazine;
 
     const charged = combat.usePrimary({
       ownerId: "local",
@@ -468,11 +550,20 @@ describe("combat system", () => {
       isNewPress: true,
     });
     expect(charged.kind).toBe("fired");
-    const shot = combat.getSnapshot().projectiles[0];
-    expect(shot.weaponId).toBe("slingshot");
-    expect(shot.damage).toBeGreaterThan(6);
-    expect(shot.bounces).toBe(COMBAT_TUNING.projectiles.slingshotBounces);
+    const volley = combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "slingshot");
+    expect(volley).toHaveLength(5);
+    expect(combat.getPlayerInventory().ammo.slingshot!.magazine).toBe(startingAmmo - 5);
+    for (const shot of volley) {
+      expect(Math.hypot(shot.vx, shot.vy)).toBeGreaterThanOrEqual(1200);
+      expect(Math.hypot(shot.vx, shot.vy)).toBeLessThanOrEqual(1500);
+      expect(shot.damage).toBeGreaterThanOrEqual(5);
+      expect(shot.bounces).toBe(COMBAT_TUNING.projectiles.slingshotBounces);
+      expect(shot.lifetime).toBeGreaterThan(2);
+      expect(shot.gravity).toBeLessThanOrEqual(360);
+    }
     expect(combat.consumeSounds()).toContain("slingshot-shot");
+    combat.update(1.0, [player]);
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "slingshot").length).toBeGreaterThan(0);
 
     combat.update(0.32, [player]);
     combat.useSecondary({
@@ -483,7 +574,11 @@ describe("combat system", () => {
       heldMs: 0,
       isNewPress: true,
     });
-    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "slingshot")).toHaveLength(4);
+    const slingshotProjectiles = combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "slingshot");
+    expect(slingshotProjectiles).toHaveLength(10);
+    const scatter = slingshotProjectiles.slice(-5);
+    const spread = Math.max(...scatter.map((projectile) => projectile.vy)) - Math.min(...scatter.map((projectile) => projectile.vy));
+    expect(spread).toBeGreaterThan(800);
   });
 
   it("supports laser charge, venting, revolver last bullet, minigun spin, and sniper steady aim", () => {
@@ -494,7 +589,8 @@ describe("combat system", () => {
 
     combat.equip("laser-blaster");
     const laserCharge = combat.getPlayerInventory().charge["laser-blaster"]!;
-    laserCharge.charge = 8;
+    laserCharge.charge = 60;
+    laserCharge.charging = true;
     const laser = combat.usePrimary({
       ownerId: "local",
       player,
@@ -505,9 +601,19 @@ describe("combat system", () => {
     });
     expect(laser.kind).toBe("fired");
     const laserShot = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "laser-blaster");
-    expect(laserShot?.damage).toBeGreaterThan(15);
+    expect(laserShot?.damage).toBeGreaterThan(35);
+    expect(laserShot?.radius).toBeGreaterThan(12);
+    expect(laserShot?.lifetime).toBeGreaterThan(1.2);
     expect(laserShot?.pierce).toBeGreaterThanOrEqual(2);
     expect(combat.getPlayerInventory().charge["laser-blaster"]?.heat).toBeGreaterThan(0);
+    expect(combat.getPlayerInventory().charge["laser-blaster"]?.charge).toBe(0);
+    expect(combat.consumeSounds()).toContain("laser-fire");
+    combat.getPlayerInventory().cooldowns["laser-blaster"] = 0;
+    combat.getPlayerInventory().charge["laser-blaster"]!.charge = 0.25;
+    combat.getPlayerInventory().charge["laser-blaster"]!.charging = true;
+    const weakLaser = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 160, heldMs: 20, isNewPress: true });
+    expect(weakLaser.kind).toBe("fired");
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === "laser-blaster")).toHaveLength(2);
     combat.getPlayerInventory().cooldowns["laser-blaster"] = 0;
     combat.getPlayerInventory().charge["laser-blaster"]!.heat = 0.8;
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 180, heldMs: 0, isNewPress: true });
@@ -519,6 +625,7 @@ describe("combat system", () => {
     const revolverShot = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "revolver");
     expect(revolverShot?.damage).toBeGreaterThan(18);
     expect(revolverShot?.knockback.x).toBeGreaterThan(360);
+    expect(player.velocityX).toBeLessThan(-300);
 
     combat.equip("minigun");
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 300, heldMs: 0, isNewPress: true });
@@ -537,9 +644,10 @@ describe("combat system", () => {
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 1200, heldMs: 0, isNewPress: true });
     combat.update(1.1, [player]);
     expect(combat.getWeaponRuntimeState("sniper").steady).toBeGreaterThan(0.9);
-    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(true);
+    expect(combat.getCombatant("local")?.statuses.find((status) => status.id === "steady")?.duration).toBeGreaterThan(13);
     const sniper = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 2400, heldMs: 0, isNewPress: true });
     expect(sniper.kind).toBe("fired");
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(false);
     const sniperShot = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "sniper");
     expect(sniperShot?.damage).toBeGreaterThan(50);
     expect(sniperShot?.pierce).toBeGreaterThanOrEqual(2);
@@ -560,6 +668,46 @@ describe("combat system", () => {
       expect.objectContaining({ id: "legShotSlow", duration: expect.closeTo(10, 0) }),
     ]));
     expect(combat.getSnapshot().effects.some((effect) => effect.kind === "blood")).toBe(true);
+    expect(combat.getSnapshot().damageNumbers.at(-1)?.label).toContain("LEG");
+  });
+
+  it("uses the knife as an eleventh weapon with close combo hits, bleed, and thrown pickup behavior", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("knife");
+    const player = { ...playerState, x: 0 };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 52, y: playerState.y });
+
+    for (let index = 0; index < 3; index += 1) {
+      combat.getPlayerInventory().cooldowns.knife = 0;
+      const target = combat.getCombatant(dummy.id)!;
+      target.x = 52;
+      target.y = playerState.y;
+      target.invulnerable = 0;
+      combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: index === 2 ? -0.05 : 0 }, now: 100 + index * 80, heldMs: 0, isNewPress: true });
+      combat.update(1 / 60, [player]);
+    }
+
+    const target = combat.getCombatant(dummy.id)!;
+    expect(target.statuses.some((status) => status.id === "bleed")).toBe(true);
+    expect(target.hitstun).toBeGreaterThan(0.2);
+    expect(combat.getSnapshot().damageNumbers.at(-1)?.label).toContain("Knife Stab");
+
+    target.hp = 100;
+    target.invulnerable = 0;
+    target.x = 168;
+    target.y = playerState.y;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    combat.getPlayerInventory().cooldowns.knife = 0;
+    const thrown = combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 500, heldMs: 0, isNewPress: true });
+    expect(thrown.kind).toBe("fired");
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "knife" && projectile.label === "Knife throw")).toBe(true);
+    expect(combat.consumeSounds()).toContain("knife-throw");
+    combat.update(0.2, [player]);
+    expect(target.statuses.some((status) => status.id === "bleed")).toBe(true);
+    expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "knife")).toBe(true);
   });
 
   it("electrocutes on lightning rod contact and carries a wider sledgehammer shockwave", () => {

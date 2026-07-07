@@ -63,6 +63,12 @@ export type SoundId =
   | "sniper-steady"
   | "sniper-shot"
   | "sniper-chamber"
+  | "sniper-reveal"
+  | "knife-slash"
+  | "knife-stab"
+  | "knife-throw"
+  | "knife-hit"
+  | "knife-pickup"
   | "respawn";
 
 interface SoundShape {
@@ -134,6 +140,12 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "sniper-steady": { category: "weapon", frequency: 220, endFrequency: 580, duration: 0.13, type: "triangle", minInterval: 0.25 },
   "sniper-shot": { category: "heavy", frequency: 1220, endFrequency: 52, duration: 0.2, noise: true, minInterval: 0.18 },
   "sniper-chamber": { category: "weapon", frequency: 300, endFrequency: 520, duration: 0.1, type: "square", minInterval: 0.18 },
+  "sniper-reveal": { category: "weapon", frequency: 180, endFrequency: 740, duration: 0.14, type: "triangle", minInterval: 0.18 },
+  "knife-slash": { category: "weapon", frequency: 620, endFrequency: 320, duration: 0.055, noise: true, minInterval: 0.045 },
+  "knife-stab": { category: "weapon", frequency: 780, endFrequency: 180, duration: 0.085, noise: true, minInterval: 0.06 },
+  "knife-throw": { category: "weapon", frequency: 520, endFrequency: 260, duration: 0.09, noise: true, minInterval: 0.08 },
+  "knife-hit": { category: "combat", frequency: 360, endFrequency: 170, duration: 0.06, noise: true, minInterval: 0.05 },
+  "knife-pickup": { category: "weapon", frequency: 460, endFrequency: 720, duration: 0.07, type: "triangle", minInterval: 0.08 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

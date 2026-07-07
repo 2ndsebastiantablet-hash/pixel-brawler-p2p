@@ -7,7 +7,8 @@ export type StatusEffectId =
   | "tripped"
   | "marked"
   | "steady"
-  | "legShotSlow";
+  | "legShotSlow"
+  | "legStagger";
 
 export interface StatusEffect {
   id: StatusEffectId;

@@ -149,10 +149,12 @@ describe("network player packets", () => {
       ky: -80,
       stun: 0.2,
       status: "daze",
+      hitLocation: "head",
     };
 
     expect(isSignalDataMessage({ type: "data", from: "peer-a", packet: hit })).toBe(true);
     expect(isSignalDataMessage({ type: "data", from: "peer-a", packet: { ...hit, targetId: 42 } })).toBe(false);
+    expect(isSignalDataMessage({ type: "data", from: "peer-a", packet: { ...hit, hitLocation: "wing" } })).toBe(false);
   });
 
   it("accepts AFK warning and activity signal messages", () => {

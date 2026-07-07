@@ -1,4 +1,5 @@
 import type { Facing, PlayerAction } from "../game/Physics";
+import type { HitLocation } from "../game/combat/Damage";
 import type { StatusEffectId } from "../game/combat/StatusEffects";
 import type { WeaponId } from "../game/combat/Weapon";
 import { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS } from "./RoomConfig";
@@ -68,6 +69,7 @@ export interface CombatEventPacket {
   ky?: number;
   stun?: number;
   status?: string;
+  hitLocation?: HitLocation;
 }
 
 export type SignalMessage =
@@ -210,7 +212,8 @@ export function isCombatEventPacket(packet: unknown): packet is CombatEventPacke
     (value.kx === undefined || typeof value.kx === "number") &&
     (value.ky === undefined || typeof value.ky === "number") &&
     (value.stun === undefined || typeof value.stun === "number") &&
-    (value.status === undefined || typeof value.status === "string")
+    (value.status === undefined || typeof value.status === "string") &&
+    (value.hitLocation === undefined || value.hitLocation === "head" || value.hitLocation === "body" || value.hitLocation === "leg")
   );
 }
 
