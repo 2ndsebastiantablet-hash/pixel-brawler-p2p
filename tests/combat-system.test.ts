@@ -35,7 +35,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(12);
+    expect(fighter.weaponInventory).toHaveLength(13);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -668,7 +668,7 @@ describe("combat system", () => {
     combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 1200, heldMs: 0, isNewPress: true });
     combat.update(1.1, [player]);
     expect(combat.getWeaponRuntimeState("sniper").steady).toBeGreaterThan(0.9);
-    expect(combat.getCombatant("local")?.statuses.find((status) => status.id === "steady")?.duration).toBeGreaterThan(13);
+    expect(combat.getCombatant("local")?.statuses.find((status) => status.id === "steady")?.duration).toBeGreaterThan(28);
     const sniper = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 2400, heldMs: 0, isNewPress: true });
     expect(sniper.kind).toBe("fired");
     expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(false);
@@ -760,9 +760,15 @@ describe("combat system", () => {
     combat.useSecondary({ ownerId: "local", player: grounded, aim: { x: 1, y: 0.15 }, now: 100, heldMs: 0, isNewPress: true });
     combat.getPlayerInventory().cooldowns.knife = 0;
     combat.useSecondary({ ownerId: "local", player: airborne, aim: { x: 1, y: 0.15 }, now: 300, heldMs: 0, isNewPress: true });
+    const firstAirKick = airborne.velocityX;
+    combat.getPlayerInventory().cooldowns.knife = 0;
+    combat.useSecondary({ ownerId: "local", player: airborne, aim: { x: 1, y: 0.15 }, now: 520, heldMs: 0, isNewPress: true });
 
     expect(Math.abs(airborne.velocityX)).toBeGreaterThan(Math.abs(grounded.velocityX) * 1.5);
     expect(airborne.velocityY).toBeLessThan(grounded.velocityY);
+    expect(airborne.velocityX).toBeLessThan(firstAirKick);
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("knife");
+    expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "knife")).toBe(false);
   });
 
   it("damages overlapping targets with equipped knife contact on a short per-target cooldown", () => {
@@ -896,7 +902,57 @@ describe("combat system", () => {
     expect(combat.getSnapshot().effects.some((effect) => effect.label === "Growth KO")).toBe(true);
   });
 
-  it("summons a giant lightning primary strike that self-damages and grants a 60 second attack buff", () => {
+  it("adds axe as a heavy swing and throwing hybrid for online combatants", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("axe");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 70,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const swing = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(swing.kind).toBe("hitbox");
+    combat.update(1 / 60, [player]);
+    const target = combat.getCombatant("peer-b")!;
+    expect(target.hp).toBeLessThanOrEqual(80);
+    expect(target.velocityX).toBeGreaterThan(500);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-swing", "axe-hit"]));
+
+    target.hp = 100;
+    target.invulnerable = 0;
+    target.x = 220;
+    target.y = playerState.y;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    player.grounded = false;
+    player.velocityX = 0;
+    player.velocityY = 0;
+    combat.getPlayerInventory().cooldowns.axe = 0;
+    const thrown = combat.useSecondary({ ownerId: "peer-a", player, aim: { x: 1, y: 0.06 }, now: 500, heldMs: 0, isNewPress: true });
+    expect(thrown.kind).toBe("fired");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("axe");
+    expect(player.velocityX).toBeLessThan(-180);
+    expect(player.velocityY).toBeLessThan(-40);
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "axe" && projectile.label === "Axe throw")).toBe(true);
+
+    combat.update(0.2, [player]);
+    expect(target.hp).toBeLessThanOrEqual(80);
+    expect(target.velocityX).toBeGreaterThan(550);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-throw", "axe-hit"]));
+    expect(combat.getSnapshot().droppedWeapons.filter((dropped) => dropped.weaponId === "axe")).toHaveLength(0);
+  });
+
+  it("casts directional lightning strikes and only empowers upward held self-charge", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     const player = { ...playerState };
@@ -904,30 +960,45 @@ describe("combat system", () => {
 
     combat.equip("lightning-rod");
     const rodDummy = combat.spawnTrainingDummy({ x: player.x + 130, y: player.y });
-    const charged = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    const sideways = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 900, isNewPress: true });
     const local = combat.getCombatant("local")!;
-    expect(charged.kind).toBe("utility");
-    expect(local.hp).toBeLessThanOrEqual(75);
-    expect(local.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "empowered", duration: expect.closeTo(60, 0) })]));
-    expect(combat.getLightningState("local").empoweredTimer).toBeGreaterThanOrEqual(59);
-    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "lightning" && effect.ty < effect.y - 300)).toBe(true);
+    expect(sideways.kind).toBe("utility");
+    expect(local.hp).toBe(100);
+    expect(local.statuses.some((status) => status.id === "empowered")).toBe(false);
+    expect(combat.getLightningState("local").empoweredTimer).toBe(0);
+    expect(combat.getCombatant(rodDummy.id)?.hp).toBeLessThan(100);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "lightning" && effect.tx > effect.x + 300)).toBe(true);
     expect(combat.consumeSounds()).toContain("lightning-strike");
 
-    const previousHp = combat.getCombatant(rodDummy.id)!.hp;
-    combat.applyDamage({
-      sourceId: "local",
-      targetId: rodDummy.id,
-      damage: 10,
-      knockback: { x: 100, y: 0 },
-      stun: 0.1,
-      label: "Buffed Test",
-      weaponId: "lightning-rod",
-    });
-    expect(combat.getCombatant(rodDummy.id)!.hp).toBeLessThanOrEqual(previousHp - 12);
+    const shortCombat = new CombatSystem({ mode: "offline" });
+    shortCombat.start(createDefaultInventory());
+    shortCombat.equip("lightning-rod");
+    const shortPlayer = { ...playerState };
+    shortCombat.syncLocalPlayer(shortPlayer, "Tester", "#18dff5");
+    shortCombat.usePrimary({ ownerId: "local", player: shortPlayer, aim: { x: 0, y: -1 }, now: 200, heldMs: 350, isNewPress: true });
+    const shortLocal = shortCombat.getCombatant("local")!;
+    const shortDamage = 100 - shortLocal.hp;
+    const shortDuration = shortCombat.getLightningState("local").empoweredTimer;
 
-    combat.update(60.1, [player]);
-    expect(combat.getLightningState("local").empoweredTimer).toBe(0);
-    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "empowered")).toBe(false);
+    const longCombat = new CombatSystem({ mode: "offline" });
+    longCombat.start(createDefaultInventory());
+    longCombat.equip("lightning-rod");
+    const longPlayer = { ...playerState };
+    longCombat.syncLocalPlayer(longPlayer, "Tester", "#18dff5");
+    longCombat.usePrimary({ ownerId: "local", player: longPlayer, aim: { x: 0, y: -1 }, now: 200, heldMs: 2400, isNewPress: true });
+    const longLocal = longCombat.getCombatant("local")!;
+    const longDamage = 100 - longLocal.hp;
+    const longDuration = longCombat.getLightningState("local").empoweredTimer;
+
+    expect(shortLocal.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "empowered", duration: expect.closeTo(shortDuration, 1) })]));
+    expect(longDamage).toBeGreaterThan(shortDamage + 10);
+    expect(longDuration).toBeGreaterThan(shortDuration + 10);
+    expect(longDuration).toBeLessThan(60);
+    expect(longCombat.getSnapshot().effects.some((effect) => effect.kind === "lightning" && effect.ty < effect.y - 300)).toBe(true);
+
+    longCombat.update(longDuration + 0.1, [longPlayer]);
+    expect(longCombat.getLightningState("local").empoweredTimer).toBe(0);
+    expect(longCombat.getCombatant("local")?.statuses.some((status) => status.id === "empowered")).toBe(false);
 
     const target = combat.getCombatant(rodDummy.id);
     if (target) {
@@ -944,5 +1015,31 @@ describe("combat system", () => {
     combat.update(1 / 60, [player]);
     expect(combat.getCombatant(rodDummy.id)?.hp).toBeLessThan(100);
     expect(combat.getSnapshot().effects.some((effect) => effect.kind === "shockwave" || effect.kind === "slam")).toBe(true);
+  });
+
+  it("auto-reveals sniper steady after thirty seconds and reveals immediately on shots", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("sniper");
+    const shooter = { ...playerState };
+    combat.syncLocalPlayer(shooter, "Tester", "#18dff5");
+
+    combat.useSecondary({ ownerId: "local", player: shooter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(combat.getCombatant("local")?.statuses.find((status) => status.id === "steady")?.duration).toBeCloseTo(30, 0);
+
+    combat.update(29.8, [shooter]);
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(true);
+    combat.update(0.3, [shooter]);
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(false);
+    expect(combat.consumeSounds()).toContain("sniper-reveal");
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "Reveal")).toBe(true);
+
+    combat.getPlayerInventory().cooldowns.sniper = 0;
+    combat.getPlayerInventory().ammo.sniper!.magazine = 1;
+    combat.useSecondary({ ownerId: "local", player: shooter, aim: { x: 1, y: 0 }, now: 40000, heldMs: 0, isNewPress: true });
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(true);
+    combat.usePrimary({ ownerId: "local", player: shooter, aim: { x: 1, y: 0 }, now: 40200, heldMs: 0, isNewPress: true });
+    expect(combat.getCombatant("local")?.statuses.some((status) => status.id === "steady")).toBe(false);
+    expect(combat.consumeSounds()).toContain("sniper-reveal");
   });
 });

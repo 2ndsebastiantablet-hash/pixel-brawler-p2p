@@ -115,8 +115,9 @@ const knifeContactCooldown = 0.42;
 const macheteHitGrowth = 12;
 const macheteKoGrowth = 60;
 const macheteKoDamageBonus = 3;
-const lightningBuffDuration = 60;
-const lightningSelfDamage = 28;
+const lightningStrikeReach = 620;
+const lightningDefaultEmpoweredDuration = 9;
+const lightningMaxHoldSeconds = 4.2;
 const empoweredDamageScale = 1.22;
 const empoweredKnockbackScale = 1.18;
 
@@ -319,6 +320,9 @@ export class CombatSystem {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
     if (weapon.id === "pistol" || weapon.id === "knife") {
       return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, weapon.id === "pistol" && this.inventory.ammo.pistol?.magazine === 0);
+    }
+    if (weapon.id === "axe") {
+      return this.throwAxe(context);
     }
     if (weapon.id === "teleport-ball") {
       return this.cancelTeleport(context.ownerId, context.player, context.now);
@@ -637,10 +641,11 @@ export class CombatSystem {
         }
       }
     }
+    const lightningPrimary = event.weaponId === "lightning-rod" && (event.label === "Sky Strike" || event.label === "Giant Strike");
     this.addEffect(
       event.action === "reload"
         ? "reload"
-        : event.weaponId === "lightning-rod" && event.label === "Sky Strike"
+        : lightningPrimary
           ? "lightning"
           : weapon.kind === "beam"
             ? "laser"
@@ -649,8 +654,8 @@ export class CombatSystem {
               : "tracer",
       event.x,
       event.y,
-      event.x + event.ax * weapon.primary.range,
-      event.weaponId === "lightning-rod" && event.label === "Sky Strike" ? event.y - 560 : event.y + event.ay * weapon.primary.range,
+      lightningPrimary ? event.x + event.ax * lightningStrikeReach : event.x + event.ax * weapon.primary.range,
+      lightningPrimary ? event.y + event.ay * lightningStrikeReach : event.y + event.ay * weapon.primary.range,
       event.weaponId === "machete" ? macheteColor(this.getMacheteState(event.ownerId).redness) : colorForWeapon(event.weaponId),
       event.label,
     );
@@ -734,6 +739,9 @@ export class CombatSystem {
     }
     if (weapon.id === "machete") {
       this.queueSound(slot === "secondary" ? "machete-chop" : "machete-slash");
+    }
+    if (weapon.id === "axe") {
+      this.queueSound("axe-swing");
     }
 
     this.spawnMeleeHitbox(context, chargedProfile, meleeLabelFor(weapon.id, slot, weapon.name));
@@ -895,6 +903,22 @@ export class CombatSystem {
       };
     }
 
+    if (weaponId === "axe") {
+      const slideCleave = context.player.sliding || context.player.lowSliding || context.player.action === "slide" || context.player.action === "lowSlide";
+      const airChop = !context.player.grounded;
+      const fallingChop = airChop && (context.player.velocityY > 120 || context.aim.y > 0.45);
+      if (airChop && slot === "primary") {
+        context.player.velocityY = Math.max(context.player.velocityY, fallingChop ? 360 : 160);
+      }
+      return {
+        ...profile,
+        damage: profile.damage + (fallingChop ? 5 : 0),
+        range: profile.range + (slideCleave ? 18 : 0),
+        knockback: profile.knockback * (1 + (slideCleave ? 0.24 : 0) + (fallingChop ? 0.16 : 0)),
+        stun: profile.stun + (fallingChop ? 0.07 : slideCleave ? 0.04 : 0),
+      };
+    }
+
     return profile;
   }
 
@@ -992,6 +1016,12 @@ export class CombatSystem {
       return { kind: "blocked", weaponId, label: "No target" };
     }
 
+    const aim = normalize(context.aim);
+    const center = this.muzzle(context.player);
+    const source = {
+      x: center.x + aim.x * lightningStrikeReach,
+      y: center.y + aim.y * lightningStrikeReach,
+    };
     const state = this.lightning.get(context.ownerId) ?? {
       chargeTimer: 0,
       empoweredTimer: 0,
@@ -999,34 +1029,45 @@ export class CombatSystem {
       pulseTimer: 0,
       shockCooldowns: new Map<string, number>(),
     };
+    const upwardSelfCharge = aim.y < -0.86 && Math.abs(aim.x) < 0.36;
+    const heldSeconds = clamp(context.heldMs / 1000, 0.16, lightningMaxHoldSeconds);
     state.chargeTimer = 0;
-    state.empoweredTimer = lightningBuffDuration;
-    state.strain = Math.min(1.8, state.strain + 0.42);
+    state.strain = Math.min(1.8, state.strain + (upwardSelfCharge ? 0.18 + heldSeconds * 0.18 : 0.16));
     state.pulseTimer = 0;
     this.lightning.set(context.ownerId, state);
-    this.inventory.cooldowns[weaponId] = 1.2;
+    this.inventory.cooldowns[weaponId] = upwardSelfCharge ? 0.82 + heldSeconds * 0.12 : 0.86;
 
-    const center = this.muzzle(context.player);
-    const previousInvulnerable = owner.invulnerable;
-    owner.invulnerable = 0;
-    this.applyDamage({
-      sourceId: context.ownerId,
-      targetId: context.ownerId,
-      damage: lightningSelfDamage,
-      knockback: { x: 0, y: -210 },
-      stun: 0.16,
-      label: "SKY CHARGE",
-      status: "empowered",
-      weaponId,
-    });
-    owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
-    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: lightningBuffDuration, stacks: 1 });
+    if (upwardSelfCharge) {
+      const empoweredDuration = lightningDurationForHold(heldSeconds);
+      const selfDamage = lightningSelfDamageForHold(heldSeconds);
+      state.empoweredTimer = empoweredDuration;
+      const previousInvulnerable = owner.invulnerable;
+      owner.invulnerable = 0;
+      this.applyDamage({
+        sourceId: context.ownerId,
+        targetId: context.ownerId,
+        damage: selfDamage,
+        knockback: { x: 0, y: -180 - heldSeconds * 22 },
+        stun: 0.08 + heldSeconds * 0.035,
+        label: "SKY CHARGE",
+        weaponId,
+      });
+      owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
+      owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: empoweredDuration, stacks: 1 });
+      this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 70 - heldSeconds * 18, "#ffd84d", "Energized");
+      if (heldSeconds > 1.25) {
+        this.addEffect("shockwave", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 36, "#fff4a8", "Charge");
+      }
+      this.queueSound("lightning-pulse");
+    } else {
+      state.empoweredTimer = 0;
+      this.clearStatus(context.ownerId, "empowered");
+    }
 
-    this.addEffect("lightning", center.x, center.y + 12, center.x, center.y - 560, "#fff4a8", "Sky Strike");
-    this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 70, "#ffd84d", "Energized");
+    this.addEffect("lightning", center.x, center.y + 12, source.x, source.y, upwardSelfCharge ? "#fff4a8" : "#ffd84d", "Sky Strike");
+    this.applyLightningLineDamage(context.ownerId, source, center, upwardSelfCharge ? 18 + Math.round(heldSeconds * 2) : 24, upwardSelfCharge ? 360 : 430, upwardSelfCharge ? 0.24 : 0.3, "Sky Strike");
     this.queueSound("lightning-strike");
-    this.queueSound("lightning-pulse");
-    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, { x: 0, y: -1 }, "Sky Strike", context.now));
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, aim, "Sky Strike", context.now));
     return { kind: "utility", weaponId, label: "Sky Strike" };
   }
 
@@ -1060,25 +1101,26 @@ export class CombatSystem {
     if (!owner) {
       return;
     }
+    const empoweredDuration = lightningDefaultEmpoweredDuration + state.strain * 8;
+    const selfDamage = Math.round(12 + state.strain * 12);
     const previousInvulnerable = owner.invulnerable;
     owner.invulnerable = 0;
     this.applyDamage({
       sourceId: ownerId,
       targetId: ownerId,
-      damage: lightningSelfDamage,
+      damage: selfDamage,
       knockback: { x: 0, y: -140 },
       stun: state.strain > 0.95 ? 0.35 : 0.05,
       label: "SELF STRIKE",
-      status: "empowered",
       weaponId: "lightning-rod",
     });
     owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
-    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: lightningBuffDuration, stacks: 1 });
+    owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: empoweredDuration, stacks: 1 });
     if (state.strain > 1) {
       owner.statuses = upsertStatusEffect(owner.statuses, { id: "daze", label: "Strained", duration: 0.55, stacks: 1 });
       owner.hitstun = Math.max(owner.hitstun, 0.55);
     }
-    state.empoweredTimer = lightningBuffDuration;
+    state.empoweredTimer = empoweredDuration;
     state.pulseTimer = 0;
     this.addEffect("lightning", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 170, "#ffd84d", "Strike");
     this.queueSound("lightning-strike");
@@ -1249,6 +1291,44 @@ export class CombatSystem {
     this.addEffect(effect, x, y, x, y, effect === "teleport" ? "#b096ff" : "#ff8f3d", label);
   }
 
+  private applyLightningLineDamage(sourceId: string, from: Vec2, to: Vec2, damage: number, knockback: number, stun: number, label: string): void {
+    const strike = { x: to.x - from.x, y: to.y - from.y };
+    const lengthSquared = Math.max(1, strike.x * strike.x + strike.y * strike.y);
+    const strikeDirection = normalize(strike);
+    for (const target of this.combatants.values()) {
+      if (target.id === sourceId || target.respawnTimer > 0) {
+        continue;
+      }
+      const tx = target.x + target.width / 2;
+      const ty = target.y + target.height / 2;
+      const t = clamp(((tx - from.x) * strike.x + (ty - from.y) * strike.y) / lengthSquared, 0, 1);
+      const closest = {
+        x: from.x + strike.x * t,
+        y: from.y + strike.y * t,
+      };
+      const distance = Math.hypot(tx - closest.x, ty - closest.y);
+      if (distance > 46) {
+        continue;
+      }
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId,
+        targetId: target.id,
+        damage,
+        knockback: { x: strikeDirection.x * knockback, y: strikeDirection.y * knockback - 130 },
+        stun,
+        label,
+        status: "shock",
+        weaponId: "lightning-rod",
+        hitY: closest.y,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+      }
+    }
+  }
+
   private applyBodyHit(
     sourceId: string,
     target: Combatant,
@@ -1379,6 +1459,7 @@ export class CombatSystem {
     const isWhip = weaponId === "whip";
     const isKnife = weaponId === "knife";
     const isMachete = weaponId === "machete";
+    const isAxe = weaponId === "axe";
     const isMacheteChop = isMachete && label === "Machete Chop";
     const isHammer = weaponId === "sledgehammer";
     const macheteState = isMachete ? this.getMacheteState(context.ownerId) : undefined;
@@ -1392,9 +1473,11 @@ export class CombatSystem {
         ? Math.max(24, (profile.radius ?? 14) * 2.2)
         : isMachete
           ? Math.max(40, (profile.radius ?? 20) * (isMacheteChop ? 2.6 : 2.1))
-          : Math.max(22, (profile.radius ?? 14) * 2);
+          : isAxe
+            ? Math.max(42, (profile.radius ?? 22) * 2.2)
+            : Math.max(22, (profile.radius ?? 14) * 2);
     const x = aim.x >= 0 ? center.x : center.x - width;
-    const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : isMacheteChop ? 32 : 18);
+    const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : isMacheteChop ? 32 : isAxe ? 24 : 18);
     const hitLabel = isKnife ? (knifeStep === 3 ? "Knife Stab" : "Knife Slash") : lowTrip ? "Low Whip" : label;
     this.hitboxes.push({
       id: this.makeId("hit"),
@@ -1415,14 +1498,17 @@ export class CombatSystem {
       label: hitLabel,
       color: attackColor,
       status: lowTrip ? "tripped" : profile.status,
-      sweetSpot: isWhip || isMachete ? "tip" : undefined,
+      sweetSpot: isWhip || isMachete || isAxe ? "tip" : undefined,
       lowTrip,
-      heavy: isHammer || isMacheteChop,
+      heavy: isHammer || isMacheteChop || isAxe,
       hits: [],
     });
     this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, attackColor, hitLabel);
     if (isMacheteChop) {
       this.addEffect("spark", x + width * 0.5, y + height, x + width * 0.5, y + height + 18, attackColor, "Chop");
+    }
+    if (isAxe) {
+      this.addEffect("spark", x + width * 0.72, y + height * 0.5, x + width * 0.72, y + height * 0.5 + 18, attackColor, "Heavy");
     }
   }
 
@@ -1449,11 +1535,60 @@ export class CombatSystem {
     this.addEffect(label === "Lightning" ? "lightning" : "shockwave", center.x, center.y, center.x, center.y - profile.range, colorForWeapon(this.inventory.equippedWeapon), label);
   }
 
+  private throwAxe(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "axe";
+    const weapon = weaponRegistry.get(weaponId);
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Throw cooldown" };
+    }
+    const aim = normalize(context.aim);
+    const start = this.muzzle(context.player);
+    const slideThrow = context.player.sliding || context.player.lowSliding || context.player.action === "slide" || context.player.action === "lowSlide";
+    const airThrow = !context.player.grounded;
+    const fallingThrow = airThrow && context.player.velocityY > 80;
+    const speedScale = slideThrow ? 1.12 : 1;
+    const knockbackScale = slideThrow ? 1.24 : airThrow ? 1.08 : 1;
+    this.inventory.cooldowns[weaponId] = weapon.secondary.cooldown;
+    this.applySelfRecoil(context.player, aim, airThrow ? 112 : 84, airThrow ? 28 : 18);
+    this.projectiles.push({
+      id: this.makeId("throw"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: start.x,
+      y: start.y,
+      vx: aim.x * weapon.throw.speed * speedScale,
+      vy: aim.y * weapon.throw.speed * speedScale - 70,
+      radius: weapon.secondary.radius ?? 11,
+      damage: weapon.throw.damage + (fallingThrow ? 3 : 0),
+      knockback: { x: aim.x * weapon.throw.knockback * knockbackScale, y: aim.y * weapon.throw.knockback - 95 },
+      stun: weapon.throw.stun + (slideThrow ? 0.04 : 0),
+      age: 0,
+      lifetime: weapon.secondary.range / Math.max(weapon.throw.speed, 1),
+      gravity: weapon.secondary.gravity ?? 340,
+      bounces: weapon.secondary.bounces ?? 1,
+      pierce: 0,
+      label: "Axe throw",
+      color: colorForWeapon(weaponId),
+      trailColor: colorForWeapon(weaponId),
+      originX: start.x,
+      originY: start.y,
+      status: weapon.secondary.status,
+      hits: [],
+    });
+    this.addEffect("tracer", start.x, start.y, start.x + aim.x * 92, start.y + aim.y * 92, colorForWeapon(weaponId), "Throw");
+    this.queueSound("axe-throw");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "throw", start, aim, "Throw", context.now));
+    return { kind: "fired", weaponId, label: "Throw" };
+  }
+
   private throwCurrentWeapon(ownerId: string, player: PlayerPhysicsState, aimInput: Vec2, now: number, emptyToss: boolean): WeaponUseResult {
     const weaponId = this.inventory.equippedWeapon;
     const weapon = weaponRegistry.get(weaponId);
     const aim = normalize(aimInput);
     const start = this.muzzle(player);
+    if (weaponId === "axe") {
+      return this.throwAxe({ ownerId, player, aim: aimInput, now, heldMs: 0, isNewPress: true });
+    }
     if (weaponId === "knife") {
       const cooldown = this.inventory.cooldowns.knife ?? 0;
       if (cooldown > 0) {
@@ -1650,10 +1785,10 @@ export class CombatSystem {
           projectile.vy *= COMBAT_TUNING.projectiles.bounceVelocityMultiplier;
           projectile.vx *= COMBAT_TUNING.projectiles.bounceFriction;
           projectile.bounces -= 1;
-          if (projectile.weaponId === "slingshot" || projectile.weaponId === "revolver") {
+          if (projectile.weaponId === "slingshot" || projectile.weaponId === "revolver" || projectile.weaponId === "axe") {
             projectile.damage = Math.max(1, Math.round(projectile.damage * 0.8));
-            this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), projectile.weaponId === "revolver" ? "Ricochet" : "Bounce");
-            this.queueSound(projectile.weaponId === "slingshot" ? "slingshot-bounce" : "revolver-shot");
+            this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.04, projectile.y - 12, colorForWeapon(projectile.weaponId), projectile.weaponId === "revolver" ? "Ricochet" : projectile.weaponId === "axe" ? "Axe Bounce" : "Bounce");
+            this.queueSound(projectile.weaponId === "slingshot" ? "slingshot-bounce" : projectile.weaponId === "axe" ? "axe-impact" : "revolver-shot");
           }
         } else if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
           this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
@@ -1724,6 +1859,11 @@ export class CombatSystem {
               this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
               this.queueSound("knife-hit");
             }
+            if (projectile.weaponId === "axe" && projectile.id.startsWith("throw")) {
+              this.addEffect("spark", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 30, projectile.y - 10, colorForWeapon("axe"), "Heavy Hit");
+              this.queueSound("axe-hit");
+              this.queueSound("axe-impact");
+            }
             if (projectile.weaponId === "teleport-ball") {
               continue;
             } else if (projectile.weaponId === "knife" && projectile.id.startsWith("throw")) {
@@ -1760,8 +1900,10 @@ export class CombatSystem {
           const rodHit = hitbox.weaponId === "lightning-rod";
           const knifeHit = hitbox.weaponId === "knife";
           const macheteHit = hitbox.weaponId === "machete";
+          const axeHit = hitbox.weaponId === "axe";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const macheteTipHit = macheteHit && isWhipTipHit(hitbox, target);
+          const axeTipHit = axeHit && isWhipTipHit(hitbox, target);
           const combo = whipHit ? this.registerWhipHit(target.id) : { count: 0, pulled: false };
           const rodEmpowered = rodHit && owner?.statuses.some((status) => status.id === "empowered");
           const backstab = knifeHit && owner ? isBackstab(owner, target, hitbox.knockback.x) : false;
@@ -1779,7 +1921,9 @@ export class CombatSystem {
                 ? hitbox.damage + 5
                 : macheteTipHit
                   ? hitbox.damage + 4
-                  : hitbox.damage;
+                  : axeTipHit
+                    ? hitbox.damage + 5
+                    : hitbox.damage;
           const stun = whipHit && tipHit
             ? hitbox.stun + 0.14
             : rodEmpowered
@@ -1788,7 +1932,9 @@ export class CombatSystem {
                 ? hitbox.stun + 0.08
                 : macheteTipHit
                   ? hitbox.stun + 0.05
-                  : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
+                  : axeTipHit
+                    ? hitbox.stun + 0.07
+                    : hitbox.lowTrip ? Math.max(hitbox.stun, 0.32) : hitbox.stun;
           const hitY = clamp(hitbox.y + hitbox.height / 2, target.y, target.y + target.height - 1);
           const hit = this.applyDamage({
             sourceId: hitbox.ownerId,
@@ -1796,7 +1942,7 @@ export class CombatSystem {
             damage,
             knockback: pull ?? (rodHit ? { x: hitbox.knockback.x * 1.28, y: hitbox.knockback.y - 75 } : hitbox.knockback),
             stun,
-            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : knifeHit && backstab ? `${hitbox.label} Backstab` : macheteTipHit ? "Tip Cleave" : hitbox.label,
+            label: combo.pulled ? "Whip Pull" : tipHit ? "Tip Crack" : rodHit ? "Electrocute" : knifeHit && backstab ? `${hitbox.label} Backstab` : macheteTipHit ? "Tip Cleave" : axeTipHit ? "Axe Head" : hitbox.label,
             status: rodHit ? "shock" : hitbox.lowTrip ? "tripped" : hitbox.status,
             weaponId: hitbox.weaponId,
             hitY,
@@ -1818,6 +1964,11 @@ export class CombatSystem {
               const growth = this.growMachete(hitbox.ownerId, hit.remainingHp <= 0);
               this.queueSound("machete-hit");
               this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 26, hitY, macheteColor(growth.redness), hit.remainingHp <= 0 ? "Growth KO" : macheteTipHit ? "Tip" : "Cleave");
+            }
+            if (axeHit) {
+              this.queueSound("axe-hit");
+              this.queueSound("axe-impact");
+              this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 30, hitY, colorForWeapon(hitbox.weaponId), axeTipHit ? "Head" : "Chop");
             }
             if (rodHit) {
               this.queueSound("lightning-shock");
@@ -2149,7 +2300,7 @@ export class CombatSystem {
       tx,
       ty,
       age: 0,
-      duration: kind === "lightning" ? 0.42 : kind === "shockwave" ? 0.36 : 0.24,
+      duration: kind === "lightning" ? 0.42 : kind === "shockwave" ? 0.36 : kind === "aura" ? 0.34 : 0.24,
       color,
       label,
     });
@@ -2293,6 +2444,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#d8f0ff";
     case "machete":
       return "#9ee7c3";
+    case "axe":
+      return "#ffb35c";
     default:
       return "#ffffff";
   }
@@ -2308,6 +2461,16 @@ function macheteColor(redness: number): string {
   const g = Math.round(231 + (70 - 231) * clamped);
   const b = Math.round(195 + (88 - 195) * clamped);
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+function lightningDurationForHold(heldSeconds: number): number {
+  const charge = clamp(heldSeconds, 0.16, lightningMaxHoldSeconds);
+  return lightningDefaultEmpoweredDuration + charge * 11.5;
+}
+
+function lightningSelfDamageForHold(heldSeconds: number): number {
+  const charge = clamp(heldSeconds, 0.16, lightningMaxHoldSeconds);
+  return Math.round(7 + charge * 10.5);
 }
 
 function dryFireSoundFor(id: WeaponId): SoundId {
@@ -2339,6 +2502,8 @@ function projectileLabelFor(id: WeaponId, slot: "primary" | "secondary"): string
       return "Sniper Shot";
     case "knife":
       return "Knife throw";
+    case "axe":
+      return "Axe throw";
     default:
       return weaponRegistry.get(id).name;
   }
@@ -2347,6 +2512,9 @@ function projectileLabelFor(id: WeaponId, slot: "primary" | "secondary"): string
 function meleeLabelFor(id: WeaponId, slot: "primary" | "secondary", fallback: string): string {
   if (id === "machete") {
     return slot === "secondary" ? "Machete Chop" : "Machete Slash";
+  }
+  if (id === "axe") {
+    return slot === "secondary" ? "Axe Throw" : "Axe Swing";
   }
   return slot === "secondary" ? "Heavy" : fallback;
 }
@@ -2364,7 +2532,7 @@ function createStatus(id: StatusEffectId): StatusEffect {
     case "tripped":
       return { id, label: "Tripped", duration: 0.7, stacks: 1 };
     case "empowered":
-      return { id, label: "Empowered", duration: lightningBuffDuration, stacks: 1 };
+      return { id, label: "Empowered", duration: lightningDefaultEmpoweredDuration, stacks: 1 };
     case "marked":
       return { id, label: "Marked", duration: 4, stacks: 1 };
     case "steady":

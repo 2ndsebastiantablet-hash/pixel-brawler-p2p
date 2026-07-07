@@ -14,10 +14,11 @@ const enabledWeapons = [
   "sniper",
   "knife",
   "machete",
+  "axe",
 ] as const;
 
 describe("weapon registry", () => {
-  it("enables the first twelve polished weapons with movement weight metadata", () => {
+  it("enables the first thirteen polished weapons with movement weight metadata", () => {
     expect(WEAPON_IDS).toEqual([
       "pistol",
       "whip",
@@ -31,6 +32,7 @@ describe("weapon registry", () => {
       "sniper",
       "knife",
       "machete",
+      "axe",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -64,6 +66,8 @@ describe("weapon registry", () => {
     expect(inventory.charge.sniper?.maxCharge).toBe(1);
     expect(inventory.ammo.knife).toBeUndefined();
     expect(inventory.ammo.machete).toBeUndefined();
+    expect(inventory.ammo.axe).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
+    expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
   });
 });

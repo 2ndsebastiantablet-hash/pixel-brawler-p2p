@@ -46,6 +46,7 @@ export const COMBAT_TUNING = {
     sniper: { label: "Heavy", moveSpeedMultiplier: 0.76, accelerationMultiplier: 0.68, airAccelerationMultiplier: 0.68, jumpMultiplier: 0.86, slideMultiplier: 0.74 },
     knife: { label: "Light", moveSpeedMultiplier: 1.08, accelerationMultiplier: 1.12, airAccelerationMultiplier: 1.1, jumpMultiplier: 1.02, slideMultiplier: 1.08 },
     machete: { label: "Heavy", moveSpeedMultiplier: 0.88, accelerationMultiplier: 0.82, airAccelerationMultiplier: 0.84, jumpMultiplier: 0.92, slideMultiplier: 0.86 },
+    axe: { label: "Heavy", moveSpeedMultiplier: 0.86, accelerationMultiplier: 0.8, airAccelerationMultiplier: 0.82, jumpMultiplier: 0.91, slideMultiplier: 0.84 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,
   laser: {
     chargeDamageScale: 3.4,
@@ -73,7 +74,7 @@ export const COMBAT_TUNING = {
   },
   sniper: {
     steadySeconds: 1,
-    invisibilitySeconds: 15,
+    invisibilitySeconds: 30,
     steadyDamageResistance: 0.18,
     legShotSlowDuration: 10,
     legShotMoveMultiplier: 0.52,

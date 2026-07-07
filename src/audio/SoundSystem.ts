@@ -73,6 +73,10 @@ export type SoundId =
   | "machete-slash"
   | "machete-chop"
   | "machete-hit"
+  | "axe-swing"
+  | "axe-throw"
+  | "axe-hit"
+  | "axe-impact"
   | "respawn";
 
 interface SoundShape {
@@ -154,6 +158,10 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "machete-slash": { category: "weapon", frequency: 410, endFrequency: 170, duration: 0.105, noise: true, minInterval: 0.08 },
   "machete-chop": { category: "heavy", frequency: 280, endFrequency: 75, duration: 0.17, noise: true, minInterval: 0.12 },
   "machete-hit": { category: "combat", frequency: 260, endFrequency: 110, duration: 0.09, noise: true, minInterval: 0.06 },
+  "axe-swing": { category: "heavy", frequency: 230, endFrequency: 86, duration: 0.16, noise: true, minInterval: 0.12 },
+  "axe-throw": { category: "heavy", frequency: 320, endFrequency: 96, duration: 0.15, noise: true, minInterval: 0.12 },
+  "axe-hit": { category: "combat", frequency: 210, endFrequency: 72, duration: 0.11, noise: true, minInterval: 0.07 },
+  "axe-impact": { category: "heavy", frequency: 120, endFrequency: 44, duration: 0.18, noise: true, minInterval: 0.12 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

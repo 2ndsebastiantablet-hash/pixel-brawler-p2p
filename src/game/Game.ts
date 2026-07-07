@@ -455,6 +455,20 @@ export class Game {
           isNewPress: true,
         }), "primary");
       }
+    } else if (equipped === "lightning-rod") {
+      if (input.primaryHeld) {
+        this.attackVisual = { weaponId: "lightning-rod", kind: "primary", timer: 0.12 };
+      }
+      if (input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: true,
+        }), "primary");
+      }
     } else if (equipped === "minigun") {
       if (input.secondaryHeld || input.secondaryPressed) {
         this.recordAttack(this.combat.useSecondary({
@@ -574,6 +588,7 @@ export class Game {
         this.shakeTimer = Math.max(this.shakeTimer, 0.1);
         break;
       case "machete-chop":
+      case "axe-impact":
         this.shakeTimer = Math.max(this.shakeTimer, 0.08);
         break;
     }
@@ -874,6 +889,21 @@ export class Game {
           : chop ? "rgba(158, 231, 195, 0.5)" : "rgba(158, 231, 195, 0.34)";
         this.pixelRect(ctx, x + facing * 24, y - (chop ? 22 : 16), facing * (chop ? 58 + visualGrowth : 44 + visualGrowth), chop ? 44 : 30);
       }
+    } else if (weaponId === "axe") {
+      const reach = active > 0 ? 42 : 14;
+      const x = Math.round(centerX + facing * (16 + reach));
+      const y = Math.round(centerY - 4 + aim.y * 13);
+      ctx.fillStyle = "#5d3f29";
+      this.pixelRect(ctx, x - facing * 30, y + 3, facing * 42, 8);
+      ctx.fillStyle = "#ffb35c";
+      this.pixelRect(ctx, x, y - 15, facing * 18, 30);
+      this.pixelRect(ctx, x + facing * 12, y - 9, facing * 16, 18);
+      ctx.fillStyle = "#fff0c2";
+      this.pixelRect(ctx, x + facing * 21, y - 6, facing * 10, 12);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(255, 179, 92, 0.46)";
+        this.pixelRect(ctx, x + facing * 14, y - 24, facing * 54, 48);
+      }
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
       const lift = active > 0 || charge > 0.2 ? -34 - charge * 18 : -8;
@@ -976,6 +1006,14 @@ export class Game {
         ctx.fillRect(8, -11, 14, 22);
         ctx.fillStyle = "#344136";
         ctx.fillRect(16, -4, 14, 8);
+      } else if (projectile.weaponId === "axe") {
+        ctx.fillStyle = "#5d3f29";
+        ctx.fillRect(-18, -3, 30, 6);
+        ctx.fillStyle = "#ffb35c";
+        ctx.fillRect(8, -13, 14, 26);
+        ctx.fillRect(17, -8, 13, 16);
+        ctx.fillStyle = "#fff0c2";
+        ctx.fillRect(25, -5, 7, 10);
       } else {
         ctx.fillStyle = projectile.color;
         ctx.fillRect(-12, -4, 24, 8);
@@ -1086,6 +1124,14 @@ export class Game {
       ctx.fillRect(x + 8, y - 13, 15, 24);
       ctx.fillStyle = "#344136";
       ctx.fillRect(x + 16, y - 4, 14, 8);
+    } else if (dropped.weaponId === "axe") {
+      ctx.fillStyle = "#5d3f29";
+      ctx.fillRect(x - 20, y - 3, 34, 6);
+      ctx.fillStyle = "#ffb35c";
+      ctx.fillRect(x + 8, y - 14, 16, 28);
+      ctx.fillRect(x + 20, y - 8, 12, 16);
+      ctx.fillStyle = "#fff0c2";
+      ctx.fillRect(x + 28, y - 5, 6, 10);
     } else {
       ctx.fillRect(x - 12, y - 4, 24, 8);
       ctx.fillRect(x + 3, y + 3, 7, 9);
@@ -1140,13 +1186,17 @@ export class Game {
       ctx.fillRect(x + radius - 2, y - 2, 4, 12);
     } else if (effect.kind === "lightning") {
       ctx.beginPath();
-      const topY = Math.min(ty, y - 70);
-      const segments = Math.max(3, Math.min(12, Math.ceil((y - topY) / 54)));
-      ctx.moveTo(x, topY);
+      const dx = x - tx;
+      const dy = y - ty;
+      const length = Math.hypot(dx, dy) || 1;
+      const segments = Math.max(3, Math.min(14, Math.ceil(length / 54)));
+      const normalX = -dy / length;
+      const normalY = dx / length;
+      ctx.moveTo(tx, ty);
       for (let index = 1; index < segments; index += 1) {
         const t = index / segments;
         const jitter = (index % 2 === 0 ? -1 : 1) * (8 + (index % 3) * 5);
-        ctx.lineTo(x + jitter, topY + (y - topY) * t);
+        ctx.lineTo(tx + dx * t + normalX * jitter, ty + dy * t + normalY * jitter);
       }
       ctx.lineTo(x, y);
       ctx.stroke();
@@ -1367,6 +1417,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#d8f0ff";
     case "machete":
       return "#9ee7c3";
+    case "axe":
+      return "#ffb35c";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1409,10 +1461,12 @@ function weaponHudDetail(
       return "Infinite throw - recoil kick";
     case "machete":
       return `Growth +${Math.round(runtime.rangeBonus)} range - Power +${Math.round(runtime.damageBonus)}`;
+    case "axe":
+      return `Heavy swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
-      return `Sky strike buffs 60s - Chamber ${runtime.chamber.toFixed(1)}s`;
+      return `Aim strike - Hold up charge ${Math.round(Math.min(primaryHeldMs / 4200, 1) * 100)}%`;
     case "sledgehammer":
       return `Sledge charge ${Math.round(Math.min(primaryHeldMs / 900, 1) * 100)}% - shockwave`;
     default:
@@ -1429,7 +1483,7 @@ function weaponHelper(id: WeaponId): string {
     case "teleport-ball":
       return "Left throw - 3s teleport - Right cancel";
     case "lightning-rod":
-      return "Left sky strike - Right raise - Buff shocks touch";
+      return "Hold/release left aim strike - Up self-charge - Right raise";
     case "sledgehammer":
       return "Hold left charge - Air drop - Right shove";
     case "slingshot":
@@ -1446,6 +1500,8 @@ function weaponHelper(id: WeaponId): string {
       return "Infinite throws - Right/G kick back";
     case "machete":
       return "Grows on hit - KO adds power - Right chop";
+    case "axe":
+      return "Left heavy swing - Right/G spinning throw";
     default:
       return "";
   }

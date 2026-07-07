@@ -1,4 +1,5 @@
 import type { WeaponDefinition, WeaponId, WeaponInventoryState } from "./Weapon";
+import { axe } from "./weapons/Axe";
 import { knife } from "./weapons/Knife";
 import { laserBlaster } from "./weapons/LaserBlaster";
 import { lightningRod } from "./weapons/LightningRod";
@@ -26,6 +27,7 @@ export const WEAPON_IDS = [
   "sniper",
   "knife",
   "machete",
+  "axe",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -38,6 +40,7 @@ const ALL_WEAPON_IDS = [
   "sniper",
   "knife",
   "machete",
+  "axe",
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
@@ -53,6 +56,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   sniper,
   knife,
   machete,
+  axe,
   teleportBall,
   lightningRod,
   sledgeHammer,
