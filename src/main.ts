@@ -1,7 +1,7 @@
 import "./style.css";
 import "./game/combat/AxeReworkPatch";
 import { Game } from "./game/Game";
-import type { PeerInfo, SignalMessage } from "./net/NetTypes";
+import type { PeerInfo } from "./net/NetTypes";
 import { SignalingClient } from "./net/SignalingClient";
 import { WebRTCClient, type ConnectionStatus } from "./net/WebRTCClient";
 import { LobbyUI, type SessionView } from "./ui/LobbyUI";
