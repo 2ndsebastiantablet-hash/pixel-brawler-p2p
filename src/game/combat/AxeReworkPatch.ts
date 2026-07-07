@@ -1,35 +1,20 @@
-import { DEFAULT_PHYSICS, type PlayerPhysicsState } from "../Physics";
-import { CombatSystem, type Combatant } from "./CombatSystem";
+import type { PlayerPhysicsState } from "../Physics";
+import { CombatSystem } from "./CombatSystem";
 import type { Vec2 } from "./Damage";
 import type { Projectile } from "./Projectile";
 import type { WeaponUseContext, WeaponUseResult } from "./Weapon";
 import { weaponRegistry } from "./WeaponRegistry";
 
-type CombatInternals = CombatSystem & {
-  inventory: ReturnType<CombatSystem["getPlayerInventory"]>;
-  combatants: Map<string, Combatant>;
-  projectiles: Projectile[];
-  hitboxes: Array<Record<string, unknown>>;
-  effects: Array<Record<string, unknown>>;
-  recentEvents: Array<Record<string, unknown>>;
-  sounds: string[];
-  makeId?: (prefix: string) => string;
-  muzzle?: (player: PlayerPhysicsState) => Vec2;
-  addEffect?: (kind: string, x: number, y: number, tx: number, ty: number, color: string, label?: string) => void;
-  queueSound?: (sound: string) => void;
-  createEvent?: (ownerId: string, weaponId: string, action: string, pos: Vec2, aim: Vec2, label: string, now: number) => Record<string, unknown>;
-  applySelfRecoil?: (player: PlayerPhysicsState, aim: Vec2, horizontal: number, vertical: number) => void;
-};
+type LooseCombatSystem = CombatSystem & Record<string, any>;
+type LooseCombatant = Record<string, any>;
 
 interface AxeRushState {
-  ownerId: string;
   targetId: string;
   timer: number;
   lastDir: Vec2;
 }
 
 interface AxeThrowState {
-  ownerId: string;
   projectileId: string;
   returning: boolean;
 }
@@ -65,7 +50,7 @@ function getThrows(system: CombatSystem): Map<string, AxeThrowState> {
 }
 
 CombatSystem.prototype.usePrimary = function patchedUsePrimary(context: WeaponUseContext): WeaponUseResult {
-  const system = this as CombatInternals;
+  const system = this as LooseCombatSystem;
   if (system.inventory.equippedWeapon !== "axe") {
     return originalUsePrimary.call(this, context);
   }
@@ -89,7 +74,6 @@ CombatSystem.prototype.usePrimary = function patchedUsePrimary(context: WeaponUs
   const targetCenter = centerOf(target);
   const dir = normalize({ x: targetCenter.x - ownerCenter.x, y: targetCenter.y - ownerCenter.y });
   getRushes(this).set(context.ownerId, {
-    ownerId: context.ownerId,
     targetId: target.id,
     timer: rushSeconds,
     lastDir: dir,
@@ -105,14 +89,14 @@ CombatSystem.prototype.usePrimary = function patchedUsePrimary(context: WeaponUs
 };
 
 CombatSystem.prototype.useSecondary = function patchedUseSecondary(context: WeaponUseContext): WeaponUseResult {
-  const system = this as CombatInternals;
+  const system = this as LooseCombatSystem;
   if (system.inventory.equippedWeapon !== "axe") {
     return originalUseSecondary.call(this, context);
   }
 
   const throws = getThrows(this);
   const existing = throws.get(context.ownerId);
-  const existingProjectile = existing ? system.projectiles.find((projectile) => projectile.id === existing.projectileId) : undefined;
+  const existingProjectile = existing ? (system.projectiles as Projectile[]).find((projectile) => projectile.id === existing.projectileId) : undefined;
   if (existing && existingProjectile) {
     existing.returning = true;
     existingProjectile.gravity = 0;
@@ -139,7 +123,7 @@ CombatSystem.prototype.useSecondary = function patchedUseSecondary(context: Weap
   const start = muzzle(system, context.player);
   const projectileId = makeId(system, "axe");
   const airThrow = !context.player.grounded;
-  system.projectiles.push({
+  (system.projectiles as Projectile[]).push({
     id: projectileId,
     ownerId: context.ownerId,
     weaponId: "axe",
@@ -164,7 +148,7 @@ CombatSystem.prototype.useSecondary = function patchedUseSecondary(context: Weap
     status: axe.secondary.status,
     hits: [],
   });
-  throws.set(context.ownerId, { ownerId: context.ownerId, projectileId, returning: false });
+  throws.set(context.ownerId, { projectileId, returning: false });
   system.inventory.cooldowns.axe = Math.max(0.22, axe.secondary.cooldown * 0.45);
   if (typeof system.applySelfRecoil === "function") {
     system.applySelfRecoil(context.player, aim, airThrow ? 112 : 76, airThrow ? 26 : 16);
@@ -179,13 +163,14 @@ CombatSystem.prototype.useSecondary = function patchedUseSecondary(context: Weap
 };
 
 CombatSystem.prototype.update = function patchedUpdate(dt: number, players: PlayerPhysicsState[]): void {
-  applyAxeRushes(this as CombatInternals, dt, players);
-  updateReturningAxes(this as CombatInternals, players);
+  const system = this as LooseCombatSystem;
+  applyAxeRushes(system, dt, players);
+  updateReturningAxes(system, players);
   originalUpdate.call(this, dt, players);
-  cleanupMissingAxeThrows(this as CombatInternals);
+  cleanupMissingAxeThrows(system);
 };
 
-function applyAxeRushes(system: CombatInternals, dt: number, players: PlayerPhysicsState[]): void {
+function applyAxeRushes(system: LooseCombatSystem, dt: number, players: PlayerPhysicsState[]): void {
   const rushes = getRushes(system);
   for (const [ownerId, rush] of rushes) {
     const player = players.find((item) => item.id === ownerId);
@@ -212,10 +197,10 @@ function applyAxeRushes(system: CombatInternals, dt: number, players: PlayerPhys
   }
 }
 
-function updateReturningAxes(system: CombatInternals, players: PlayerPhysicsState[]): void {
+function updateReturningAxes(system: LooseCombatSystem, players: PlayerPhysicsState[]): void {
   const throws = getThrows(system);
   for (const [ownerId, thrown] of throws) {
-    const projectile = system.projectiles.find((item) => item.id === thrown.projectileId);
+    const projectile = (system.projectiles as Projectile[]).find((item) => item.id === thrown.projectileId);
     const player = players.find((item) => item.id === ownerId);
     if (!projectile || !player) {
       throws.delete(ownerId);
@@ -245,16 +230,16 @@ function updateReturningAxes(system: CombatInternals, players: PlayerPhysicsStat
   }
 }
 
-function cleanupMissingAxeThrows(system: CombatInternals): void {
+function cleanupMissingAxeThrows(system: LooseCombatSystem): void {
   const throws = getThrows(system);
   for (const [ownerId, thrown] of throws) {
-    if (!system.projectiles.some((projectile) => projectile.id === thrown.projectileId)) {
+    if (!(system.projectiles as Projectile[]).some((projectile) => projectile.id === thrown.projectileId)) {
       throws.delete(ownerId);
     }
   }
 }
 
-function spawnAxeSwing(system: CombatInternals, ownerId: string, player: PlayerPhysicsState, dir: Vec2, range: number, damage: number, knockback: number, label: string): void {
+function spawnAxeSwing(system: LooseCombatSystem, ownerId: string, player: PlayerPhysicsState, dir: Vec2, range: number, damage: number, knockback: number, label: string): void {
   const start = muzzle(system, player);
   const width = range;
   const height = 58;
@@ -282,10 +267,10 @@ function spawnAxeSwing(system: CombatInternals, ownerId: string, player: PlayerP
   effect(system, "whip", facing >= 0 ? start.x : start.x - width, start.y, start.x + facing * width, start.y + dir.y * 28, colorForAxe(), label);
 }
 
-function findNearestTarget(system: CombatInternals, ownerId: string, player: PlayerPhysicsState, maxDistance: number): Combatant | null {
+function findNearestTarget(system: LooseCombatSystem, ownerId: string, player: PlayerPhysicsState, maxDistance: number): LooseCombatant | null {
   const from = centerOfPlayer(player);
-  let best: { target: Combatant; distance: number } | null = null;
-  for (const target of system.combatants.values()) {
+  let best: { target: LooseCombatant; distance: number } | null = null;
+  for (const target of system.combatants.values() as Iterable<LooseCombatant>) {
     if (target.id === ownerId || target.respawnTimer > 0) {
       continue;
     }
@@ -298,20 +283,20 @@ function findNearestTarget(system: CombatInternals, ownerId: string, player: Pla
   return best?.target ?? null;
 }
 
-function pushEvent(system: CombatInternals, ownerId: string, action: string, pos: Vec2, aim: Vec2, label: string, now: number): void {
+function pushEvent(system: LooseCombatSystem, ownerId: string, action: string, pos: Vec2, aim: Vec2, label: string, now: number): void {
   if (typeof system.createEvent === "function") {
     system.recentEvents.push(system.createEvent(ownerId, "axe", action, pos, aim, label, now));
   }
 }
 
-function muzzle(system: CombatInternals, player: PlayerPhysicsState): Vec2 {
+function muzzle(system: LooseCombatSystem, player: PlayerPhysicsState): Vec2 {
   if (typeof system.muzzle === "function") {
     return system.muzzle(player);
   }
   return { x: player.x + player.width / 2 + player.facing * 16, y: player.y + player.height * 0.45 };
 }
 
-function effect(system: CombatInternals, kind: string, x: number, y: number, tx: number, ty: number, color: string, label?: string): void {
+function effect(system: LooseCombatSystem, kind: string, x: number, y: number, tx: number, ty: number, color: string, label?: string): void {
   if (typeof system.addEffect === "function") {
     system.addEffect(kind, x, y, tx, ty, color, label);
     return;
@@ -319,7 +304,7 @@ function effect(system: CombatInternals, kind: string, x: number, y: number, tx:
   system.effects.push({ id: makeId(system, "fx"), kind, x, y, tx, ty, age: 0, duration: 0.35, color, label });
 }
 
-function sound(system: CombatInternals, soundId: string): void {
+function sound(system: LooseCombatSystem, soundId: string): void {
   if (typeof system.queueSound === "function") {
     system.queueSound(soundId);
   } else {
@@ -327,11 +312,11 @@ function sound(system: CombatInternals, soundId: string): void {
   }
 }
 
-function makeId(system: CombatInternals, prefix: string): string {
+function makeId(system: LooseCombatSystem, prefix: string): string {
   return typeof system.makeId === "function" ? system.makeId(prefix) : `${prefix}-${Math.random().toString(36).slice(2)}`;
 }
 
-function centerOf(target: Combatant): Vec2 {
+function centerOf(target: LooseCombatant): Vec2 {
   return { x: target.x + target.width / 2, y: target.y + target.height / 2 };
 }
 
@@ -347,5 +332,3 @@ function normalize(vec: Vec2): Vec2 {
 function colorForAxe(): string {
   return "#9fe8ff";
 }
-
-void DEFAULT_PHYSICS;
