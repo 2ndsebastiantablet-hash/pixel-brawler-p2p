@@ -31,6 +31,7 @@ interface PixelBrawlerDebugSnapshot {
     color: string;
     x: number;
     y: number;
+    weaponId: string;
     hp?: number;
   };
 }

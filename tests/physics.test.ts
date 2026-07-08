@@ -131,6 +131,52 @@ describe("player physics", () => {
     expect(diving.velocityY).toBe(DEFAULT_PHYSICS.airDiveVelocityY);
   });
 
+  it("uses Wings flight config for lift, glide, dive, and movement-only air burst", () => {
+    const wingFlight = {
+      enabled: true,
+      liftAcceleration: 1900,
+      climbAcceleration: 520,
+      glideGravityScale: 0.34,
+      diveAcceleration: 1450,
+      maxRiseSpeed: -620,
+      maxFallSpeed: 620,
+      horizontalAccelerationScale: 1.45,
+      airBurstSpeed: 780,
+      airBurstVerticalSpeed: -160,
+      airBurstCooldown: 0.7,
+    };
+    const config = { ...DEFAULT_PHYSICS, wingFlight };
+    const airborne = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 140),
+      grounded: false,
+      coyoteTimer: 0,
+      jumpsUsed: 2,
+      velocityX: 0,
+      velocityY: 120,
+    };
+
+    const lifting = stepPlayer(airborne, { ...neutralInput, jumpHeld: true, up: true, right: true }, 1 / 30, config);
+    expect(lifting.velocityY).toBeLessThan(airborne.velocityY);
+    expect(lifting.velocityX).toBeGreaterThan(0);
+    expect(lifting.wingFlapping).toBe(true);
+
+    const normalFall = stepPlayer(airborne, neutralInput, 1 / 30);
+    const gliding = stepPlayer(airborne, neutralInput, 1 / 30, config);
+    expect(gliding.velocityY).toBeLessThan(normalFall.velocityY);
+    expect(gliding.wingGliding).toBe(true);
+
+    const diving = stepPlayer(airborne, { ...neutralInput, down: true }, 1 / 30, config);
+    expect(diving.velocityY).toBeGreaterThan(gliding.velocityY);
+    expect(diving.wingDiving).toBe(true);
+    expect(diving.groundSlamming).toBe(false);
+
+    const bursting = stepPlayer(airborne, { ...neutralInput, right: true, dashPressed: true }, 1 / 60, config);
+    expect(bursting.airDiving).toBe(false);
+    expect(bursting.velocityX).toBeGreaterThan(DEFAULT_PHYSICS.airDiveVelocityX);
+    expect(bursting.velocityY).toBeLessThan(airborne.velocityY);
+    expect(bursting.wingBurstCooldown).toBeGreaterThan(0);
+  });
+
   it("uses S in the air as a ground slam and recovers on landing", () => {
     const airborne = {
       ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 12),

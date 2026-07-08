@@ -35,7 +35,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(13);
+    expect(fighter.weaponInventory).toHaveLength(14);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -950,6 +950,76 @@ describe("combat system", () => {
     expect(target.velocityX).toBeGreaterThan(550);
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-throw", "axe-hit"]));
     expect(combat.getSnapshot().droppedWeapons.filter((dropped) => dropped.weaponId === "axe")).toHaveLength(0);
+  });
+
+  it("keeps Wings click inputs non-offensive and inventory-safe", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("wings");
+    const player = { ...playerState, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
+
+    const primary = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    const secondary = combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 200, heldMs: 0, isNewPress: true });
+
+    expect(primary.kind).toBe("blocked");
+    expect(secondary.kind).toBe("blocked");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("wings");
+    expect(combat.getSnapshot().projectiles).toHaveLength(0);
+    expect(combat.getSnapshot().hitboxes).toHaveLength(0);
+    expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "wings")).toBe(false);
+  });
+
+  it("pushes nearby combatants with Wings flap gust without meaningful damage", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("wings");
+    const player = {
+      ...playerState,
+      id: "peer-a",
+      x: 0,
+      y: playerState.y - 48,
+      grounded: false,
+      velocityX: 0,
+      velocityY: -80,
+      wingFlapping: true,
+      wingFlapHeldMs: 420,
+    };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 56,
+      y: player.y + 8,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.update(1 / 60, [player]);
+    const target = combat.getCombatant("peer-b")!;
+    const firstHp = target.hp;
+    expect(firstHp).toBeGreaterThanOrEqual(99);
+    expect(target.velocityX).toBeGreaterThan(250);
+    expect(target.velocityY).toBeLessThan(0);
+    expect(combat.consumeSounds()).toContain("wing-gust");
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "wings", targetId: "peer-b", label: "Wing Gust" }),
+    ]));
+
+    combat.update(0.08, [player]);
+    expect(target.hp).toBe(firstHp);
+
+    target.invulnerable = 0;
+    target.x = 56;
+    target.y = player.y + 8;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    combat.update(0.16, [player]);
+    expect(target.velocityX).toBeGreaterThan(250);
+    expect(target.hp).toBeGreaterThanOrEqual(98);
   });
 
   it("casts directional lightning strikes and only empowers upward held self-charge", () => {

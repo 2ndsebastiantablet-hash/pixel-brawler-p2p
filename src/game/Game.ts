@@ -18,6 +18,20 @@ import {
 } from "../net/NetTypes";
 import type { PlayerProfile } from "../ui/Profile";
 
+const WING_FLIGHT_CONFIG = {
+  enabled: true,
+  liftAcceleration: 1900,
+  climbAcceleration: 520,
+  glideGravityScale: 0.34,
+  diveAcceleration: 1450,
+  maxRiseSpeed: -620,
+  maxFallSpeed: 620,
+  horizontalAccelerationScale: 1.45,
+  airBurstSpeed: 780,
+  airBurstVerticalSpeed: -160,
+  airBurstCooldown: 0.7,
+} as const;
+
 interface RemotePlayer {
   player: Player;
   current: PlayerNetState;
@@ -50,6 +64,7 @@ export interface GameDebugSnapshot {
     color: string;
     x: number;
     y: number;
+    weaponId: WeaponId;
     hp?: number;
   };
   remotePlayers: {
@@ -151,6 +166,7 @@ export class Game {
         color: this.localPlayer.color,
         x: this.localPlayer.state.x,
         y: this.localPlayer.state.y,
+        weaponId: this.combat.getPlayerInventory().equippedWeapon,
         hp: localCombatant?.hp,
       },
       remotePlayers: {
@@ -353,6 +369,9 @@ export class Game {
         continue;
       }
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      if (remote.current.weaponId === "wings") {
+        this.drawWings(ctx, remote.player.state, remote.player.color, remote.player.state.grounded ? "idle" : "glide");
+      }
       this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
@@ -611,6 +630,15 @@ export class Game {
     if (!previous.airDiving && current.airDiving) {
       playSound("dive-start");
     }
+    if (current.wingFlapping) {
+      playSound("wing-flap");
+    }
+    if (current.wingGliding) {
+      playSound("wing-wind");
+    }
+    if (current.wingBurstTimer > 0 && previous.wingBurstTimer === 0) {
+      playSound("wing-burst");
+    }
     if (previous.grounded && !current.grounded && current.velocityY < 0) {
       playSound(current.jumpsUsed > 1 ? "double-jump" : "jump");
     } else if (previous.jumpsUsed === 1 && current.jumpsUsed === 2 && current.velocityY < 0) {
@@ -705,7 +733,7 @@ export class Game {
         : 1;
     const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
     const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered;
-    return {
+    const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
       acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale,
@@ -715,6 +743,7 @@ export class Game {
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
+    return weapon.id === "wings" ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
   }
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
@@ -904,6 +933,9 @@ export class Game {
         ctx.fillStyle = "rgba(255, 179, 92, 0.46)";
         this.pixelRect(ctx, x + facing * 14, y - 24, facing * 54, 48);
       }
+    } else if (weaponId === "wings") {
+      const mode = state.wingFlapping ? "flap" : state.wingDiving ? "dive" : state.grounded ? "idle" : "glide";
+      this.drawWings(ctx, state, this.localPlayer.color, mode);
     } else if (weaponId === "sledgehammer") {
       const charge = Math.min((this.primaryHeldMs || 0) / 900, 1);
       const lift = active > 0 || charge > 0.2 ? -34 - charge * 18 : -8;
@@ -920,6 +952,43 @@ export class Game {
           ctx.fillRect(Math.round(centerX + facing * (20 + index * 13)), Math.round(centerY + 22 + index * 2), 10, 6);
         }
       }
+    }
+    ctx.restore();
+  }
+
+  private drawWings(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, color: string, mode: "idle" | "glide" | "flap" | "dive"): void {
+    const cx = Math.round(state.x + state.width / 2 - this.camera.x);
+    const cy = Math.round(state.y + 22 - this.camera.y);
+    const flap = mode === "flap" ? Math.sin(performance.now() * 0.04) : 0;
+    const span = mode === "glide" ? 50 : mode === "dive" ? 28 : 38 + Math.round(Math.abs(flap) * 10);
+    const lift = mode === "flap" ? -12 - Math.round(Math.abs(flap) * 10) : mode === "dive" ? 10 : -4;
+    ctx.save();
+    ctx.globalAlpha = mode === "idle" ? 0.72 : 0.9;
+    ctx.fillStyle = colorForWeapon("wings");
+    this.pixelRect(ctx, cx - span, cy + lift, span - 8, 8);
+    this.pixelRect(ctx, cx + 8, cy + lift, span - 8, 8);
+    this.pixelRect(ctx, cx - span + 8, cy + lift + 8, span - 18, 7);
+    this.pixelRect(ctx, cx + 18, cy + lift + 8, span - 18, 7);
+    ctx.fillStyle = color;
+    this.pixelRect(ctx, cx - 10, cy + lift + 3, 8, 8);
+    this.pixelRect(ctx, cx + 2, cy + lift + 3, 8, 8);
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, cx - span + 6, cy + lift + 2, 10, 4);
+    this.pixelRect(ctx, cx + span - 16, cy + lift + 2, 10, 4);
+    if (mode === "flap") {
+      ctx.globalAlpha = 0.32;
+      ctx.fillStyle = "#d9f7ff";
+      this.pixelRect(ctx, cx - 64, cy + 18, 128, 8);
+      this.pixelRect(ctx, cx - 48, cy + 32, 96, 5);
+    } else if (mode === "dive") {
+      ctx.globalAlpha = 0.34;
+      ctx.fillStyle = "#d9f7ff";
+      this.pixelRect(ctx, cx - 18, cy - 24, 8, 54);
+      this.pixelRect(ctx, cx + 10, cy - 24, 8, 54);
+    } else if (state.wingBurstTimer > 0) {
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = "#d9f7ff";
+      this.pixelRect(ctx, cx - state.facing * 86, cy + 4, state.facing * 74, 10);
     }
     ctx.restore();
   }
@@ -1419,6 +1488,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#9ee7c3";
     case "axe":
       return "#ffb35c";
+    case "wings":
+      return "#d9f7ff";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1463,6 +1534,8 @@ function weaponHudDetail(
       return `Growth +${Math.round(runtime.rangeBonus)} range - Power +${Math.round(runtime.damageBonus)}`;
     case "axe":
       return `Heavy swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
+    case "wings":
+      return "Hold Space flap - release glide - S dive - Shift burst";
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
@@ -1502,6 +1575,8 @@ function weaponHelper(id: WeaponId): string {
       return "Grows on hit - KO adds power - Right chop";
     case "axe":
       return "Left heavy swing - Right/G spinning throw";
+    case "wings":
+      return "No attacks - Space fly/glide - flap gust pushes nearby";
     default:
       return "";
   }

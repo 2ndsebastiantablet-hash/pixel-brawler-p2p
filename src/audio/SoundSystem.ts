@@ -77,6 +77,10 @@ export type SoundId =
   | "axe-throw"
   | "axe-hit"
   | "axe-impact"
+  | "wing-flap"
+  | "wing-wind"
+  | "wing-burst"
+  | "wing-gust"
   | "respawn";
 
 interface SoundShape {
@@ -162,6 +166,10 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "axe-throw": { category: "heavy", frequency: 320, endFrequency: 96, duration: 0.15, noise: true, minInterval: 0.12 },
   "axe-hit": { category: "combat", frequency: 210, endFrequency: 72, duration: 0.11, noise: true, minInterval: 0.07 },
   "axe-impact": { category: "heavy", frequency: 120, endFrequency: 44, duration: 0.18, noise: true, minInterval: 0.12 },
+  "wing-flap": { category: "movement", frequency: 180, endFrequency: 90, duration: 0.12, noise: true, minInterval: 0.18 },
+  "wing-wind": { category: "movement", frequency: 260, endFrequency: 190, duration: 0.18, noise: true, minInterval: 0.45 },
+  "wing-burst": { category: "movement", frequency: 420, endFrequency: 100, duration: 0.18, noise: true, minInterval: 0.32 },
+  "wing-gust": { category: "combat", frequency: 360, endFrequency: 120, duration: 0.12, noise: true, minInterval: 0.12 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

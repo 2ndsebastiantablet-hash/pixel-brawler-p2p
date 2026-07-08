@@ -13,6 +13,7 @@ export type WeaponId =
   | "knife"
   | "machete"
   | "axe"
+  | "wings"
   | "teleport-ball"
   | "lightning-rod"
   | "sledgehammer";

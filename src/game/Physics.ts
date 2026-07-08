@@ -47,6 +47,21 @@ export interface PhysicsConfig {
   airDiveDuration: number;
   groundSlamVelocity: number;
   slamLandingDuration: number;
+  wingFlight?: WingFlightConfig;
+}
+
+export interface WingFlightConfig {
+  enabled: boolean;
+  liftAcceleration: number;
+  climbAcceleration: number;
+  glideGravityScale: number;
+  diveAcceleration: number;
+  maxRiseSpeed: number;
+  maxFallSpeed: number;
+  horizontalAccelerationScale: number;
+  airBurstSpeed: number;
+  airBurstVerticalSpeed: number;
+  airBurstCooldown: number;
 }
 
 export interface PlayerPhysicsState {
@@ -76,6 +91,12 @@ export interface PlayerPhysicsState {
   coyoteTimer: number;
   jumpBufferTimer: number;
   jumpsUsed: number;
+  wingFlapping: boolean;
+  wingGliding: boolean;
+  wingDiving: boolean;
+  wingBurstTimer: number;
+  wingBurstCooldown: number;
+  wingFlapHeldMs: number;
 }
 
 export const DEFAULT_PHYSICS: PhysicsConfig = {
@@ -133,6 +154,12 @@ export function createPlayerState(id: string, x: number, y: number, label = "P1"
     coyoteTimer: DEFAULT_PHYSICS.coyoteTime,
     jumpBufferTimer: 0,
     jumpsUsed: 0,
+    wingFlapping: false,
+    wingGliding: false,
+    wingDiving: false,
+    wingBurstTimer: 0,
+    wingBurstCooldown: 0,
+    wingFlapHeldMs: 0,
   };
 }
 
@@ -151,6 +178,12 @@ export function stepPlayer(
   next.lowSlideRecoveryTimer = Math.max(0, next.lowSlideRecoveryTimer - dt);
   next.slamRecoveryTimer = Math.max(0, next.slamRecoveryTimer - dt);
   next.airDiveTimer = Math.max(0, next.airDiveTimer - dt);
+  next.wingBurstTimer = Math.max(0, (next.wingBurstTimer ?? 0) - dt);
+  next.wingBurstCooldown = Math.max(0, (next.wingBurstCooldown ?? 0) - dt);
+  next.wingFlapping = false;
+  next.wingGliding = false;
+  next.wingDiving = false;
+  next.wingFlapHeldMs = input.jumpHeld ? (next.wingFlapHeldMs ?? 0) + dt * 1000 : 0;
   next.jumpBufferTimer = input.jumpPressed
     ? config.jumpBufferTime
     : Math.max(0, next.jumpBufferTimer - dt);
@@ -163,10 +196,12 @@ export function stepPlayer(
   }
 
   const canAct = next.slamRecoveryTimer === 0 && next.lowSlideRecoveryTimer === 0;
+  const wings = config.wingFlight?.enabled ? config.wingFlight : undefined;
   const wantsLowSlide = input.down && input.dashPressed && next.grounded;
   const wantsGroundSlide = input.dashPressed && next.grounded && !input.down;
-  const wantsAirDive = input.dashPressed && !next.grounded && !next.airDiveUsed;
-  const wantsGroundSlam = input.downPressed && !next.grounded && !next.groundSlamming;
+  const wantsAirDive = !wings && input.dashPressed && !next.grounded && !next.airDiveUsed;
+  const wantsWingBurst = Boolean(wings && input.dashPressed && !next.grounded && next.wingBurstCooldown === 0);
+  const wantsGroundSlam = !wings && input.downPressed && !next.grounded && !next.groundSlamming;
   const canStartSlide = wantsGroundSlide && canAct && next.slideCooldownTimer === 0;
   const canStartLowSlide = wantsLowSlide && canAct && next.slideCooldownTimer === 0;
   let startedGroundSlam = false;
@@ -202,6 +237,15 @@ export function stepPlayer(
     next.velocityY = config.airDiveVelocityY;
   }
 
+  if (wantsWingBurst && canAct && wings) {
+    const burstDirection = horizontalIntent === 0 ? next.facing : horizontalIntent > 0 ? 1 : -1;
+    next.facing = burstDirection;
+    next.velocityX = burstDirection * wings.airBurstSpeed;
+    next.velocityY = Math.min(next.velocityY, wings.airBurstVerticalSpeed);
+    next.wingBurstTimer = 0.18;
+    next.wingBurstCooldown = wings.airBurstCooldown;
+  }
+
   if (wantsGroundSlam && canAct && !next.airDiving) {
     next.groundSlamming = true;
     startedGroundSlam = true;
@@ -228,9 +272,10 @@ export function stepPlayer(
   } else if (horizontalIntent !== 0) {
     const accel = next.grounded ? config.acceleration : config.airAcceleration;
     const speed = input.down && next.grounded ? config.maxRunSpeed * config.duckSpeedMultiplier : config.maxRunSpeed;
-    next.velocityX = approach(next.velocityX, horizontalIntent * speed, accel * dt);
+    const wingScale = wings && !next.grounded ? wings.horizontalAccelerationScale : 1;
+    next.velocityX = approach(next.velocityX, horizontalIntent * speed, accel * wingScale * dt);
   } else {
-    next.velocityX = approach(next.velocityX, 0, config.deceleration * dt);
+    next.velocityX = approach(next.velocityX, 0, config.deceleration * (wings && !next.grounded ? 0.42 : 1) * dt);
   }
 
   if (input.down && next.grounded && !next.sliding && canAct) {
@@ -245,9 +290,28 @@ export function stepPlayer(
     applyJump(next, canGroundJump ? config.jumpVelocity : config.doubleJumpVelocity, canGroundJump ? 1 : 2);
     jumpedThisFrame = true;
   }
+  if (wings && !jumpedThisFrame && next.grounded && input.jumpHeld && next.slamRecoveryTimer === 0) {
+    applyJump(next, config.jumpVelocity * 0.92, 1);
+    jumpedThisFrame = true;
+  }
 
   if (!jumpedThisFrame && !next.airDiving && !next.groundSlamming) {
-    next.velocityY += config.gravity * dt;
+    if (wings && !next.grounded) {
+      if (input.down) {
+        next.wingDiving = true;
+        next.velocityY += (config.gravity + wings.diveAcceleration) * dt;
+      } else if (input.jumpHeld) {
+        next.wingFlapping = true;
+        const climbBonus = input.up ? wings.climbAcceleration : 0;
+        next.velocityY += (config.gravity - wings.liftAcceleration - climbBonus) * dt;
+      } else {
+        next.wingGliding = true;
+        next.velocityY += config.gravity * wings.glideGravityScale * dt;
+      }
+      next.velocityY = clamp(next.velocityY, wings.maxRiseSpeed, wings.maxFallSpeed);
+    } else {
+      next.velocityY += config.gravity * dt;
+    }
   }
   next.x += next.velocityX * dt;
   next.y += startedGroundSlam ? 0 : next.velocityY * dt;
@@ -277,7 +341,7 @@ export function stepPlayer(
     next.grounded = false;
   }
 
-  if (!input.jumpHeld && next.velocityY < config.jumpVelocity * 0.45) {
+  if (!input.jumpHeld && !wings && next.velocityY < config.jumpVelocity * 0.45) {
     next.velocityY = config.jumpVelocity * 0.45;
   }
 
@@ -334,4 +398,8 @@ function approach(current: number, target: number, amount: number): number {
     return Math.max(current - amount, target);
   }
   return target;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

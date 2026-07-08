@@ -47,6 +47,7 @@ export const COMBAT_TUNING = {
     knife: { label: "Light", moveSpeedMultiplier: 1.08, accelerationMultiplier: 1.12, airAccelerationMultiplier: 1.1, jumpMultiplier: 1.02, slideMultiplier: 1.08 },
     machete: { label: "Heavy", moveSpeedMultiplier: 0.88, accelerationMultiplier: 0.82, airAccelerationMultiplier: 0.84, jumpMultiplier: 0.92, slideMultiplier: 0.86 },
     axe: { label: "Heavy", moveSpeedMultiplier: 0.86, accelerationMultiplier: 0.8, airAccelerationMultiplier: 0.82, jumpMultiplier: 0.91, slideMultiplier: 0.84 },
+    wings: { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.2, jumpMultiplier: 1.04, slideMultiplier: 1 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,
   laser: {
     chargeDamageScale: 3.4,

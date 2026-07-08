@@ -14,11 +14,11 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, melee hitboxes, status effects, weapon cooldowns, reloads, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
-- Thirteen enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, and axe.
+- Fourteen enabled polished weapons for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, and wings.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
-- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, and sniper shots. Volume constants are fed from the central combat tuning file.
+- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, sniper shots, wing flaps, wind, bursts, and gust pushback. Volume constants are fed from the central combat tuning file.
 - Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, melee hits, slide trips, stomps, dives, and ground-slam interactions.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
@@ -28,6 +28,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 
 - `A` / `D`: Move.
 - `Space`: Jump, then double jump.
+- With Wings equipped, hold `Space` to launch/flap, release to glide, press `S` in air to dive, and press airborne `Shift` for a movement-only air burst.
 - `Shift` on ground: Dash / slide.
 - `Shift` in air: Air dive.
 - `S` on ground: Duck.
@@ -60,6 +61,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Knife: Infinite throwing knife in slot 11. Right click or `G` throws a fast spinning knife without ammo or inventory loss, with a short cooldown and noticeable recoil; every grounded or airborne throw kicks the player opposite the aim direction, and airborne throws kick much harder for movement tricks. Touching another combatant while Knife is equipped deals small bleed contact damage on a short per-target cooldown, including during walking, sliding, and dashing. Left click still chains quick close slashes/stabs that can bleed.
 - Machete: Heavy blade in slot 12. Left click swings a wide pushing slash with a tip bonus, slide slashes cleave farther, air slashes slow falling slightly, and right click uses a slower overhead chop. Every successful Machete damage hit permanently grows its range for the current weapon state with no gameplay cap; every Machete KO grows it much more and adds permanent damage. As it gains range/power, the blade and slash visuals heat from green toward red.
 - Axe: Heavy blade hybrid after Machete. Left click swings a slower focused chop with high knockback, bleed, and an axe-head sweet spot. Right click or `G` throws a spinning axe without dropping inventory, slower than Knife but stronger with heavy knockback, one bounce, hit/impact sounds, and cleanup so thrown axes do not become permanent objects. Slide attacks add horizontal force, and airborne/falling chops pull the player downward for heavier hits.
+- Wings: Light mobility item after Axe. Wings have no left-click or right-click attacks, no thrown form, and no dive damage. Hold `Space` to launch and flap upward, release to glide, use `A`/`D` for air control, hold `S` to dive faster, and press airborne `Shift` for a cooldown-gated movement burst. Rapid flapping near a dummy, enemy, or online player creates a visible close gust radius that repeatedly pushes targets away with 0 damage and tiny hitstun until they leave the radius.
 
 ## Movement Combat
 
@@ -69,6 +71,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Air Dive Hit: `Shift` in air dives into targets for damage, knockback, and about one second of stun.
 - Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a tuned shockwave.
 - Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
+- Wings Flight: Wings replace normal air dive and ground slam with lift, glide, dive, and air-burst movement. Wings also soften falling by slowing descent while gliding.
 
 ## Projectile And Status Rules
 
@@ -79,6 +82,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
 - Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, show a brief stick/spark, then clean up automatically because Knife has infinite throws.
 - Axe Throw: Thrown axes hit online/offline combatants, bleed on impact, hit harder and knock farther than Knife throws, bounce once, then clean up automatically.
+- Wings Gust: Wing flap gust packets use the same combat event path as other knockback so online players receive the shove without turning Wings into a normal damage weapon.
 - Machete Growth: Machete hitboxes use the current grown range and damage bonus, and each swing records targets already hit so long blades do not damage the same target multiple times per swing.
 
 ## Loading Screen And Sound
@@ -109,7 +113,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the enabled armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons; Knife, Machete, and Axe are after Sniper and are easiest to reach with `E`.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, then use **Offline Test** for local movement and combat. Offline Test spawns a training dummy and shows the enabled armory strip along the bottom of the screen. Use `1`-`9`, `0`, and `Q`/`E` to equip the enabled weapons; Knife, Machete, Axe, and Wings are after Sniper and are easiest to reach with `E`.
 
 ## Run the signaling Worker locally
 
@@ -211,7 +215,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable twelve-weapon vertical slice, not final balance.
+- Combat is a playable fourteen-weapon vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
 - The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.

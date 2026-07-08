@@ -112,6 +112,8 @@ const teleportDelay = 3;
 const whipComboWindow = 0.55;
 const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
+const wingGustRadius = 130;
+const wingGustCooldown = 0.14;
 const macheteHitGrowth = 12;
 const macheteKoGrowth = 60;
 const macheteKoDamageBonus = 3;
@@ -310,6 +312,9 @@ export class CombatSystem {
   }
 
   usePrimary(context: WeaponUseContext): WeaponUseResult {
+    if (this.inventory.equippedWeapon === "wings") {
+      return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
+    }
     if (this.inventory.equippedWeapon === "lightning-rod") {
       return this.callLightningSkyStrike(context);
     }
@@ -318,6 +323,9 @@ export class CombatSystem {
 
   useSecondary(context: WeaponUseContext): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
+    if (weapon.id === "wings") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
+    }
     if (weapon.id === "pistol" || weapon.id === "knife") {
       return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, weapon.id === "pistol" && this.inventory.ammo.pistol?.magazine === 0);
     }
@@ -394,6 +402,9 @@ export class CombatSystem {
   }
 
   dropCurrentWeapon(ownerId: string, player: PlayerPhysicsState, aim: Vec2, now: number): WeaponUseResult {
+    if (this.inventory.equippedWeapon === "wings") {
+      return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
+    }
     return this.throwCurrentWeapon(ownerId, player, aim, now, false);
   }
 
@@ -1372,6 +1383,36 @@ export class CombatSystem {
     return true;
   }
 
+  private applyWingGust(sourceId: string, target: Combatant, knockback: Vec2): boolean {
+    const key = `${sourceId}:${target.id}:wing-gust`;
+    if (this.bodyContactCooldowns.has(key)) {
+      return false;
+    }
+    target.velocityX += knockback.x * COMBAT_TUNING.enemyKnockbackMultiplier;
+    target.velocityY += knockback.y * COMBAT_TUNING.enemyKnockbackMultiplier * 0.72;
+    target.hitstun = Math.max(target.hitstun, 0.03);
+    this.bodyContactCooldowns.set(key, wingGustCooldown);
+    this.addEffect("shockwave", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y, colorForWeapon("wings"), "Wing Gust");
+    this.queueSound("wing-gust");
+    this.recentEvents.push(this.createEvent(
+      sourceId,
+      "wings",
+      "hit",
+      { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+      normalize(knockback),
+      "Wing Gust",
+      performanceNow(),
+      {
+        targetId: target.id,
+        damage: 0,
+        kx: knockback.x,
+        ky: knockback.y,
+        stun: 0.03,
+      },
+    ));
+    return true;
+  }
+
   private consumeAmmo(weaponId: WeaponId, explicitCost?: number): boolean {
     const ammo = this.inventory.ammo[weaponId];
     if (!ammo) {
@@ -2132,6 +2173,28 @@ export class CombatSystem {
           });
         }
 
+        if (this.inventory.equippedWeapon === "wings" && player.wingFlapping) {
+          const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+          const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+          const dx = targetCenter.x - ownerCenter.x;
+          const dy = targetCenter.y - ownerCenter.y;
+          const distance = Math.hypot(dx, dy);
+          if (distance <= wingGustRadius) {
+            const direction = normalize({ x: dx || player.facing || 1, y: dy || -0.25 });
+            const heldScale = Math.min(1.45, 1 + (player.wingFlapHeldMs ?? 0) / 1400);
+            const airScale = player.grounded ? 0.82 : 1.18;
+            const force = 205 * heldScale * airScale;
+            const pushed = this.applyWingGust(player.id, target, {
+              x: direction.x * force,
+              y: direction.y * force - 105,
+            });
+            if (pushed) {
+              this.addEffect("aura", ownerCenter.x, ownerCenter.y, ownerCenter.x + direction.x * wingGustRadius, ownerCenter.y + direction.y * 18, colorForWeapon("wings"), "Wing Gust");
+              this.addEffect("spark", targetCenter.x, targetCenter.y, targetCenter.x + direction.x * 34, targetCenter.y + direction.y * 20, colorForWeapon("wings"), "Wind");
+            }
+          }
+        }
+
         const playerBottom = owner.y + owner.height;
         const horizontalOverlap = owner.x < target.x + target.width && owner.x + owner.width > target.x;
         const stompWindow = horizontalOverlap && player.velocityY > 180 && playerBottom >= target.y && playerBottom <= target.y + 28 && owner.y < target.y;
@@ -2446,6 +2509,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#9ee7c3";
     case "axe":
       return "#ffb35c";
+    case "wings":
+      return "#d9f7ff";
     default:
       return "#ffffff";
   }
