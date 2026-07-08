@@ -57,6 +57,9 @@ const ui = new LobbyUI(root, profile, {
   banPeer: (peer) => {
     banPeer(peer);
   },
+  updateProfile: (nextProfile) => {
+    applyProfileUpdate(nextProfile);
+  },
 });
 
 void refreshPublicRooms();
@@ -104,6 +107,23 @@ function startOffline(nextProfile: PlayerProfile): void {
   };
   setStatus("Offline");
   ui.showGame(currentSession);
+}
+
+function applyProfileUpdate(nextProfile: PlayerProfile): void {
+  profile = nextProfile;
+  game.applyProfile(profile);
+  if (currentSession) {
+    currentSession = {
+      ...currentSession,
+      hostName: currentSession.isHost ? profile.name : currentSession.hostName,
+      peers: currentSession.peers.map((peer) => (
+        peer.clientId === profile.clientId
+          ? { ...peer, name: profile.name, color: profile.color }
+          : peer
+      )),
+    };
+    ui.updateSession(currentSession);
+  }
 }
 
 async function hostRoom(

@@ -2,7 +2,17 @@ import type { WeaponId } from "../combat/Weapon";
 import { WEAPON_IDS, weaponRegistry } from "../combat/WeaponRegistry";
 
 export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment";
-export type LoadoutCategory = "all" | "hands" | "straps" | "attachments" | "melee" | "ranged" | "utility";
+export type LoadoutCategory =
+  | "all"
+  | "guns"
+  | "blades"
+  | "heavy"
+  | "throwables"
+  | "body"
+  | "mobility"
+  | "summons"
+  | "consumables"
+  | "utility";
 
 export interface LoadoutState {
   frontStrap?: WeaponId;
@@ -55,6 +65,7 @@ const oneHandedWeapons = new Set<WeaponId>([
   "revolver",
   "slingshot",
   "teleport-ball",
+  "virgin-blood",
 ]);
 
 const strapWeapons = new Set<WeaponId>([
@@ -205,17 +216,29 @@ function sanitizeSlotWeapon(value: unknown, slot: LoadoutSlotId): WeaponId | und
 }
 
 function categoryForWeapon(id: WeaponId): LoadoutCategory {
-  if (id === "wings" || id === "death-aura" || id === "virgin-blood" || id === "hands") {
-    return "utility";
+  if (id === "pistol" || id === "revolver" || id === "laser-blaster" || id === "minigun" || id === "sniper") {
+    return "guns";
   }
-  if (strapWeapons.has(id)) {
-    return "straps";
+  if (id === "knife" || id === "machete" || id === "axe" || id === "whip") {
+    return "blades";
   }
-  if (attachmentWeapons.has(id)) {
-    return "attachments";
+  if (id === "sledgehammer" || id === "rocket") {
+    return "heavy";
   }
-  if (id === "knife" || id === "machete" || id === "axe" || id === "whip" || id === "sledgehammer" || id === "lightning-rod") {
-    return "melee";
+  if (id === "slingshot" || id === "teleport-ball") {
+    return "throwables";
   }
-  return "ranged";
+  if (id === "death-aura" || id === "lightning-rod") {
+    return "body";
+  }
+  if (id === "wings") {
+    return "mobility";
+  }
+  if (id === "hands") {
+    return "summons";
+  }
+  if (id === "virgin-blood") {
+    return "consumables";
+  }
+  return "utility";
 }

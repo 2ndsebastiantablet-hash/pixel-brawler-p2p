@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PHYSICS,
+  PLATFORM_RIGHT,
   createPlayerState,
   stepPlayer,
   type InputFrame,
@@ -204,6 +205,20 @@ describe("player physics", () => {
 
     expect(flapping.wingFlapping).toBe(true);
     expect(flapping.velocityY).toBeLessThan(revived.velocityY);
+  });
+
+  it("falls into the void instead of landing on invisible ground beyond platform edges", () => {
+    const beyondEdge = {
+      ...createPlayerState("p1", PLATFORM_RIGHT + 80, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 2),
+      grounded: false,
+      velocityY: 180,
+    };
+
+    const falling = stepPlayer(beyondEdge, neutralInput, 1 / 30);
+
+    expect(falling.grounded).toBe(false);
+    expect(falling.y).toBeGreaterThan(DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height);
+    expect(falling.velocityY).toBeGreaterThan(0);
   });
 
   it("uses S in the air as a ground slam and recovers on landing", () => {

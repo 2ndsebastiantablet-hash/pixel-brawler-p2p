@@ -26,6 +26,9 @@ export interface PhysicsConfig {
   width: number;
   height: number;
   groundY: number;
+  platformLeft: number;
+  platformRight: number;
+  deathY: number;
   gravity: number;
   maxRunSpeed: number;
   acceleration: number;
@@ -103,6 +106,9 @@ export const DEFAULT_PHYSICS: PhysicsConfig = {
   width: 32,
   height: 48,
   groundY: 360,
+  platformLeft: -2200,
+  platformRight: 2200,
+  deathY: 820,
   gravity: 2200,
   maxRunSpeed: 520,
   acceleration: 4200,
@@ -125,6 +131,10 @@ export const DEFAULT_PHYSICS: PhysicsConfig = {
   groundSlamVelocity: 1280,
   slamLandingDuration: 0.16,
 };
+
+export const PLATFORM_LEFT = DEFAULT_PHYSICS.platformLeft;
+export const PLATFORM_RIGHT = DEFAULT_PHYSICS.platformRight;
+export const VOID_DEATH_Y = DEFAULT_PHYSICS.deathY;
 
 export function createPlayerState(id: string, x: number, y: number, label = "P1"): PlayerPhysicsState {
   return {
@@ -317,7 +327,7 @@ export function stepPlayer(
   next.y += startedGroundSlam ? 0 : next.velocityY * dt;
 
   const groundTop = config.groundY - next.height;
-  if (next.y >= groundTop) {
+  if (next.y >= groundTop && isOverPlatform(next, config)) {
     const landedFromSlam = next.groundSlamming;
     next.x = Number(next.x.toFixed(4));
     next.y = groundTop;
@@ -347,6 +357,11 @@ export function stepPlayer(
 
   next.action = getAction(next, horizontalIntent);
   return next;
+}
+
+export function isOverPlatform(state: Pick<PlayerPhysicsState, "x" | "width">, config: PhysicsConfig = DEFAULT_PHYSICS): boolean {
+  const centerX = state.x + state.width / 2;
+  return centerX >= config.platformLeft && centerX <= config.platformRight;
 }
 
 function applyJump(state: PlayerPhysicsState, velocity: number, jumpsUsed: number): void {

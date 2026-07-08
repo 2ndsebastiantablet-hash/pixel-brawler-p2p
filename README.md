@@ -7,10 +7,10 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Vite + TypeScript front end.
 - Plain canvas side-view game loop with crisp pixel rendering.
 - Main menu flow for Play, player setup, hosting, joining, and Offline Test.
-- Player name/color customization and real equipment loadouts stored in localStorage.
+- Player name/color customization and real equipment loadouts stored in localStorage, with a front/back character creator, visible body attachment points, item search/categories, and drag/drop equipment placement.
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
-- Compact in-game HUD for private room codes, public server names, and Offline Test.
-- Escape server menu with player list, leave/end server, and host kick/ban controls.
+- Compact in-game HUD for private room codes, public server names, Offline Test, and the active Q/E/mouse/F loadout slots.
+- Escape server menu with player list, leave/end server, host kick/ban controls, and an in-game Edit Character button that returns to the live match after saving name/color/loadout edits.
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, directional melee hitboxes, status effects, weapon cooldowns, reloads, equipment slots, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
@@ -20,6 +20,7 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
 - Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, sniper shots, wing flaps, wind, bursts, gust pushback, holy blessing, revive, death aura pulses, rockets, and crawling hands. Volume constants are fed from the central combat tuning file.
 - Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, mouse-directed melee hits, slide trips, stomps, dives, and ground-slam interactions. Remote state also includes active weapon/item, loadout slot visuals, held item silhouettes, charge aim/charge time, active Death Aura, rocket placed/lit state, and major buff/status visuals.
+- The arena platform is finite: walking or falling past the stage edge drops into the void, kills the combatant through the normal respawn flow, returns them to spawn, and grants a two-second blue invulnerability glow that ignores damage/knockback locally and online.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
 The client creates a WebRTC data-channel mesh between all peers for gameplay packets. Until a data channel is open, or when one direct peer connection hiccups, the Worker relays compact state/combat packets only to the peers that still need fallback delivery. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
@@ -35,7 +36,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - `S` + `Shift` on ground: Low slide.
 - `S` in air: Ground slam.
 - `N`: Toggle player names.
-- `Escape`: Server info / leave menu.
+- `Escape`: Server info / leave menu, including Edit Character during a match.
 - Mouse move: Aim crosshair.
 - Left mouse: Use the left-hand slot.
 - Right mouse: Use the right-hand slot, or the secondary action for a two-handed item occupying both hands.

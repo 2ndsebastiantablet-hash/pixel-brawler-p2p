@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PHYSICS, createPlayerState, stepPlayer } from "../src/game/Physics";
+import { DEFAULT_PHYSICS, VOID_DEATH_Y, createPlayerState, stepPlayer } from "../src/game/Physics";
 import { CombatSystem } from "../src/game/combat/CombatSystem";
 import { createCustomFighter } from "../src/game/combat/Fighter";
 import { COMBAT_TUNING } from "../src/game/combat/CombatTuning";
@@ -138,6 +138,49 @@ describe("combat system", () => {
     combat.update(2.1, [playerState]);
     expect(combat.getCombatant(dummy.id)?.hp).toBe(100);
     expect(combat.getCombatant(dummy.id)?.x).toBe(dummy.spawnX);
+  });
+
+  it("kills void-fallen combatants and gives a full blue respawn invulnerability window", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState };
+    const combatant = combat.syncLocalPlayer(player, "Tester", "#18dff5");
+    player.y = VOID_DEATH_Y + 20;
+
+    combat.update(1 / 60, [player]);
+
+    expect(combatant.hp).toBe(0);
+    expect(combatant.respawnTimer).toBeGreaterThan(0);
+    expect(combatant.x).toBe(combatant.spawnX);
+    expect(combatant.y).toBe(combatant.spawnY);
+
+    combat.update(2.05, [player]);
+    expect(combatant.hp).toBe(100);
+    expect(combatant.invulnerable).toBeGreaterThan(1.7);
+    player.x = combatant.spawnX;
+    player.y = combatant.spawnY;
+
+    const blocked = combat.applyDamage({
+      sourceId: "training-dummy",
+      targetId: "local",
+      damage: 30,
+      knockback: { x: 400, y: -300 },
+      stun: 0.3,
+      label: "RESPAWN TEST",
+    });
+    expect(blocked.applied).toBe(false);
+    expect(combatant.hp).toBe(100);
+
+    combat.update(2.1, [player]);
+    const applied = combat.applyDamage({
+      sourceId: "training-dummy",
+      targetId: "local",
+      damage: 30,
+      knockback: { x: 400, y: -300 },
+      stun: 0.3,
+      label: "RESPAWN TEST",
+    });
+    expect(applied.applied).toBe(true);
   });
 
   it("classifies hit locations and scales damage, stun, knockback, labels, and hit events", () => {
@@ -805,6 +848,7 @@ describe("combat system", () => {
     expect(above.hp).toBeLessThan(100);
     expect(above.velocityY).toBeLessThan(-40);
 
+    above.maxHp = 100;
     above.hp = 100;
     above.invulnerable = 0;
     above.x = 78;
@@ -819,6 +863,7 @@ describe("combat system", () => {
     expect(above.velocityX).toBeGreaterThan(180);
     expect(above.velocityY).toBeLessThan(-70);
 
+    above.maxHp = 100;
     above.hp = 100;
     above.invulnerable = 0;
     above.x = 0;
@@ -832,7 +877,8 @@ describe("combat system", () => {
     expect(above.hp).toBeLessThan(100);
     expect(above.velocityY).toBeLessThan(-220);
 
-    above.hp = 100;
+    above.maxHp = 200;
+    above.hp = 200;
     above.invulnerable = 0;
     above.x = 0;
     above.y = player.y + 74;
@@ -844,7 +890,7 @@ describe("combat system", () => {
     combat.getPlayerInventory().cooldowns.sledgehammer = 0;
     combat.usePrimary({ ownerId: "peer-a", player: airborne, aim: { x: 0, y: 1 }, now: 700, heldMs: 900, isNewPress: true });
     combat.update(1 / 60, [airborne]);
-    expect(above.hp).toBeLessThan(100);
+    expect(above.hp).toBeLessThan(200);
     expect(above.velocityY).toBeGreaterThan(120);
   });
 

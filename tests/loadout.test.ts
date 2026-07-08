@@ -38,6 +38,7 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("wings", "leftHand")).toBe(false);
     expect(isSlotCompatible("pistol", "attachment")).toBe(false);
     expect(isSlotCompatible("virgin-blood", "attachment")).toBe(true);
+    expect(isSlotCompatible("virgin-blood", "leftHand")).toBe(true);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -46,5 +47,8 @@ describe("loadout equipment slots", () => {
     const withKnife = assignLoadoutItem(withAxe, "rightHand", "knife");
     expect(withKnife.leftHand).toBeUndefined();
     expect(withKnife.rightHand).toBe("knife");
+
+    const withBlood = assignLoadoutItem(DEFAULT_LOADOUT, "rightHand", "virgin-blood");
+    expect(withBlood.rightHand).toBe("virgin-blood");
   });
 });

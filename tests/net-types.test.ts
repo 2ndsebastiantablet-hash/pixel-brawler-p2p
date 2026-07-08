@@ -93,6 +93,7 @@ describe("network player packets", () => {
       hp: 64,
       statuses: ["marked", "legShotSlow"],
       respawnTimer: 0,
+      invulnerable: 1.95,
       chargeWeaponId: "lightning-rod",
       chargeHeldMs: 1850,
       aimX: 0.03,
@@ -114,6 +115,7 @@ describe("network player packets", () => {
     expect(packet.w).toBe("sniper");
     expect(packet.hp).toBe(64);
     expect(packet.st).toEqual(["marked", "legShotSlow"]);
+    expect(packet.iv).toBe(1.95);
     expect(packet.cw).toBe("lightning-rod");
     expect(packet.ch).toBe(1850);
     expect(packet.ax).toBe(0.03);

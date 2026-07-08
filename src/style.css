@@ -49,7 +49,7 @@ button {
 .pause-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 28;
   display: grid;
   place-items: center;
   padding: 22px;
@@ -501,6 +501,218 @@ button {
   height: 14px;
   border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: 3px;
+}
+
+.loadout-stage {
+  min-height: 190px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(4, 6, 12, 0.42);
+}
+
+.loadout-views {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.loadout-view {
+  position: relative;
+  height: 166px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.loadout-view-title {
+  position: absolute;
+  top: 7px;
+  left: 9px;
+  z-index: 2;
+  color: #bec2cf;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.loadout-view span {
+  position: absolute;
+  display: block;
+}
+
+.loadout-view .loadout-figure-head {
+  left: calc(50% - 15px);
+  top: 24px;
+  width: 30px;
+  height: 26px;
+  border-radius: 6px 6px 4px 4px;
+  background: var(--player-color);
+}
+
+.loadout-view .loadout-figure-torso {
+  left: calc(50% - 20px);
+  top: 54px;
+  width: 40px;
+  height: 50px;
+  border-radius: 4px;
+  background: var(--player-color);
+}
+
+.loadout-view .loadout-figure-left-arm,
+.loadout-view .loadout-figure-right-arm {
+  top: 66px;
+  width: 14px;
+  height: 44px;
+  border-radius: 5px;
+  background: var(--player-color);
+}
+
+.loadout-view .loadout-figure-left-arm {
+  left: calc(50% - 40px);
+  transform: rotate(12deg);
+}
+
+.loadout-view .loadout-figure-right-arm {
+  left: calc(50% + 26px);
+  transform: rotate(-12deg);
+}
+
+.loadout-view .loadout-figure-left-leg,
+.loadout-view .loadout-figure-right-leg {
+  top: 104px;
+  width: 15px;
+  height: 46px;
+  border-radius: 5px;
+  background: var(--player-color);
+}
+
+.loadout-view .loadout-figure-left-leg {
+  left: calc(50% - 20px);
+}
+
+.loadout-view .loadout-figure-right-leg {
+  left: calc(50% + 5px);
+}
+
+.loadout-view .loadout-figure-harness {
+  left: calc(50% - 30px);
+  top: 68px;
+  width: 60px;
+  height: 7px;
+  background: #070a12;
+  transform: rotate(23deg);
+  box-shadow: 0 17px 0 #070a12;
+}
+
+.loadout-view.back .loadout-figure-harness {
+  left: calc(50% - 25px);
+  top: 63px;
+  width: 50px;
+  height: 24px;
+  border-radius: 50%;
+  transform: none;
+  box-shadow: none;
+}
+
+.loadout-x-target {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  gap: 1px;
+  width: 42px;
+  min-height: 34px;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 6px;
+  color: #ffffff;
+  background: rgba(4, 6, 12, 0.78);
+  font-size: 10px;
+  line-height: 1.05;
+}
+
+.loadout-x-target strong {
+  max-width: 38px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.loadout-x {
+  position: static !important;
+  color: #ffd84d;
+  font-weight: 900;
+}
+
+.loadout-x-target.front-strap {
+  left: calc(50% + 18px);
+  top: 55px;
+}
+
+.loadout-x-target.back-strap {
+  left: calc(50% - 21px);
+  top: 65px;
+}
+
+.loadout-x-target.left-hand {
+  left: calc(50% - 76px);
+  top: 96px;
+}
+
+.loadout-x-target.right-hand {
+  left: calc(50% + 34px);
+  top: 96px;
+}
+
+.loadout-x-target.attachment {
+  left: calc(50% - 21px);
+  top: 82px;
+}
+
+.loadout-x-target.back-attachment {
+  left: calc(50% + 22px);
+  top: 90px;
+}
+
+.loadout-x-target.left-leg,
+.loadout-x-target.back-left-leg {
+  left: calc(50% - 52px);
+  top: 126px;
+}
+
+.loadout-x-target.right-leg,
+.loadout-x-target.back-right-leg {
+  left: calc(50% + 10px);
+  top: 126px;
+}
+
+.loadout-x-target.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.loadout-x-target.is-valid-drop {
+  border-color: #7cff6b;
+  box-shadow: 0 0 0 2px rgba(124, 255, 107, 0.22);
+}
+
+.loadout-x-target.is-invalid-drop {
+  border-color: #ff6f91;
+  box-shadow: 0 0 0 2px rgba(255, 111, 145, 0.22);
+}
+
+.loadout-error {
+  min-height: 18px;
+  margin: -2px 0 0;
+  color: #ffb0c4;
+  font-size: 12px;
+}
+
+.loadout-item-summary {
+  max-height: 28px;
+  overflow: hidden;
 }
 
 .primary-action,

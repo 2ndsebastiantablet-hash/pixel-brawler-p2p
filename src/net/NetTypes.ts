@@ -26,6 +26,7 @@ export interface PlayerNetState {
   hp?: number;
   statuses?: StatusEffectId[];
   respawnTimer?: number;
+  invulnerable?: number;
   chargeWeaponId?: WeaponId;
   chargeHeldMs?: number;
   aimX?: number;
@@ -58,6 +59,7 @@ export interface PlayerStatePacket {
   hp?: number;
   st?: StatusEffectId[];
   ko?: number;
+  iv?: number;
   cw?: WeaponId;
   ch?: number;
   ax?: number;
@@ -147,6 +149,7 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(typeof state.hp === "number" ? { hp: round(state.hp, 1) } : {}),
     ...(state.statuses ? { st: state.statuses } : {}),
     ...(typeof state.respawnTimer === "number" ? { ko: round(state.respawnTimer, 2) } : {}),
+    ...(typeof state.invulnerable === "number" ? { iv: round(state.invulnerable, 2) } : {}),
     ...(state.chargeWeaponId ? { cw: state.chargeWeaponId } : {}),
     ...(typeof state.chargeHeldMs === "number" ? { ch: Math.round(state.chargeHeldMs) } : {}),
     ...(typeof state.aimX === "number" ? { ax: round(state.aimX, 2) } : {}),
@@ -188,6 +191,7 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.hp === "number" ? { hp: packet.hp } : {}),
     ...(packet.st ? { statuses: packet.st } : {}),
     ...(typeof packet.ko === "number" ? { respawnTimer: packet.ko } : {}),
+    ...(typeof packet.iv === "number" ? { invulnerable: packet.iv } : {}),
     ...(packet.cw ? { chargeWeaponId: packet.cw } : {}),
     ...(typeof packet.ch === "number" ? { chargeHeldMs: packet.ch } : {}),
     ...(typeof packet.ax === "number" ? { aimX: packet.ax } : {}),
@@ -234,6 +238,7 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.hp === undefined || typeof value.hp === "number") &&
     (value.st === undefined || (Array.isArray(value.st) && value.st.every((item) => typeof item === "string"))) &&
     (value.ko === undefined || typeof value.ko === "number") &&
+    (value.iv === undefined || typeof value.iv === "number") &&
     (value.cw === undefined || typeof value.cw === "string") &&
     (value.ch === undefined || typeof value.ch === "number") &&
     (value.ax === undefined || typeof value.ax === "number") &&

@@ -1,7 +1,7 @@
 import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
-import { DEFAULT_PHYSICS, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
+import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
@@ -171,6 +171,21 @@ export class Game {
 
   setShowNames(show: boolean): void {
     this.showNames = show;
+  }
+
+  applyProfile(profile: PlayerProfile): void {
+    this.localPlayer.clientId = profile.clientId;
+    this.localPlayer.name = profile.name;
+    this.localPlayer.color = profile.color;
+    this.localPlayer.state.label = profile.name;
+    this.showNames = profile.showNames;
+    this.loadout = normalizeLoadout(profile.loadout);
+    this.attachmentVisual.initialized = false;
+    const equipped = this.combat.getPlayerInventory().equippedWeapon;
+    if (!loadoutHasWeapon(this.loadout, equipped)) {
+      this.combat.setEquippedWeapon(this.loadout.leftHand ?? this.loadout.frontStrap ?? "pistol");
+    }
+    this.renderCombatHud();
   }
 
   getDebugSnapshot(): GameDebugSnapshot {
@@ -355,6 +370,7 @@ export class Game {
         hp: remote.current.hp,
         statuses: remote.current.statuses,
         respawnTimer: remote.current.respawnTimer,
+        invulnerable: remote.current.invulnerable,
       });
     }
 
@@ -394,6 +410,7 @@ export class Game {
         hp: localCombatant?.hp,
         statuses: localCombatant?.statuses.map((status) => status.id),
         respawnTimer: localCombatant?.respawnTimer,
+        invulnerable: localCombatant?.invulnerable,
         aimX: this.lastAim.x,
         aimY: this.lastAim.y,
         chargeWeaponId,
@@ -428,6 +445,7 @@ export class Game {
         continue;
       }
       this.drawRemoteStatusVisuals(ctx, remote);
+      this.drawInvulnerabilityGlow(ctx, remote.player.state, remote.current.invulnerable ?? this.combat.getCombatant(remote.player.state.id)?.invulnerable ?? 0);
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
       const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
       this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
@@ -444,6 +462,7 @@ export class Game {
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
     if (!steady) {
+      this.drawInvulnerabilityGlow(ctx, this.localPlayer.state, localCombatant?.invulnerable ?? 0);
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
       this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
       if (this.loadout.attachment) {
@@ -1515,6 +1534,14 @@ export class Game {
     const flash = combatant.invulnerable > 0 && Math.floor(performance.now() / 80) % 2 === 0;
     ctx.save();
     ctx.globalAlpha = combatant.respawnTimer > 0 ? 0.25 : 1;
+    if (combatant.invulnerable > 0) {
+      const pulse = 1 + Math.sin(performance.now() * 0.012) * 0.18;
+      ctx.strokeStyle = "rgba(91, 183, 255, 0.9)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - Math.round(7 * pulse), y - Math.round(8 * pulse), 32 + Math.round(14 * pulse), 48 + Math.round(15 * pulse));
+      ctx.fillStyle = "rgba(91, 183, 255, 0.16)";
+      ctx.fillRect(x - 8, y - 9, 48, 65);
+    }
     if (combatant.statuses.some((status) => status.id === "empowered" || status.id === "holyBuff" || status.id === "blessed" || status.id === "angelWings")) {
       ctx.strokeStyle = "#7cff6b";
       ctx.lineWidth = 2;
@@ -1989,15 +2016,33 @@ export class Game {
 
   private drawPlatform(ctx: CanvasRenderingContext2D): void {
     const y = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
-    const x = Math.round(-2200 - this.camera.x);
+    const x = Math.round(PLATFORM_LEFT - this.camera.x);
+    const width = PLATFORM_RIGHT - PLATFORM_LEFT;
     ctx.fillStyle = "#dedee8";
-    ctx.fillRect(x, y, 4400, 12);
+    ctx.fillRect(x, y, width, 12);
     ctx.fillStyle = "#86869b";
-    ctx.fillRect(x, y + 12, 4400, 18);
+    ctx.fillRect(x, y + 12, width, 18);
     ctx.fillStyle = "#444455";
-    for (let tileX = x; tileX < x + 4400; tileX += 32) {
+    for (let tileX = x; tileX < x + width; tileX += 32) {
       ctx.fillRect(tileX, y + 14, 24, 2);
     }
+  }
+
+  private drawInvulnerabilityGlow(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, seconds: number): void {
+    if (seconds <= 0) {
+      return;
+    }
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const pulse = 1 + Math.sin(performance.now() * 0.014) * 0.16;
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.75, 0.32 + seconds * 0.18);
+    ctx.strokeStyle = "#5bb7ff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x - Math.round(8 * pulse), y - Math.round(9 * pulse), state.width + Math.round(16 * pulse), state.height + Math.round(17 * pulse));
+    ctx.fillStyle = "rgba(91, 183, 255, 0.14)";
+    ctx.fillRect(x - 10, y - 10, state.width + 20, state.height + 20);
+    ctx.restore();
   }
 
   private drawBursts(ctx: CanvasRenderingContext2D): void {

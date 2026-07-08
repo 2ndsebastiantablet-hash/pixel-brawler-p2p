@@ -1,4 +1,4 @@
-import { DEFAULT_PHYSICS, type PlayerPhysicsState } from "../Physics";
+import { DEFAULT_PHYSICS, VOID_DEATH_Y, isOverPlatform, type PlayerPhysicsState } from "../Physics";
 import type { DamageNumber, DamageRequest, DamageResult, HitLocation, Vec2 } from "./Damage";
 import type { Hitbox } from "./Hitbox";
 import { intersectsRect } from "./Hitbox";
@@ -109,6 +109,7 @@ interface CombatOptions {
 
 const maxHp = 100;
 const respawnDelay = 2;
+const respawnInvulnerabilityDuration = 2;
 const teleportDelay = 3;
 const whipComboWindow = 0.55;
 const knifeContactDamage = 4;
@@ -332,6 +333,7 @@ export class CombatSystem {
     hp?: number;
     statuses?: StatusEffectId[];
     respawnTimer?: number;
+    invulnerable?: number;
   }): Combatant {
     const existing = this.combatants.get(player.id);
     const next: Combatant = {
@@ -348,7 +350,7 @@ export class CombatSystem {
       velocityX: player.velocityX,
       velocityY: player.velocityY,
       hitstun: existing?.hitstun ?? 0,
-      invulnerable: existing?.invulnerable ?? 0,
+      invulnerable: player.invulnerable ?? existing?.invulnerable ?? 0,
       respawnTimer: player.respawnTimer ?? existing?.respawnTimer ?? 0,
       color: player.color,
       statuses: player.statuses ? player.statuses.map((status) => createStatus(status)) : existing?.statuses ?? [],
@@ -639,19 +641,25 @@ export class CombatSystem {
       if (this.consumeVirginBloodRevive(target)) {
         return { applied: true, remainingHp: target.hp, hitLocation };
       }
-      target.respawnTimer = respawnDelay;
-      target.hitstun = 0;
-      target.invulnerable = respawnDelay;
-      this.queueSound("respawn");
+      this.startRespawn(target, "KO");
     }
 
     return { applied: true, remainingHp: target.hp, hitLocation };
   }
 
+  killCombatant(id: string, label = "VOID"): boolean {
+    const target = this.combatants.get(id);
+    if (!target || target.respawnTimer > 0 || target.hp <= 0) {
+      return false;
+    }
+    this.startRespawn(target, label);
+    return true;
+  }
+
   update(dt: number, players: PlayerPhysicsState[]): void {
     for (const player of players) {
       const combatant = this.combatants.get(player.id);
-      if (combatant) {
+      if (combatant && combatant.respawnTimer <= 0) {
         combatant.x = player.x;
         combatant.y = player.y;
         combatant.width = player.width;
@@ -2040,7 +2048,9 @@ export class CombatSystem {
     const x = swing.x;
     const y = swing.y;
     const hitLabel = isKnife ? (knifeStep === 3 ? "Knife Stab" : "Knife Slash") : lowTrip ? "Low Whip" : label;
-    const knockbackY = isMacheteChop && aim.y >= 0
+    const knockbackY = isHammer && aim.y > 0
+      ? Math.max(140, aim.y * profile.knockback - 20)
+      : isMacheteChop && aim.y >= 0
       ? Math.max(70, aim.y * profile.knockback + 70)
       : aim.y * profile.knockback - 60;
     this.hitboxes.push({
@@ -2087,7 +2097,12 @@ export class CombatSystem {
       width: profile.range,
       height: profile.range,
       damage: profile.damage,
-      knockback: { x: context.aim.x * profile.knockback, y: context.aim.y * profile.knockback - 80 },
+      knockback: {
+        x: context.aim.x * profile.knockback,
+        y: this.inventory.equippedWeapon === "sledgehammer" && context.aim.y > 0
+          ? Math.max(140, context.aim.y * profile.knockback - 20)
+          : context.aim.y * profile.knockback - 80,
+      },
       stun: profile.stun,
       age: 0,
       duration: 0.22,
@@ -2359,8 +2374,13 @@ export class CombatSystem {
           combatant.y = combatant.spawnY;
           combatant.velocityX = 0;
           combatant.velocityY = 0;
+          combatant.invulnerable = Math.max(combatant.invulnerable, respawnInvulnerabilityDuration);
           combatant.statuses = [];
         }
+        continue;
+      }
+      if (combatant.y > VOID_DEATH_Y) {
+        this.startRespawn(combatant, "VOID");
         continue;
       }
       const hadSteady = combatant.statuses.some((status) => status.id === "steady");
@@ -2390,11 +2410,28 @@ export class CombatSystem {
       combatant.velocityX *= Math.max(0, 1 - dt * 5);
       combatant.velocityY += DEFAULT_PHYSICS.gravity * dt;
       const ground = DEFAULT_PHYSICS.groundY - combatant.height;
-      if (combatant.y > ground) {
+      if (combatant.y > ground && isOverPlatform(combatant)) {
         combatant.y = ground;
         combatant.velocityY = 0;
       }
+      if (combatant.y > VOID_DEATH_Y) {
+        this.startRespawn(combatant, "VOID");
+      }
     }
+  }
+
+  private startRespawn(target: Combatant, label: string): void {
+    target.hp = 0;
+    target.respawnTimer = respawnDelay;
+    target.hitstun = 0;
+    target.invulnerable = respawnDelay;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    target.x = target.spawnX;
+    target.y = target.spawnY;
+    target.statuses = target.statuses.filter((status) => status.id === "holyBuff" || status.id === "blessed");
+    this.addEffect("shockwave", target.spawnX + target.width / 2, target.spawnY + target.height / 2, target.spawnX + target.width / 2, target.spawnY - 72, "#72b7ff", label);
+    this.queueSound("respawn");
   }
 
   private updateProjectiles(dt: number, players: PlayerPhysicsState[]): void {

@@ -39,9 +39,11 @@ interface LobbyActions {
   endServer: () => void;
   kickPeer: (peer: PeerInfo) => void;
   banPeer: (peer: PeerInfo) => void;
+  updateProfile: (profile: PlayerProfile) => void;
 }
 
 type MenuScreen = "controls" | "main" | "setup" | "host" | "join" | "game";
+type SetupMode = "lobby" | "game";
 
 export class LobbyUI {
   private readonly menu = document.createElement("section");
@@ -52,7 +54,6 @@ export class LobbyUI {
   private selectedColor: string;
   private selectedLoadoutItem: WeaponId = "pistol";
   private selectedLoadoutCategory: LoadoutCategory = "all";
-  private loadoutPreviewAngle = 0;
   private status: ConnectionStatus | string = "Offline";
   private session: SessionView | null = null;
   private pauseOpen = false;
@@ -106,69 +107,8 @@ export class LobbyUI {
     this.menu.replaceChildren(panel);
   }
 
-  showSetup(): void {
-    this.screen = "setup";
-    this.menu.hidden = false;
-    this.hud.hidden = true;
-    this.pause.hidden = true;
-    this.pauseOpen = false;
-
-    const panel = document.createElement("div");
-    panel.className = "menu-panel setup-panel";
-    panel.innerHTML = `
-      <div class="panel-heading">
-        <h1>Player Setup</h1>
-        <button type="button" class="ghost-action" data-back>Back</button>
-      </div>
-      <div class="setup-layout">
-        <div class="setup-profile-column">
-          <label class="field-label" for="player-name">Name</label>
-          <input id="player-name" class="text-input" data-player-name maxlength="18" autocomplete="off" />
-          <div class="field-label">Color</div>
-          <div class="color-grid" data-color-grid></div>
-        </div>
-        <aside class="loadout-panel" data-loadout-panel>
-          <div class="loadout-preview-row">
-            <button type="button" class="ghost-action icon-action" data-loadout-rotate="-1" aria-label="Rotate preview left">‹</button>
-            <div class="loadout-preview" data-loadout-preview></div>
-            <button type="button" class="ghost-action icon-action" data-loadout-rotate="1" aria-label="Rotate preview right">›</button>
-          </div>
-          <div class="loadout-slots" data-loadout-slots></div>
-          <div class="loadout-leg-slots">
-            <button type="button" disabled data-loadout-leg-slot>Left Leg</button>
-            <button type="button" disabled data-loadout-leg-slot>Right Leg</button>
-          </div>
-          <div class="loadout-filters">
-            <input class="text-input" data-loadout-search placeholder="Search items" autocomplete="off" />
-            <div class="loadout-categories" data-loadout-categories></div>
-          </div>
-          <div class="loadout-items" data-loadout-items></div>
-        </aside>
-      </div>
-      <div class="menu-actions three-actions">
-        <button type="button" data-host>Host</button>
-        <button type="button" data-join>Join</button>
-        <button type="button" data-offline>Offline Test</button>
-      </div>
-      <p class="menu-status" data-status></p>
-    `;
-
-    this.menu.replaceChildren(panel);
-    this.bindProfileControls(panel);
-    this.bindLoadoutControls(panel);
-    requireElement(panel, "[data-back]").addEventListener("click", () => this.showMain());
-    requireElement(panel, "[data-host]").addEventListener("click", () => {
-      this.commitProfile();
-      this.showHost();
-    });
-    requireElement(panel, "[data-join]").addEventListener("click", () => {
-      this.commitProfile();
-      this.showJoin(true);
-    });
-    requireElement(panel, "[data-offline]").addEventListener("click", () => {
-      this.actions.startOffline(this.commitProfile());
-    });
-    requireElement(panel, "[data-status]").textContent = this.status;
+  showSetup(mode: SetupMode = "lobby"): void {
+    this.renderCharacterSetup(mode);
   }
 
   showHost(): void {
@@ -376,6 +316,73 @@ export class LobbyUI {
     this.setStatus(message || "Disconnected / failed");
   }
 
+  private renderCharacterSetup(mode: SetupMode): void {
+    this.screen = "setup";
+    this.menu.hidden = false;
+    this.hud.hidden = mode === "lobby";
+    this.pause.hidden = true;
+    this.pauseOpen = false;
+
+    const panel = document.createElement("div");
+    panel.className = "menu-panel setup-panel";
+    panel.innerHTML = `
+      <div class="panel-heading">
+        <h1>Player Setup</h1>
+        <button type="button" class="ghost-action" ${mode === "game" ? "data-return-game" : "data-back"}>${mode === "game" ? "Return to Game" : "Back"}</button>
+      </div>
+      <div class="setup-layout">
+        <div class="setup-profile-column">
+          <label class="field-label" for="player-name">Name</label>
+          <input id="player-name" class="text-input" data-player-name maxlength="18" autocomplete="off" />
+          <div class="field-label">Color</div>
+          <div class="color-grid" data-color-grid></div>
+        </div>
+        <aside class="loadout-panel" data-loadout-panel>
+          <div class="loadout-stage" data-loadout-preview></div>
+          <p class="loadout-error" data-loadout-error aria-live="polite"></p>
+          <div class="loadout-filters">
+            <input class="text-input" data-loadout-search placeholder="Search items" autocomplete="off" />
+            <div class="loadout-categories" data-loadout-categories></div>
+          </div>
+          <div class="loadout-items" data-loadout-items></div>
+        </aside>
+      </div>
+      <div class="menu-actions three-actions" ${mode === "game" ? "hidden" : ""}>
+        <button type="button" data-host>Host</button>
+        <button type="button" data-join>Join</button>
+        <button type="button" data-offline>Offline Test</button>
+      </div>
+      <p class="menu-status" data-status></p>
+    `;
+
+    this.menu.replaceChildren(panel);
+    this.bindProfileControls(panel);
+    this.bindLoadoutControls(panel);
+    if (mode === "game") {
+      requireElement(panel, "[data-return-game]").addEventListener("click", () => {
+        const nextProfile = this.commitProfile();
+        this.actions.updateProfile(nextProfile);
+        if (this.session) {
+          this.showGame(this.session);
+        }
+      });
+    } else {
+      requireElement(panel, "[data-back]").addEventListener("click", () => this.showMain());
+      requireElement(panel, "[data-host]").addEventListener("click", () => {
+        this.commitProfile();
+        this.showHost();
+      });
+      requireElement(panel, "[data-join]").addEventListener("click", () => {
+        this.commitProfile();
+        this.showJoin(true);
+      });
+      requireElement(panel, "[data-offline]").addEventListener("click", () => {
+        this.actions.startOffline(this.commitProfile());
+      });
+    }
+    requireElement(panel, "[data-status]").textContent = this.status;
+  }
+
   private bindProfileControls(root: HTMLElement): void {
     const nameInput = requireElement<HTMLInputElement>(root, "[data-player-name]");
     const colorGrid = requireElement(root, "[data-color-grid]");
@@ -404,46 +411,162 @@ export class LobbyUI {
   private bindLoadoutControls(root: HTMLElement): void {
     this.profile = { ...this.profile, loadout: normalizeLoadout(this.profile.loadout) };
     this.renderLoadoutPreview(root);
-    this.renderLoadoutSlots(root);
+    if (root.querySelector("[data-loadout-slots]")) {
+      this.renderLoadoutSlots(root);
+    }
     this.renderLoadoutCategories(root);
     this.renderLoadoutItems(root);
 
     const search = requireElement<HTMLInputElement>(root, "[data-loadout-search]");
     search.addEventListener("input", () => this.renderLoadoutItems(root));
-    for (const button of root.querySelectorAll<HTMLButtonElement>("[data-loadout-rotate]")) {
-      button.addEventListener("click", () => {
-        this.loadoutPreviewAngle = (this.loadoutPreviewAngle + Number(button.dataset.loadoutRotate ?? 0) + 4) % 4;
-        this.renderLoadoutPreview(root);
-      });
-    }
   }
 
   private renderLoadoutPreview(root: HTMLElement): void {
     const preview = requireElement(root, "[data-loadout-preview]");
-    const loadout = normalizeLoadout(this.profile.loadout);
-    preview.setAttribute("data-angle", String(this.loadoutPreviewAngle));
     preview.replaceChildren();
+    const views = document.createElement("div");
+    views.className = "loadout-views";
+    views.append(
+      this.createLoadoutView(root, "front", [
+        { slot: "frontStrap", label: "Front", className: "front-strap" },
+        { slot: "leftHand", label: "L", className: "left-hand" },
+        { slot: "rightHand", label: "R", className: "right-hand" },
+        { slot: "attachment", label: "F", className: "attachment" },
+      ], [
+        { label: "Left Leg", className: "left-leg" },
+        { label: "Right Leg", className: "right-leg" },
+      ]),
+      this.createLoadoutView(root, "back", [
+        { slot: "backStrap", label: "Back", className: "back-strap" },
+        { slot: "attachment", label: "F", className: "back-attachment" },
+      ], [
+        { label: "Back Left Leg", className: "back-left-leg" },
+        { label: "Back Right Leg", className: "back-right-leg" },
+      ]),
+    );
+    preview.append(views);
+  }
 
+  private createLoadoutView(
+    root: HTMLElement,
+    view: "front" | "back",
+    targets: Array<{ slot: LoadoutSlotId; label: string; className: string }>,
+    legTargets: Array<{ label: string; className: string }>,
+  ): HTMLElement {
     const figure = document.createElement("div");
-    figure.className = "loadout-figure";
+    figure.className = `loadout-view ${view}`;
+    figure.dataset.loadoutView = view;
     figure.style.setProperty("--player-color", this.selectedColor);
+
+    const title = document.createElement("div");
+    title.className = "loadout-view-title";
+    title.textContent = view;
+    figure.append(title);
+
     for (const part of ["head", "torso", "left-arm", "right-arm", "left-leg", "right-leg", "harness"] as const) {
       const node = document.createElement("span");
       node.className = `loadout-figure-${part}`;
       figure.append(node);
     }
-    for (const slot of ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"] as LoadoutSlotId[]) {
-      const weaponId = loadout[slot];
-      if (!weaponId) {
-        continue;
-      }
-      const badge = document.createElement("span");
-      badge.className = `loadout-preview-item ${slot}`;
-      badge.style.setProperty("--item-color", colorForLoadoutItem(weaponId));
-      badge.title = loadoutWeaponName(weaponId);
-      figure.append(badge);
+
+    for (const target of targets) {
+      figure.append(this.createLoadoutDropTarget(root, target.slot, target.label, target.className));
     }
-    preview.append(figure);
+    for (const target of legTargets) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.disabled = true;
+      button.className = `loadout-x-target disabled ${target.className}`;
+      button.dataset.loadoutLegSlot = target.className;
+      button.title = `${target.label} reserved for future leg equipment`;
+      button.textContent = "X";
+      figure.append(button);
+    }
+
+    return figure;
+  }
+
+  private createLoadoutDropTarget(root: HTMLElement, slot: LoadoutSlotId, label: string, className: string): HTMLButtonElement {
+    const loadout = normalizeLoadout(this.profile.loadout);
+    const weaponId = loadout[slot];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `loadout-x-target ${className}`;
+    button.dataset.loadoutDropSlot = slot;
+    button.title = `${LOADOUT_SLOT_LABELS[slot]}: ${loadoutWeaponName(weaponId)}`;
+    button.draggable = Boolean(weaponId);
+
+    const marker = document.createElement("span");
+    marker.className = "loadout-x";
+    marker.textContent = "X";
+    const value = document.createElement("strong");
+    value.textContent = weaponId ? loadoutWeaponName(weaponId) : label;
+    button.append(marker, value);
+
+    button.addEventListener("click", () => this.assignLoadoutDrop(root, slot, this.selectedLoadoutItem, button));
+    button.addEventListener("dragstart", (event) => {
+      if (!weaponId || !event.dataTransfer) {
+        return;
+      }
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-pixel-weapon", weaponId);
+      event.dataTransfer.setData("text/plain", weaponId);
+    });
+    button.addEventListener("dragover", (event) => {
+      const weapon = readDraggedWeapon(event);
+      if (!weapon) {
+        return;
+      }
+      event.preventDefault();
+      button.classList.toggle("is-valid-drop", isSlotCompatible(weapon, slot));
+      button.classList.toggle("is-invalid-drop", !isSlotCompatible(weapon, slot));
+    });
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("is-valid-drop", "is-invalid-drop");
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      button.classList.remove("is-valid-drop", "is-invalid-drop");
+      const weapon = readDraggedWeapon(event);
+      if (weapon) {
+        this.assignLoadoutDrop(root, slot, weapon, button);
+      }
+    });
+
+    return button;
+  }
+
+  private assignLoadoutDrop(root: HTMLElement, slot: LoadoutSlotId, weaponId: WeaponId, target: HTMLElement): void {
+    if (!isSlotCompatible(weaponId, slot)) {
+      this.showLoadoutError(root, target, `${loadoutWeaponName(weaponId)} cannot attach to ${LOADOUT_SLOT_LABELS[slot]}.`);
+      return;
+    }
+    this.profile = {
+      ...this.profile,
+      loadout: assignLoadoutItem(this.profile.loadout ?? {}, slot, weaponId),
+    };
+    this.selectedLoadoutItem = weaponId;
+    const error = root.querySelector("[data-loadout-error]");
+    if (error) {
+      error.textContent = "";
+    }
+    this.refreshLoadoutEditor(root);
+  }
+
+  private showLoadoutError(root: HTMLElement, target: HTMLElement, message: string): void {
+    const error = root.querySelector("[data-loadout-error]");
+    if (error) {
+      error.textContent = message;
+    }
+    target.classList.add("is-invalid-drop");
+  }
+
+  private refreshLoadoutEditor(root: HTMLElement): void {
+    this.renderLoadoutPreview(root);
+    if (root.querySelector("[data-loadout-slots]")) {
+      this.renderLoadoutSlots(root);
+    }
+    this.renderLoadoutItems(root);
   }
 
   private renderLoadoutSlots(root: HTMLElement): void {
@@ -480,11 +603,14 @@ export class LobbyUI {
     container.replaceChildren();
     const categories: Array<{ id: LoadoutCategory; label: string }> = [
       { id: "all", label: "All" },
-      { id: "hands", label: "Hands" },
-      { id: "straps", label: "Straps" },
-      { id: "attachments", label: "Attach" },
-      { id: "melee", label: "Melee" },
-      { id: "ranged", label: "Ranged" },
+      { id: "guns", label: "Guns" },
+      { id: "blades", label: "Blades" },
+      { id: "heavy", label: "Heavy" },
+      { id: "throwables", label: "Throw" },
+      { id: "body", label: "Body" },
+      { id: "mobility", label: "Move" },
+      { id: "summons", label: "Summon" },
+      { id: "consumables", label: "Items" },
       { id: "utility", label: "Utility" },
     ];
     for (const category of categories) {
@@ -508,9 +634,6 @@ export class LobbyUI {
     container.replaceChildren();
     const items = LOADOUT_ITEMS.filter((item) => {
       const matchesCategory = this.selectedLoadoutCategory === "all"
-        || (this.selectedLoadoutCategory === "hands" && (item.compatibleSlots.includes("leftHand") || item.compatibleSlots.includes("rightHand")))
-        || (this.selectedLoadoutCategory === "straps" && (item.compatibleSlots.includes("frontStrap") || item.compatibleSlots.includes("backStrap")))
-        || (this.selectedLoadoutCategory === "attachments" && item.compatibleSlots.includes("attachment"))
         || item.category === this.selectedLoadoutCategory;
       const matchesSearch = !search
         || item.name.toLowerCase().includes(search)
@@ -523,6 +646,8 @@ export class LobbyUI {
       button.type = "button";
       button.className = `loadout-item${item.id === this.selectedLoadoutItem ? " is-selected" : ""}`;
       button.dataset.loadoutItem = item.id;
+      button.draggable = true;
+      button.title = item.summary;
       const swatch = document.createElement("span");
       swatch.className = "loadout-item-swatch";
       swatch.style.backgroundColor = colorForLoadoutItem(item.id);
@@ -532,11 +657,24 @@ export class LobbyUI {
       const meta = document.createElement("small");
       const slotLabels = item.compatibleSlots.map((slot) => LOADOUT_SLOT_LABELS[slot].split(" ")[0]).join("/");
       meta.textContent = `${item.handedness} ${slotLabels}`;
-      text.append(strong, meta);
+      const summary = document.createElement("small");
+      summary.className = "loadout-item-summary";
+      summary.textContent = item.summary;
+      text.append(strong, meta, summary);
       button.append(swatch, text);
+      button.addEventListener("dragstart", (event) => {
+        if (!event.dataTransfer) {
+          return;
+        }
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-pixel-weapon", item.id);
+        event.dataTransfer.setData("text/plain", item.id);
+      });
       button.addEventListener("click", () => {
         this.selectedLoadoutItem = item.id;
-        this.renderLoadoutSlots(root);
+        if (root.querySelector("[data-loadout-slots]")) {
+          this.renderLoadoutSlots(root);
+        }
         this.renderLoadoutItems(root);
       });
       container.append(button);
@@ -650,6 +788,14 @@ export class LobbyUI {
     }
 
     const actions = requireElement(panel, "[data-actions]");
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.dataset.editCharacter = "true";
+    edit.textContent = "Edit Character";
+    edit.addEventListener("click", () => {
+      this.hidePause();
+      this.renderCharacterSetup("game");
+    });
     const leave = document.createElement("button");
     leave.type = "button";
     leave.textContent = session.isHost ? "Leave / End Server" : "Leave";
@@ -660,7 +806,7 @@ export class LobbyUI {
         this.actions.leaveSession();
       }
     });
-    actions.append(leave);
+    actions.append(edit, leave);
 
     this.pause.replaceChildren(panel);
   }
@@ -789,6 +935,13 @@ function colorForLoadoutItem(id: WeaponId): string {
     default:
       return "#ffffff";
   }
+}
+
+function readDraggedWeapon(event: DragEvent): WeaponId | null {
+  const value = event.dataTransfer?.getData("application/x-pixel-weapon")
+    || event.dataTransfer?.getData("text/plain");
+  const item = LOADOUT_ITEMS.find((candidate) => candidate.id === value);
+  return item?.id ?? null;
 }
 
 function requireElement<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
