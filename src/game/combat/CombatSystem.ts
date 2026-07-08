@@ -61,7 +61,8 @@ export interface CombatEffect {
     | "stun"
     | "aura"
     | "slam"
-    | "blood";
+    | "blood"
+    | "explosion";
   x: number;
   y: number;
   tx: number;
@@ -131,8 +132,13 @@ const deathAuraActiveDuration = 60;
 const deathAuraCooldownDuration = 40;
 const deathAuraSufferingForMaxPower = 90;
 const deathFrozenGravityMultiplier = 2.2;
-const rocketExplosionRadius = 180;
-const rocketExplosionDamage = 38;
+const rocketExplosionRadius = 300;
+const rocketExplosionCenterDamage = 82;
+const rocketExplosionEdgeDamage = 34;
+const rocketExplosionCenterKnockback = 1600;
+const rocketExplosionEdgeKnockback = 760;
+const rocketExplosionCenterStun = 0.74;
+const rocketExplosionEdgeStun = 0.42;
 const rocketLaunchSpeed = 660;
 const rocketChaosSpeed = 850;
 const handsMissingDuration = 40;
@@ -361,6 +367,10 @@ export class CombatSystem {
 
   getPlayerInventory(): WeaponInventoryState {
     return this.inventory;
+  }
+
+  setEquippedWeapon(weaponId: WeaponId): void {
+    this.inventory.equippedWeapon = weaponId;
   }
 
   equip(indexOrId: number | WeaponId): WeaponId {
@@ -1159,9 +1169,9 @@ export class CombatSystem {
     rocket.age = 0;
     rocket.vx = facing * rocketLaunchSpeed;
     rocket.vy = -34;
-    rocket.damage = rocketExplosionDamage;
-    rocket.knockback = { x: facing * 720, y: -260 };
-    rocket.stun = 0.48;
+    rocket.damage = rocketExplosionCenterDamage;
+    rocket.knockback = { x: facing * rocketExplosionCenterKnockback, y: -360 };
+    rocket.stun = rocketExplosionCenterStun;
     rocket.riderId = riderClose ? context.ownerId : undefined;
     rocket.ownerFacing = facing;
     this.addEffect("tracer", rocket.x, rocket.y, rocket.x - facing * 54, rocket.y + 4, "#ff8f3d", "Rocket Fire");
@@ -1749,6 +1759,69 @@ export class CombatSystem {
     this.addEffect(effect, x, y, x, y, effect === "teleport" ? "#b096ff" : "#ff8f3d", label);
   }
 
+  private applyExplosionDamage(options: {
+    sourceId: string;
+    weaponId: WeaponId;
+    x: number;
+    y: number;
+    radius: number;
+    centerDamage: number;
+    edgeDamage: number;
+    centerKnockback: number;
+    edgeKnockback: number;
+    centerStun: number;
+    edgeStun: number;
+    label: string;
+  }): void {
+    for (const target of this.combatants.values()) {
+      if (target.respawnTimer > 0) {
+        continue;
+      }
+      const tx = target.x + target.width / 2;
+      const ty = target.y + target.height / 2;
+      const distance = Math.hypot(tx - options.x, ty - options.y);
+      if (distance > options.radius) {
+        continue;
+      }
+      const falloff = 1 - distance / options.radius;
+      const damage = Math.round(lerp(options.edgeDamage, options.centerDamage, falloff));
+      const knockback = lerp(options.edgeKnockback, options.centerKnockback, falloff);
+      const stun = lerp(options.edgeStun, options.centerStun, falloff);
+      const direction = normalize({
+        x: tx - options.x || (target.id === options.sourceId ? -1 : 1),
+        y: ty - options.y || -0.35,
+      });
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: options.sourceId,
+        targetId: target.id,
+        weaponId: options.weaponId,
+        damage,
+        knockback: {
+          x: direction.x * knockback,
+          y: -Math.abs(direction.y * knockback) - lerp(180, 360, falloff),
+        },
+        stun,
+        label: options.label,
+        status: "daze",
+        skipHitLocationScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+      }
+    }
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, "#ff8f3d", "EXPLOSION");
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius * 0.7, options.y, "#fff4a8", "FIREBALL");
+    this.addEffect("aura", options.x, options.y, options.x + options.radius * 0.9, options.y, "#2b2b32", "SMOKE CLOUD");
+    this.addEffect("shockwave", options.x, options.y, options.x + options.radius, options.y, "#ffcf5a", "BOOM");
+    for (let index = 0; index < 12; index += 1) {
+      const angle = (Math.PI * 2 * index) / 12;
+      const reach = options.radius * (0.24 + (index % 4) * 0.12);
+      this.addEffect("spark", options.x, options.y, options.x + Math.cos(angle) * reach, options.y + Math.sin(angle) * reach, index % 2 === 0 ? "#ffcf5a" : "#ff8f3d", "DEBRIS");
+    }
+  }
+
   private applyLightningLineDamage(sourceId: string, from: Vec2, to: Vec2, damage: number, knockback: number, stun: number, label: string): void {
     const strike = { x: to.x - from.x, y: to.y - from.y };
     const lengthSquared = Math.max(1, strike.x * strike.x + strike.y * strike.y);
@@ -1943,7 +2016,6 @@ export class CombatSystem {
   private spawnMeleeHitbox(context: WeaponUseContext, profile: AttackProfile, label: string): void {
     const weaponId = this.inventory.equippedWeapon;
     const aim = normalize(context.aim);
-    const center = this.muzzle(context.player);
     const isWhip = weaponId === "whip";
     const isKnife = weaponId === "knife";
     const isMachete = weaponId === "machete";
@@ -1954,8 +2026,8 @@ export class CombatSystem {
     const attackColor = macheteState ? macheteColor(macheteState.redness) : colorForWeapon(weaponId);
     const knifeStep = isKnife ? this.registerKnifeSwing() : 0;
     const lowTrip = isWhip && (context.player.ducking || context.player.lowSliding || context.player.action === "duck" || context.player.action === "lowSlide");
-    const width = isKnife ? profile.range + (knifeStep === 3 ? 10 : 0) : profile.range;
-    const height = isWhip
+    const range = isKnife ? profile.range + (knifeStep === 3 ? 10 : 0) : profile.range;
+    const thickness = isWhip
       ? Math.max(32, (profile.radius ?? 14) * 2.4)
       : isKnife
         ? Math.max(24, (profile.radius ?? 14) * 2.2)
@@ -1964,21 +2036,25 @@ export class CombatSystem {
           : isAxe
             ? Math.max(42, (profile.radius ?? 22) * 2.2)
             : Math.max(22, (profile.radius ?? 14) * 2);
-    const x = aim.x >= 0 ? center.x : center.x - width;
-    const y = lowTrip ? center.y + 18 : center.y - height / 2 + aim.y * (isWhip ? 44 : isMacheteChop ? 32 : isAxe ? 24 : 18);
+    const swing = aimedMeleeBox(context.player, aim, range, thickness, lowTrip);
+    const x = swing.x;
+    const y = swing.y;
     const hitLabel = isKnife ? (knifeStep === 3 ? "Knife Stab" : "Knife Slash") : lowTrip ? "Low Whip" : label;
+    const knockbackY = isMacheteChop && aim.y >= 0
+      ? Math.max(70, aim.y * profile.knockback + 70)
+      : aim.y * profile.knockback - 60;
     this.hitboxes.push({
       id: this.makeId("hit"),
       ownerId: context.ownerId,
       weaponId,
       x,
       y,
-      width,
-      height,
+      width: swing.width,
+      height: swing.height,
       damage: profile.damage,
       knockback: {
-        x: Math.sign(aim.x || context.player.facing) * profile.knockback,
-        y: isMacheteChop ? Math.max(70, aim.y * profile.knockback + 70) : aim.y * profile.knockback - 60,
+        x: aim.x * profile.knockback,
+        y: knockbackY,
       },
       stun: profile.stun,
       age: 0,
@@ -1991,12 +2067,12 @@ export class CombatSystem {
       heavy: isHammer || isMacheteChop || isAxe,
       hits: [],
     });
-    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", x, y, x + width * Math.sign(aim.x || context.player.facing), y, attackColor, hitLabel);
+    this.addEffect(weaponId === "sledgehammer" ? "slam" : weaponId === "lightning-rod" ? "lightning" : "whip", swing.start.x, swing.start.y, swing.end.x, swing.end.y, attackColor, hitLabel);
     if (isMacheteChop) {
-      this.addEffect("spark", x + width * 0.5, y + height, x + width * 0.5, y + height + 18, attackColor, "Chop");
+      this.addEffect("spark", x + swing.width * 0.5, y + swing.height, x + swing.width * 0.5, y + swing.height + 18, attackColor, "Chop");
     }
     if (isAxe) {
-      this.addEffect("spark", x + width * 0.72, y + height * 0.5, x + width * 0.72, y + height * 0.5 + 18, attackColor, "Heavy");
+      this.addEffect("spark", x + swing.width * 0.72, y + swing.height * 0.5, x + swing.width * 0.72, y + swing.height * 0.5 + 18, attackColor, "Heavy");
     }
   }
 
@@ -2541,30 +2617,20 @@ export class CombatSystem {
     if (projectile.age > projectile.lifetime + 0.5) {
       return;
     }
-    this.applyBurstDamage(projectile.ownerId, projectile.x, projectile.y, rocketExplosionRadius, rocketExplosionDamage, 760, 0.52, "Rocket Explosion", "shockwave");
-    const owner = this.combatants.get(projectile.ownerId);
-    if (owner) {
-      const ox = owner.x + owner.width / 2;
-      const oy = owner.y + owner.height / 2;
-      const distance = Math.hypot(ox - projectile.x, oy - projectile.y);
-      if (projectile.riderId === projectile.ownerId || distance <= rocketExplosionRadius * 0.72) {
-        const previousInvulnerable = owner.invulnerable;
-        owner.invulnerable = 0;
-        this.applyDamage({
-          sourceId: projectile.ownerId,
-          targetId: projectile.ownerId,
-          weaponId: "rocket",
-          damage: projectile.riderId === projectile.ownerId ? 48 : 32,
-          knockback: { x: Math.sign(ox - projectile.x || 1) * 460, y: -420 },
-          stun: 0.5,
-          label: "Rocket Backfire",
-          skipHitLocationScaling: true,
-        });
-        owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
-      }
-    }
-    this.addEffect("shockwave", projectile.x, projectile.y, projectile.x, projectile.y, "#ff8f3d", "BOOM");
-    this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 70, "#2b2b32", "Smoke");
+    this.applyExplosionDamage({
+      sourceId: projectile.ownerId,
+      weaponId: "rocket",
+      x: projectile.x,
+      y: projectile.y,
+      radius: rocketExplosionRadius,
+      centerDamage: rocketExplosionCenterDamage,
+      edgeDamage: rocketExplosionEdgeDamage,
+      centerKnockback: rocketExplosionCenterKnockback,
+      edgeKnockback: rocketExplosionEdgeKnockback,
+      centerStun: rocketExplosionCenterStun,
+      edgeStun: rocketExplosionEdgeStun,
+      label: "Rocket Explosion",
+    });
     this.queueSound("rocket-explode");
     this.rockets.delete(projectile.ownerId);
     projectile.age = projectile.lifetime + 1;
@@ -3292,7 +3358,14 @@ export class CombatSystem {
   }
 
   private addEffect(kind: CombatEffect["kind"], x: number, y: number, tx: number, ty: number, color: string, label?: string): void {
-    const rocketEffect = label === "Rocket Fire" || label === "Chaotic" || label === "BOOM" || label === "Smoke";
+    const rocketEffect = label === "Rocket Fire"
+      || label === "Chaotic"
+      || label === "BOOM"
+      || label === "Smoke"
+      || label === "EXPLOSION"
+      || label === "FIREBALL"
+      || label === "SMOKE CLOUD"
+      || label === "DEBRIS";
     const lingeringAura = label === "DEATH AURA" || label === "FROZEN" || label === "BUFFED";
     this.effects.push({
       id: this.makeId("fx"),
@@ -3329,6 +3402,34 @@ function rotate(vector: Vec2, radians: number): Vec2 {
   return {
     x: vector.x * cos - vector.y * sin,
     y: vector.x * sin + vector.y * cos,
+  };
+}
+
+function aimedMeleeBox(
+  player: PlayerPhysicsState,
+  aim: Vec2,
+  range: number,
+  thickness: number,
+  lowTrip: boolean,
+): { x: number; y: number; width: number; height: number; start: Vec2; end: Vec2 } {
+  const start = {
+    x: player.x + player.width / 2,
+    y: lowTrip ? player.y + player.height - 12 : player.y + 22,
+  };
+  const end = {
+    x: start.x + aim.x * range,
+    y: start.y + aim.y * range,
+  };
+  const padding = thickness / 2;
+  const x = Math.min(start.x, end.x) - padding;
+  const y = Math.min(start.y, end.y) - padding;
+  return {
+    x,
+    y,
+    width: Math.abs(end.x - start.x) + thickness,
+    height: Math.abs(end.y - start.y) + thickness,
+    start,
+    end,
   };
 }
 

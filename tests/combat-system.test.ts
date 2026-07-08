@@ -781,6 +781,73 @@ describe("combat system", () => {
     expect(combat.getSnapshot().droppedWeapons.some((dropped) => dropped.weaponId === "knife")).toBe(false);
   });
 
+  it("aims close melee swings upward, downward, and diagonally with mouse direction", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState, id: "peer-a", x: 0, y: playerState.y, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "above",
+      name: "Above",
+      color: "#ff6f91",
+      x: 0,
+      y: player.y - 46,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.equip("knife");
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(1 / 60, [player]);
+    const above = combat.getCombatant("above")!;
+    expect(above.hp).toBeLessThan(100);
+    expect(above.velocityY).toBeLessThan(-40);
+
+    above.hp = 100;
+    above.invulnerable = 0;
+    above.x = 78;
+    above.y = player.y - 62;
+    above.velocityX = 0;
+    above.velocityY = 0;
+    combat.equip("machete");
+    combat.getPlayerInventory().cooldowns.machete = 0;
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 0.7, y: -0.7 }, now: 300, heldMs: 0, isNewPress: true });
+    combat.update(1 / 60, [player]);
+    expect(above.hp).toBeLessThan(100);
+    expect(above.velocityX).toBeGreaterThan(180);
+    expect(above.velocityY).toBeLessThan(-70);
+
+    above.hp = 100;
+    above.invulnerable = 0;
+    above.x = 0;
+    above.y = player.y - 52;
+    above.velocityX = 0;
+    above.velocityY = 0;
+    combat.equip("axe");
+    combat.getPlayerInventory().cooldowns.axe = 0;
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 0, y: -1 }, now: 500, heldMs: 0, isNewPress: true });
+    combat.update(1 / 60, [player]);
+    expect(above.hp).toBeLessThan(100);
+    expect(above.velocityY).toBeLessThan(-220);
+
+    above.hp = 100;
+    above.invulnerable = 0;
+    above.x = 0;
+    above.y = player.y + 74;
+    above.velocityX = 0;
+    above.velocityY = 0;
+    const airborne = { ...player, y: player.y - 92, grounded: false };
+    combat.syncLocalPlayer(airborne, "Host", "#18dff5");
+    combat.equip("sledgehammer");
+    combat.getPlayerInventory().cooldowns.sledgehammer = 0;
+    combat.usePrimary({ ownerId: "peer-a", player: airborne, aim: { x: 0, y: 1 }, now: 700, heldMs: 900, isNewPress: true });
+    combat.update(1 / 60, [airborne]);
+    expect(above.hp).toBeLessThan(100);
+    expect(above.velocityY).toBeGreaterThan(120);
+  });
+
   it("damages overlapping targets with equipped knife contact on a short per-target cooldown", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -1480,6 +1547,86 @@ describe("combat system", () => {
     combat.update(0.5, [player]);
     expect(combat.getCombatant("target")!.hp).toBeLessThan(100);
     expect(combat.getSnapshot().effects.some((effect) => effect.label === "BOOM")).toBe(true);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["rocket-light", "rocket-explode"]));
+  });
+
+  it("uses true giant radius falloff for Rocket explosions with top-tier knockback, self damage, and large visuals", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("rocket");
+    const owner = { ...playerState, id: "peer-a", x: 204, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Host", "#18dff5");
+    const centerDummy = combat.spawnTrainingDummy({ x: 300, y: playerState.y });
+    combat.syncRemotePlayer({
+      id: "edge",
+      name: "Edge",
+      color: "#ffd84d",
+      x: 462,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.syncRemotePlayer({
+      id: "outside",
+      name: "Outside",
+      color: "#b096ff",
+      x: 620,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.usePrimary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.useSecondary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 300, heldMs: 0, isNewPress: true });
+    const rocket = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")!;
+    rocket.x = 320;
+    rocket.y = DEFAULT_PHYSICS.groundY - rocket.radius;
+    rocket.vx = 0;
+    rocket.vy = 0;
+    rocket.age = 0.2;
+    rocket.riderId = "peer-a";
+
+    combat.update(1 / 60, [owner]);
+
+    const center = combat.getCombatant(centerDummy.id)!;
+    const edge = combat.getCombatant("edge")!;
+    const outside = combat.getCombatant("outside")!;
+    const ownerCombatant = combat.getCombatant("peer-a")!;
+
+    expect(center.hp).toBeLessThan(edge.hp);
+    expect(center.hp).toBeLessThanOrEqual(25);
+    expect(edge.hp).toBeLessThan(100);
+    expect(edge.hp).toBeGreaterThan(center.hp);
+    expect(outside.hp).toBe(100);
+    expect(ownerCombatant.hp).toBeLessThan(100);
+    expect(Math.hypot(center.velocityX, center.velocityY)).toBeGreaterThan(1300);
+    expect(Math.hypot(edge.velocityX, edge.velocityY)).toBeGreaterThan(600);
+    expect(Math.hypot(center.velocityX, center.velocityY)).toBeGreaterThan(Math.hypot(edge.velocityX, edge.velocityY));
+    expect(center.velocityY).toBeLessThan(-800);
+    expect(edge.velocityY).toBeLessThan(-380);
+    const effects = combat.getSnapshot().effects;
+    const explosion = effects.find((effect) => effect.label === "EXPLOSION")!;
+    const fireball = effects.find((effect) => effect.label === "FIREBALL")!;
+    const smoke = effects.find((effect) => effect.label === "SMOKE CLOUD")!;
+    const shockwave = effects.find((effect) => effect.label === "BOOM")!;
+    expect(explosion).toMatchObject({ kind: "explosion" });
+    expect(explosion.tx - explosion.x).toBeGreaterThanOrEqual(260);
+    expect(fireball).toMatchObject({ kind: "explosion" });
+    expect(fireball.tx - fireball.x).toBeGreaterThanOrEqual(180);
+    expect(smoke).toMatchObject({ kind: "aura" });
+    expect(smoke.tx - smoke.x).toBeGreaterThanOrEqual(230);
+    expect(shockwave).toMatchObject({ kind: "shockwave" });
+    expect(shockwave.tx - shockwave.x).toBeGreaterThanOrEqual(260);
+    expect(effects.filter((effect) => effect.label === "DEBRIS" && effect.kind === "spark").length).toBeGreaterThanOrEqual(12);
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "rocket", targetId: centerDummy.id, label: "Rocket Explosion" }),
+      expect.objectContaining({ action: "hit", weaponId: "rocket", targetId: "edge", label: "Rocket Explosion" }),
+      expect.objectContaining({ action: "hit", weaponId: "rocket", targetId: "peer-a", label: "Rocket Explosion" }),
+    ]));
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["rocket-light", "rocket-explode"]));
   });
 
