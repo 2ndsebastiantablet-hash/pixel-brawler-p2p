@@ -2,6 +2,7 @@ import type { Facing, PlayerAction } from "../game/Physics";
 import type { HitLocation } from "../game/combat/Damage";
 import type { StatusEffectId } from "../game/combat/StatusEffects";
 import type { WeaponId } from "../game/combat/Weapon";
+import type { LoadoutState } from "../game/loadout/Loadout";
 import { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS } from "./RoomConfig";
 
 export { AFK_KICK_MS, AFK_WARNING_MS, MAX_ROOM_PLAYERS };
@@ -33,6 +34,7 @@ export interface PlayerNetState {
   deathAuraPower?: number;
   rocketActive?: boolean;
   rocketLit?: boolean;
+  loadout?: LoadoutState;
   lastActivityAt?: number;
 }
 
@@ -64,6 +66,11 @@ export interface PlayerStatePacket {
   dp?: number;
   ra?: 0 | 1;
   rl?: 0 | 1;
+  lh?: WeaponId;
+  rh?: WeaponId;
+  fs?: WeaponId;
+  bs?: WeaponId;
+  at?: WeaponId;
   act?: number;
 }
 
@@ -148,6 +155,11 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(typeof state.deathAuraPower === "number" ? { dp: round(state.deathAuraPower, 2) } : {}),
     ...(typeof state.rocketActive === "boolean" ? { ra: state.rocketActive ? 1 : 0 } : {}),
     ...(typeof state.rocketLit === "boolean" ? { rl: state.rocketLit ? 1 : 0 } : {}),
+    ...(state.loadout?.leftHand ? { lh: state.loadout.leftHand } : {}),
+    ...(state.loadout?.rightHand ? { rh: state.loadout.rightHand } : {}),
+    ...(state.loadout?.frontStrap ? { fs: state.loadout.frontStrap } : {}),
+    ...(state.loadout?.backStrap ? { bs: state.loadout.backStrap } : {}),
+    ...(state.loadout?.attachment ? { at: state.loadout.attachment } : {}),
     ...(typeof state.lastActivityAt === "number" ? { act: Math.round(state.lastActivityAt) } : {}),
   };
 }
@@ -184,6 +196,15 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.dp === "number" ? { deathAuraPower: packet.dp } : {}),
     ...(packet.ra !== undefined ? { rocketActive: packet.ra === 1 } : {}),
     ...(packet.rl !== undefined ? { rocketLit: packet.rl === 1 } : {}),
+    ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at ? {
+      loadout: {
+        ...(packet.lh ? { leftHand: packet.lh } : {}),
+        ...(packet.rh ? { rightHand: packet.rh } : {}),
+        ...(packet.fs ? { frontStrap: packet.fs } : {}),
+        ...(packet.bs ? { backStrap: packet.bs } : {}),
+        ...(packet.at ? { attachment: packet.at } : {}),
+      },
+    } : {}),
     ...(typeof packet.act === "number" ? { lastActivityAt: packet.act } : {}),
   };
 }
@@ -221,6 +242,11 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.dp === undefined || typeof value.dp === "number") &&
     (value.ra === undefined || value.ra === 0 || value.ra === 1) &&
     (value.rl === undefined || value.rl === 0 || value.rl === 1) &&
+    (value.lh === undefined || typeof value.lh === "string") &&
+    (value.rh === undefined || typeof value.rh === "string") &&
+    (value.fs === undefined || typeof value.fs === "string") &&
+    (value.bs === undefined || typeof value.bs === "string") &&
+    (value.at === undefined || typeof value.at === "string") &&
     (value.act === undefined || typeof value.act === "number")
   );
 }

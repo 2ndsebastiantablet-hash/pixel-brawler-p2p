@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PLAYER_COLORS,
   getOrCreateClientId,
+  loadPlayerProfile,
   loadPlayerPreferences,
+  savePlayerProfile,
   savePlayerPreferences,
 } from "../src/ui/Profile";
+import { DEFAULT_LOADOUT } from "../src/game/loadout/Loadout";
 
 describe("player preferences", () => {
   beforeEach(() => {
@@ -40,5 +43,28 @@ describe("player preferences", () => {
       color: "#ff77aa",
       showNames: false,
     });
+  });
+
+  it("loads and saves the real equipment loadout with defaults", () => {
+    const profile = loadPlayerProfile();
+    expect(profile.loadout).toEqual(DEFAULT_LOADOUT);
+
+    const saved = savePlayerProfile({
+      ...profile,
+      loadout: {
+        ...DEFAULT_LOADOUT,
+        leftHand: "machete",
+        rightHand: undefined,
+        backStrap: "hands",
+      },
+    });
+
+    expect(saved.loadout).toMatchObject({
+      leftHand: "machete",
+      frontStrap: "wings",
+      backStrap: "hands",
+      attachment: "virgin-blood",
+    });
+    expect(loadPlayerProfile()).toEqual(saved);
   });
 });

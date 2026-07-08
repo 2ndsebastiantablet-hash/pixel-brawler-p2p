@@ -35,9 +35,9 @@ export interface CombatInputFrame {
   secondaryHeld: boolean;
   secondaryReleased: boolean;
   reloadPressed: boolean;
-  previousWeaponPressed: boolean;
-  nextWeaponPressed: boolean;
-  pickupPressed: boolean;
+  frontStrapPressed: boolean;
+  backStrapPressed: boolean;
+  attachmentPressed: boolean;
   dropPressed: boolean;
   weaponSlotPressed: number | null;
 }
@@ -88,7 +88,6 @@ export class InputController {
   }
 
   consumeCombatFrame(): CombatInputFrame {
-    const slot = getPressedSlot(this.pressed);
     const frame: CombatInputFrame = {
       mouseX: this.mouseX,
       mouseY: this.mouseY,
@@ -99,11 +98,11 @@ export class InputController {
       secondaryHeld: this.mouseHeld.has(2),
       secondaryReleased: this.mouseReleased.has(2),
       reloadPressed: this.pressed.has("KeyR"),
-      previousWeaponPressed: this.pressed.has("KeyQ"),
-      nextWeaponPressed: this.pressed.has("KeyE"),
-      pickupPressed: this.pressed.has("KeyF"),
+      frontStrapPressed: this.pressed.has("KeyQ"),
+      backStrapPressed: this.pressed.has("KeyE"),
+      attachmentPressed: this.pressed.has("KeyF"),
       dropPressed: this.pressed.has("KeyG"),
-      weaponSlotPressed: slot,
+      weaponSlotPressed: null,
     };
     this.pressed.clear();
     this.mousePressed.clear();
@@ -180,18 +179,6 @@ export class InputController {
     this.mousePressed.clear();
     this.mouseReleased.clear();
   };
-}
-
-function getPressedSlot(pressed: Set<string>): number | null {
-  for (let index = 1; index <= 9; index += 1) {
-    if (pressed.has(`Digit${index}`)) {
-      return index - 1;
-    }
-  }
-  if (pressed.has("Digit0")) {
-    return 9;
-  }
-  return null;
 }
 
 function isUiEditingTarget(target: EventTarget | null): boolean {

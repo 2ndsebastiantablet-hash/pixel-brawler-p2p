@@ -7,7 +7,19 @@ import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSyst
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
-import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./combat/WeaponRegistry";
+import { createDefaultInventory, weaponRegistry } from "./combat/WeaponRegistry";
+import {
+  DEFAULT_LOADOUT,
+  LOADOUT_SLOT_LABELS,
+  assignLoadoutItem,
+  isSlotCompatible,
+  isTwoHandedWeapon,
+  loadoutHasWeapon,
+  loadoutWeaponName,
+  normalizeLoadout,
+  type LoadoutSlotId,
+  type LoadoutState,
+} from "./loadout/Loadout";
 import { playSound } from "../audio/SoundSystem";
 import {
   encodePlayerStatePacket,
@@ -45,10 +57,29 @@ interface LandingBurst {
   color: string;
 }
 
+interface AttachmentVisual {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  initialized: boolean;
+}
+
 interface AttackVisual {
   weaponId: WeaponId;
   kind: "primary" | "secondary" | "throw" | "reload";
   timer: number;
+}
+
+interface WeaponActionInput {
+  pressed: boolean;
+  held: boolean;
+  released: boolean;
+  heldMs: number;
+  isFirstHeldFrame: boolean;
+  attackKind: AttackVisual["kind"];
+  now: number;
+  aim: { x: number; y: number };
 }
 
 interface GameOptions {
@@ -95,7 +126,6 @@ export class Game {
   private lastTime = 0;
   private sendAccumulator = 0;
   private running = false;
-  private offlineMode = false;
   private showNames = true;
   private shakeTimer = 0;
   private primaryHeldMs = 0;
@@ -103,6 +133,8 @@ export class Game {
   private footstepTimer = 0;
   private lastAim = { x: 1, y: 0 };
   private lastMouse = { x: 0, y: 0 };
+  private loadout: LoadoutState = DEFAULT_LOADOUT;
+  private readonly attachmentVisual: AttachmentVisual = { x: 0, y: 0, vx: 0, vy: 0, initialized: false };
   private attackVisual: AttackVisual | null = null;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
@@ -129,13 +161,11 @@ export class Game {
   }
 
   startOffline(profile: PlayerProfile): void {
-    this.offlineMode = true;
     this.start("local", profile, -40);
     this.combat.spawnTrainingDummy({ x: 110, y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height });
   }
 
   startNetwork(localId: string, profile: PlayerProfile, side: "host" | "guest"): void {
-    this.offlineMode = false;
     this.start(localId, profile, side === "host" ? -70 : 70);
   }
 
@@ -227,7 +257,10 @@ export class Game {
     this.localPlayer = new Player(id, profile.clientId, profile.name, x, profile.color);
     this.remotes.clear();
     this.bursts.length = 0;
+    this.loadout = normalizeLoadout(profile.loadout);
+    this.attachmentVisual.initialized = false;
     this.combat.start(createDefaultInventory());
+    this.combat.setEquippedWeapon(this.loadout.leftHand ?? this.loadout.frontStrap ?? "pistol");
     this.combatHud.hidden = false;
     this.shakeTimer = 0;
     this.primaryHeldMs = 0;
@@ -274,6 +307,7 @@ export class Game {
     const previousState = { ...this.localPlayer.state };
     this.localPlayer.update(lockedOut ? neutralInput() : movementInput, dt, this.getWeightedPhysics());
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
+    this.updateAttachmentVisual(dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.handleCombatInput(combatInput, dt, time);
     if (this.combat.getCombatant(this.localPlayer.state.id)?.statuses.some((status) => status.id === "steady")) {
@@ -368,6 +402,7 @@ export class Game {
         deathAuraPower: deathAura.power,
         rocketActive: rocket.active,
         rocketLit: rocket.lit,
+        loadout: this.loadout,
         lastActivityAt: Date.now(),
       }));
     }
@@ -394,7 +429,12 @@ export class Game {
       }
       this.drawRemoteStatusVisuals(ctx, remote);
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      if (remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
+      const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
+      this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
+      if (remoteLoadout.attachment) {
+        this.drawRemoteAttachmentString(ctx, remote.player.state, remoteLoadout.attachment);
+      }
+      if (loadoutHasWeapon(remoteLoadout, "wings") || remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
         const mode = remote.current.weaponId === "wings" && !remote.player.state.grounded && remote.player.state.velocityY < -120 ? "flap" : remote.player.state.grounded ? "idle" : "glide";
         this.drawWings(ctx, remote.player.state, remote.player.color, mode);
       }
@@ -405,7 +445,11 @@ export class Game {
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
     if (!steady) {
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      if (localCombatant?.statuses.some((status) => status.id === "angelWings")) {
+      this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
+      if (this.loadout.attachment) {
+        this.drawAttachmentString(ctx, this.localPlayer.state, this.loadout.attachment);
+      }
+      if (loadoutHasWeapon(this.loadout, "wings") || localCombatant?.statuses.some((status) => status.id === "angelWings")) {
         const mode = this.localPlayer.state.wingFlapping ? "flap" : this.localPlayer.state.wingDiving ? "dive" : this.localPlayer.state.grounded ? "idle" : "glide";
         this.drawWings(ctx, this.localPlayer.state, this.localPlayer.color, mode);
       }
@@ -417,26 +461,13 @@ export class Game {
   }
 
   private handleCombatInput(input: ReturnType<InputController["consumeCombatFrame"]>, dt: number, time: number): void {
-    if (input.weaponSlotPressed !== null) {
-      this.combat.equip(input.weaponSlotPressed);
-    }
-    if (input.previousWeaponPressed) {
-      this.combat.cycleWeapon(-1);
-    }
-    if (input.nextWeaponPressed) {
-      this.combat.cycleWeapon(1);
-    }
     if (input.reloadPressed) {
       this.combat.reload(this.localPlayer.state.id, time);
-    }
-    if (input.pickupPressed) {
-      this.combat.pickUpNearest(this.localPlayer.state);
     }
     if (input.dropPressed) {
       this.combat.dropCurrentWeapon(this.localPlayer.state.id, this.localPlayer.state, this.lastAim, time);
     }
 
-    const equipped = this.combat.getPlayerInventory().equippedWeapon;
     const aim = this.lastAim;
     if (input.primaryHeld) {
       this.primaryHeldMs += dt * 1000;
@@ -453,136 +484,43 @@ export class Game {
       }
     }
 
-    const charge = this.combat.getPlayerInventory().charge[equipped];
-    let secondaryHandled = false;
-    if (equipped === "laser-blaster") {
-      if (input.primaryPressed && charge) {
-        charge.charging = true;
-        charge.charge = 0;
-      }
-      if (input.primaryHeld && charge) {
-        charge.charging = true;
-      }
-      if (input.primaryHeld && charge && charge.charge >= charge.maxCharge) {
-        this.recordAttack(this.combat.triggerLaserOvercharge(this.localPlayer.state.id, this.localPlayer.state, time), "primary");
-      }
-      if ((input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) && charge) {
-        charge.charging = false;
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: true,
-        }), "primary");
-      }
-    } else if (equipped === "slingshot") {
-      if (input.primaryHeld) {
-        this.attackVisual = { weaponId: "slingshot", kind: "primary", timer: 0.12 };
-      }
-      if (input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) {
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: true,
-        }), "primary");
-      }
-    } else if (equipped === "sledgehammer") {
-      if (input.primaryHeld) {
-        this.attackVisual = { weaponId: "sledgehammer", kind: "primary", timer: 0.12 };
-      }
-      if (input.primaryReleased) {
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: true,
-        }), "primary");
-      }
-    } else if (equipped === "lightning-rod") {
-      if (input.primaryHeld) {
-        this.attackVisual = { weaponId: "lightning-rod", kind: "primary", timer: 0.12 };
-      }
-      if (input.primaryReleased || (input.primaryPressed && !input.primaryHeld)) {
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: true,
-        }), "primary");
-      }
-    } else if (equipped === "minigun") {
-      if (input.secondaryHeld || input.secondaryPressed) {
-        this.recordAttack(this.combat.useSecondary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.secondaryHeldMs,
-          isNewPress: input.secondaryPressed,
-        }), "secondary");
-        secondaryHandled = true;
-      }
-      if (input.primaryHeld || input.primaryPressed) {
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: input.primaryPressed,
-        }), "primary");
-      }
-    } else if (equipped === "sniper") {
-      if (input.secondaryHeld || input.secondaryPressed) {
-        this.recordAttack(this.combat.useSecondary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.secondaryHeldMs,
-          isNewPress: input.secondaryPressed,
-        }), "secondary");
-        secondaryHandled = true;
-      }
-      if (input.primaryPressed) {
-        this.recordAttack(this.combat.usePrimary({
-          ownerId: this.localPlayer.state.id,
-          player: this.localPlayer.state,
-          aim,
-          now: time,
-          heldMs: this.primaryHeldMs,
-          isNewPress: true,
-        }), "primary");
-      }
-    } else if (input.primaryPressed) {
-      this.recordAttack(this.combat.usePrimary({
-        ownerId: this.localPlayer.state.id,
-        player: this.localPlayer.state,
-        aim,
-        now: time,
-        heldMs: this.primaryHeldMs,
-        isNewPress: true,
-      }), "primary");
+    if (input.frontStrapPressed) {
+      this.useLoadoutSlot("frontStrap", "primary", time);
+    }
+    if (input.backStrapPressed) {
+      this.useLoadoutSlot("backStrap", "primary", time);
+    }
+    if (input.attachmentPressed) {
+      this.useAttachmentSlot(time);
     }
 
-    if (!secondaryHandled && (input.secondaryPressed || (equipped === "lightning-rod" && input.secondaryHeld && this.secondaryHeldMs < dt * 1000 + 1))) {
-      this.recordAttack(this.combat.useSecondary({
-        ownerId: this.localPlayer.state.id,
-        player: this.localPlayer.state,
-        aim,
+    const leftWeapon = this.loadout.leftHand;
+    const rightWeapon = this.loadout.rightHand;
+    if (leftWeapon && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
+      this.handleWeaponAction(leftWeapon, "primary", {
+        pressed: input.primaryPressed,
+        held: input.primaryHeld,
+        released: input.primaryReleased,
+        heldMs: this.primaryHeldMs,
+        isFirstHeldFrame: this.primaryHeldMs < dt * 1000 + 1,
+        attackKind: "primary",
         now: time,
+        aim,
+      });
+    }
+
+    if (rightWeapon && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
+      const twoHanded = leftWeapon === rightWeapon && isTwoHandedWeapon(rightWeapon);
+      this.handleWeaponAction(rightWeapon, twoHanded ? "secondary" : "primary", {
+        pressed: input.secondaryPressed,
+        held: input.secondaryHeld,
+        released: input.secondaryReleased,
         heldMs: this.secondaryHeldMs,
-        isNewPress: true,
-      }), "secondary");
+        isFirstHeldFrame: this.secondaryHeldMs < dt * 1000 + 1,
+        attackKind: twoHanded ? "secondary" : "primary",
+        now: time,
+        aim,
+      });
     }
 
     if (input.primaryReleased) {
@@ -590,6 +528,166 @@ export class Game {
     }
     if (input.secondaryReleased) {
       this.secondaryHeldMs = 0;
+    }
+  }
+
+  private useLoadoutSlot(slot: LoadoutSlotId, action: "primary" | "secondary", time: number): void {
+    const weaponId = this.loadout[slot];
+    if (!weaponId) {
+      return;
+    }
+    this.combat.setEquippedWeapon(weaponId);
+    const context = {
+      ownerId: this.localPlayer.state.id,
+      player: this.localPlayer.state,
+      aim: this.lastAim,
+      now: time,
+      heldMs: 0,
+      isNewPress: true,
+    };
+    this.recordAttack(action === "primary" ? this.combat.usePrimary(context) : this.combat.useSecondary(context), action);
+  }
+
+  private useAttachmentSlot(time: number): void {
+    const picked = this.combat.pickUpNearest(this.localPlayer.state);
+    if (picked) {
+      this.assignPickedLoadoutItem(picked);
+      return;
+    }
+    if (this.loadout.attachment) {
+      this.useLoadoutSlot("attachment", "primary", time);
+    }
+  }
+
+  private assignPickedLoadoutItem(weaponId: WeaponId): void {
+    const slot: LoadoutSlotId | null = isSlotCompatible(weaponId, "attachment")
+      ? "attachment"
+      : isSlotCompatible(weaponId, "rightHand")
+        ? "rightHand"
+        : isSlotCompatible(weaponId, "frontStrap")
+          ? "frontStrap"
+          : null;
+    if (!slot) {
+      return;
+    }
+    this.loadout = assignLoadoutItem(this.loadout, slot, weaponId);
+    this.combat.setEquippedWeapon(weaponId);
+  }
+
+  private handleWeaponAction(weaponId: WeaponId, action: "primary" | "secondary", input: WeaponActionInput): void {
+    this.combat.setEquippedWeapon(weaponId);
+    if (action === "secondary") {
+      this.handleWeaponSecondaryAction(weaponId, input);
+      return;
+    }
+    this.handleWeaponPrimaryAction(weaponId, input);
+  }
+
+  private handleWeaponPrimaryAction(weaponId: WeaponId, input: WeaponActionInput): void {
+    const charge = this.combat.getPlayerInventory().charge[weaponId];
+    if (weaponId === "laser-blaster") {
+      if (input.pressed && charge) {
+        charge.charging = true;
+        charge.charge = 0;
+      }
+      if (input.held && charge) {
+        charge.charging = true;
+      }
+      if (input.held && charge && charge.charge >= charge.maxCharge) {
+        this.recordAttack(this.combat.triggerLaserOvercharge(this.localPlayer.state.id, this.localPlayer.state, input.now), "primary");
+      }
+      if ((input.released || (input.pressed && !input.held)) && charge) {
+        charge.charging = false;
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim: input.aim,
+          now: input.now,
+          heldMs: input.heldMs,
+          isNewPress: true,
+        }), "primary");
+      }
+      return;
+    }
+
+    if (weaponId === "slingshot" || weaponId === "sledgehammer" || weaponId === "lightning-rod") {
+      if (input.held) {
+        this.attackVisual = { weaponId, kind: "primary", timer: 0.12 };
+      }
+      const released = weaponId === "sledgehammer" ? input.released : input.released || (input.pressed && !input.held);
+      if (released) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim: input.aim,
+          now: input.now,
+          heldMs: input.heldMs,
+          isNewPress: true,
+        }), "primary");
+      }
+      return;
+    }
+
+    if (weaponId === "minigun" && (input.held || input.pressed)) {
+      this.recordAttack(this.combat.usePrimary({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim: input.aim,
+        now: input.now,
+        heldMs: input.heldMs,
+        isNewPress: input.pressed,
+      }), "primary");
+      return;
+    }
+
+    if (weaponId === "sniper") {
+      if (input.pressed) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim: input.aim,
+          now: input.now,
+          heldMs: input.heldMs,
+          isNewPress: true,
+        }), "primary");
+      }
+      return;
+    }
+
+    if (input.pressed) {
+      this.recordAttack(this.combat.usePrimary({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim: input.aim,
+        now: input.now,
+        heldMs: input.heldMs,
+        isNewPress: true,
+      }), input.attackKind);
+    }
+  }
+
+  private handleWeaponSecondaryAction(weaponId: WeaponId, input: WeaponActionInput): void {
+    if ((weaponId === "minigun" || weaponId === "sniper") && (input.held || input.pressed)) {
+      this.recordAttack(this.combat.useSecondary({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim: input.aim,
+        now: input.now,
+        heldMs: input.heldMs,
+        isNewPress: input.pressed,
+      }), "secondary");
+      return;
+    }
+
+    if (input.pressed || (weaponId === "lightning-rod" && input.held && input.isFirstHeldFrame)) {
+      this.recordAttack(this.combat.useSecondary({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim: input.aim,
+        now: input.now,
+        heldMs: input.heldMs,
+        isNewPress: true,
+      }), "secondary");
     }
   }
 
@@ -788,6 +886,7 @@ export class Game {
     const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
     const holy = local?.statuses.some((status) => status.id === "holyBuff") ? 1.16 : 1;
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
+    const strappedWings = loadoutHasWeapon(this.loadout, "wings");
     const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy;
     const physics = {
       ...DEFAULT_PHYSICS,
@@ -799,7 +898,110 @@ export class Game {
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
-    return weapon.id === "wings" || angelWings ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
+    return weapon.id === "wings" || strappedWings || angelWings ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
+  }
+
+  private updateAttachmentVisual(dt: number): void {
+    if (!this.loadout.attachment) {
+      this.attachmentVisual.initialized = false;
+      return;
+    }
+    const anchor = attachmentAnchor(this.localPlayer.state);
+    if (!this.attachmentVisual.initialized) {
+      this.attachmentVisual.x = anchor.x - this.localPlayer.state.facing * 22;
+      this.attachmentVisual.y = anchor.y + 34;
+      this.attachmentVisual.vx = 0;
+      this.attachmentVisual.vy = 0;
+      this.attachmentVisual.initialized = true;
+    }
+    const visual = this.attachmentVisual;
+    visual.vy += 900 * dt;
+    visual.vx *= Math.max(0, 1 - dt * 5.5);
+    visual.vy *= Math.max(0, 1 - dt * 3.2);
+    visual.x += visual.vx * dt;
+    visual.y += visual.vy * dt;
+    const dx = visual.x - anchor.x;
+    const dy = visual.y - anchor.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const maxLength = 46;
+    if (distance > maxLength) {
+      const pull = (distance - maxLength) / distance;
+      visual.x -= dx * pull;
+      visual.y -= dy * pull;
+      visual.vx -= dx * pull * 9;
+      visual.vy -= dy * pull * 9;
+    }
+  }
+
+  private drawLoadoutHarness(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, color: string, loadout: LoadoutState): void {
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const cx = x + Math.round(state.width / 2);
+    const facing = state.facing;
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = "rgba(8, 10, 16, 0.9)";
+    this.pixelRect(ctx, cx - 13, y + 15, 26, 4);
+    this.pixelRect(ctx, cx - 2, y + 11, 4, 31);
+    ctx.fillStyle = color;
+    this.pixelRect(ctx, cx - facing * 12 - 2, y + 16, 4, 18);
+    if (loadout.frontStrap) {
+      this.drawTinyLoadoutItem(ctx, loadout.frontStrap, cx + facing * 16, y + 17, 8);
+    }
+    if (loadout.backStrap) {
+      this.drawTinyLoadoutItem(ctx, loadout.backStrap, cx - facing * 18, y + 13, 8);
+    }
+    if (loadout.leftHand && !isTwoHandedWeapon(loadout.leftHand)) {
+      this.drawTinyLoadoutItem(ctx, loadout.leftHand, cx - 20, y + 35, 6);
+    }
+    if (loadout.rightHand && !isTwoHandedWeapon(loadout.rightHand)) {
+      this.drawTinyLoadoutItem(ctx, loadout.rightHand, cx + 20, y + 35, 6);
+    }
+    if (loadout.leftHand && loadout.leftHand === loadout.rightHand && isTwoHandedWeapon(loadout.leftHand)) {
+      this.drawTinyLoadoutItem(ctx, loadout.leftHand, cx + facing * 25, y + 27, 10);
+    }
+    ctx.restore();
+  }
+
+  private drawAttachmentString(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, weaponId: WeaponId): void {
+    const anchor = attachmentAnchor(state);
+    this.drawAttachmentLine(ctx, weaponId, anchor, {
+      x: this.attachmentVisual.x,
+      y: this.attachmentVisual.y,
+    });
+  }
+
+  private drawRemoteAttachmentString(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, weaponId: WeaponId): void {
+    const anchor = attachmentAnchor(state);
+    const sway = Math.sin(performance.now() * 0.006 + state.x * 0.04) * 5;
+    this.drawAttachmentLine(ctx, weaponId, anchor, {
+      x: anchor.x - state.facing * 25 + sway,
+      y: anchor.y + 38,
+    });
+  }
+
+  private drawAttachmentLine(ctx: CanvasRenderingContext2D, weaponId: WeaponId, anchor: { x: number; y: number }, end: { x: number; y: number }): void {
+    const ax = Math.round(anchor.x - this.camera.x);
+    const ay = Math.round(anchor.y - this.camera.y);
+    const ex = Math.round(end.x - this.camera.x);
+    const ey = Math.round(end.y - this.camera.y);
+    ctx.save();
+    ctx.strokeStyle = "rgba(214, 242, 255, 0.72)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(Math.round((ax + ex) / 2), Math.round((ay + ey) / 2 + 6));
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    this.drawTinyLoadoutItem(ctx, weaponId, ex, ey, 8);
+    ctx.restore();
+  }
+
+  private drawTinyLoadoutItem(ctx: CanvasRenderingContext2D, weaponId: WeaponId, x: number, y: number, size: number): void {
+    ctx.fillStyle = colorForWeapon(weaponId);
+    this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, Math.round(x + size / 2 - 2), Math.round(y - 1), 3, 3);
   }
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
@@ -1560,8 +1762,21 @@ export class Game {
     const tx = Math.round(effect.tx - this.camera.x);
     const ty = Math.round(effect.ty - this.camera.y);
     if (effect.kind === "shockwave") {
-      const radius = Math.round(14 + progress * 46);
-      ctx.strokeRect(x - radius, y - 5, radius * 2, 10);
+      const targetRadius = Math.max(46, Math.hypot(tx - x, ty - y));
+      const radius = effect.label === "BOOM" ? Math.round(18 + progress * targetRadius) : Math.round(14 + progress * 46);
+      ctx.strokeRect(x - radius, y - (effect.label === "BOOM" ? Math.round(radius * 0.22) : 5), radius * 2, effect.label === "BOOM" ? Math.round(radius * 0.44) : 10);
+    } else if (effect.kind === "explosion") {
+      const targetRadius = Math.max(42, Math.hypot(tx - x, ty - y));
+      const radius = Math.round((effect.label === "FIREBALL" ? 22 : 34) + progress * targetRadius);
+      const core = Math.max(10, Math.round(radius * (1 - progress * 0.55)));
+      ctx.fillStyle = effect.label === "FIREBALL" ? "#fff4a8" : "#ff8f3d";
+      ctx.fillRect(x - core, y - core, core * 2, core * 2);
+      ctx.fillStyle = "rgba(255, 111, 80, 0.58)";
+      ctx.fillRect(x - radius, y - Math.round(radius * 0.62), radius * 2, Math.round(radius * 1.24));
+      ctx.fillStyle = "rgba(255, 207, 90, 0.72)";
+      ctx.fillRect(x - Math.round(radius * 0.62), y - Math.round(radius * 0.42), Math.round(radius * 1.24), Math.round(radius * 0.84));
+      ctx.fillStyle = "rgba(43, 43, 50, 0.42)";
+      ctx.fillRect(x - Math.round(radius * 0.82), y - Math.round(radius * 0.78), Math.round(radius * 1.64), Math.round(radius * 0.38));
     } else if (effect.kind === "slam") {
       const radius = Math.round(18 + progress * 72);
       ctx.fillRect(x - radius, y + 16, radius * 2, 8);
@@ -1587,24 +1802,27 @@ export class Game {
     } else if (effect.kind === "aura") {
       const targetRadius = Math.max(18, Math.hypot(tx - x, ty - y));
       const deathAura = effect.label === "DEATH AURA" || effect.label === "DEATH RELEASE" || effect.label === "DEATH RECALL";
+      const smokeCloud = effect.label === "SMOKE CLOUD";
       const radius = deathAura
         ? Math.round(effect.label === "DEATH RECALL"
           ? 12 + targetRadius * (1 - progress)
           : effect.label === "DEATH RELEASE"
             ? 14 + targetRadius * progress
             : targetRadius * (0.9 + Math.sin(performance.now() * 0.018) * 0.05))
+        : smokeCloud
+          ? Math.round(28 + targetRadius * (0.45 + progress * 0.55))
         : Math.round(18 + Math.sin(performance.now() * 0.018) * 5);
-      const ovalY = deathAura ? Math.round(radius * 0.58) : radius;
+      const ovalY = deathAura || smokeCloud ? Math.round(radius * (smokeCloud ? 0.42 : 0.58)) : radius;
       ctx.strokeRect(x - radius, y - ovalY, radius * 2, ovalY * 2);
       ctx.fillRect(x - 2, y - ovalY - 12, 4, 12);
       ctx.fillRect(x + radius - 2, y - 2, 4, 12);
-      if (deathAura) {
+      if (deathAura || smokeCloud) {
         for (let index = 0; index < 8; index += 1) {
           const angle = index * 0.8 + performance.now() * 0.0015;
-          const pull = effect.label === "DEATH RECALL" ? 1 - progress : progress;
+          const pull = smokeCloud ? 0.35 + progress * 0.75 : effect.label === "DEATH RECALL" ? 1 - progress : progress;
           const px = x + Math.cos(angle) * radius * pull;
           const py = y + Math.sin(angle) * ovalY * pull;
-          ctx.fillRect(Math.round(px), Math.round(py), 5, 5);
+          ctx.fillRect(Math.round(px), Math.round(py), smokeCloud ? 10 : 5, smokeCloud ? 7 : 5);
         }
       }
     } else if (effect.kind === "lightning") {
@@ -1710,13 +1928,17 @@ export class Game {
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
     const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
-    const weaponNumber = WEAPON_IDS.includes(weapon.id as (typeof WEAPON_IDS)[number])
-      ? WEAPON_IDS.indexOf(weapon.id as (typeof WEAPON_IDS)[number]) + 1
-      : 1;
-    const armory = WEAPON_IDS.map((id, index) => `<span class="${id === weapon.id ? "is-equipped" : ""}">${index + 1}:${weaponRegistry.get(id).name}</span>`).join("");
+    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    const slotHud = loadoutSlots.map((slot) => {
+      const slotWeapon = this.loadout[slot];
+      const cooldown = slotWeapon ? this.combat.getPlayerInventory().cooldowns[slotWeapon] ?? 0 : 0;
+      const cooldownText = cooldown > 0 ? ` ${cooldown.toFixed(1)}s` : "";
+      const equipped = slotWeapon === weapon.id;
+      return `<span class="${equipped ? "is-equipped" : ""}">${LOADOUT_SLOT_LABELS[slot]}: ${loadoutWeaponName(slotWeapon)}${cooldownText}</span>`;
+    }).join("");
     this.combatHud.innerHTML = `
       <div class="combat-hud-card">
-        <strong>${weaponNumber}. ${weapon.name}</strong>
+        <strong>${weapon.name}</strong>
         <span>${hpText}</span>
         <span>${ammoText}</span>
         <span>${chargeText}</span>
@@ -1724,7 +1946,7 @@ export class Game {
         <span>${weightText}</span>
         <span>${weaponHelper(weapon.id)}</span>
       </div>
-      ${this.offlineMode ? `<div class="armory-strip">${armory}</div>` : ""}
+      <div class="armory-strip loadout-strip">${slotHud}</div>
     `;
   }
 
@@ -1986,6 +2208,13 @@ function rectsOverlap(a: PlayerPhysicsState, b: PlayerPhysicsState): boolean {
     && a.x + a.width > b.x
     && a.y < b.y + b.height
     && a.y + a.height > b.y;
+}
+
+function attachmentAnchor(state: PlayerPhysicsState): { x: number; y: number } {
+  return {
+    x: state.x + state.width / 2,
+    y: state.y + 16,
+  };
 }
 
 function isMovementInputActive(input: InputFrame): boolean {

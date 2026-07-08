@@ -101,6 +101,13 @@ describe("network player packets", () => {
       deathAuraPower: 0.72,
       rocketActive: true,
       rocketLit: false,
+      loadout: {
+        leftHand: "pistol",
+        rightHand: "knife",
+        frontStrap: "wings",
+        backStrap: "death-aura",
+        attachment: "virgin-blood",
+      },
     };
 
     const packet = encodePlayerStatePacket(state);
@@ -115,6 +122,11 @@ describe("network player packets", () => {
     expect(packet.dp).toBe(0.72);
     expect(packet.ra).toBe(1);
     expect(packet.rl).toBe(0);
+    expect(packet.lh).toBe("pistol");
+    expect(packet.rh).toBe("knife");
+    expect(packet.fs).toBe("wings");
+    expect(packet.bs).toBe("death-aura");
+    expect(packet.at).toBe("virgin-blood");
     expect(decodePlayerStatePacket(packet)).toEqual(state);
   });
 

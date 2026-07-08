@@ -1,7 +1,10 @@
+import { DEFAULT_LOADOUT, normalizeLoadout, type LoadoutState } from "../game/loadout/Loadout";
+
 export interface PlayerPreferences {
   name: string;
   color: string;
   showNames: boolean;
+  loadout?: LoadoutState;
 }
 
 export interface PlayerProfile extends PlayerPreferences {
@@ -40,6 +43,7 @@ export function loadPlayerPreferences(storage: Storage = localStorage): PlayerPr
     name: `Player${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`,
     color: PLAYER_COLORS[0],
     showNames: true,
+    loadout: DEFAULT_LOADOUT,
   };
 
   const raw = storage.getItem(preferencesKey);
@@ -53,6 +57,7 @@ export function loadPlayerPreferences(storage: Storage = localStorage): PlayerPr
       name: sanitizeName(parsed.name) || fallback.name,
       color: sanitizeColor(parsed.color),
       showNames: typeof parsed.showNames === "boolean" ? parsed.showNames : fallback.showNames,
+      loadout: normalizeLoadout(parsed.loadout),
     };
   } catch {
     return fallback;
@@ -64,6 +69,7 @@ export function savePlayerPreferences(preferences: PlayerPreferences, storage: S
     name: sanitizeName(preferences.name) || `Player${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`,
     color: sanitizeColor(preferences.color),
     showNames: preferences.showNames,
+    loadout: normalizeLoadout(preferences.loadout),
   };
   storage.setItem(preferencesKey, JSON.stringify(saved));
   return saved;

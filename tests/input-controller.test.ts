@@ -24,13 +24,33 @@ describe("input controller", () => {
     expect(keyDown.defaultPrevented).toBe(false);
   });
 
-  it("maps 0 to the tenth weapon slot", () => {
+  it("maps Q, E, and F to equipment slot actions", () => {
+    controller = new InputController(window);
+
+    const front = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code: "KeyQ" });
+    const back = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code: "KeyE" });
+    const attachment = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code: "KeyF" });
+    window.dispatchEvent(front);
+    window.dispatchEvent(back);
+    window.dispatchEvent(attachment);
+
+    expect(front.defaultPrevented).toBe(true);
+    expect(back.defaultPrevented).toBe(true);
+    expect(attachment.defaultPrevented).toBe(true);
+    expect(controller.consumeCombatFrame()).toMatchObject({
+      frontStrapPressed: true,
+      backStrapPressed: true,
+      attachmentPressed: true,
+    });
+  });
+
+  it("keeps numbered keys out of prototype weapon-slot cycling", () => {
     controller = new InputController(window);
 
     const keyDown = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code: "Digit0" });
     window.dispatchEvent(keyDown);
 
     expect(keyDown.defaultPrevented).toBe(true);
-    expect(controller.consumeCombatFrame().weaponSlotPressed).toBe(9);
+    expect(controller.consumeCombatFrame().weaponSlotPressed).toBeNull();
   });
 });
