@@ -127,6 +127,10 @@ const deathAuraBaseDamage = 2;
 const deathAuraMaxDamage = 8;
 const deathAuraBaseFreeze = 0.22;
 const deathAuraMaxFreeze = 0.96;
+const deathAuraActiveDuration = 60;
+const deathAuraCooldownDuration = 40;
+const deathAuraSufferingForMaxPower = 90;
+const deathFrozenGravityMultiplier = 2.2;
 const rocketExplosionRadius = 180;
 const rocketExplosionDamage = 38;
 const rocketLaunchSpeed = 660;
@@ -173,6 +177,9 @@ interface VirginBloodState {
 
 interface DeathAuraState {
   active: boolean;
+  activeTimer: number;
+  cooldownTimer: number;
+  suffering: number;
   pulseTimer: number;
   tickCooldowns: Map<string, number>;
 }
@@ -561,6 +568,7 @@ export class CombatSystem {
     const verticalLift = request.damage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
     const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
+    this.recordDeathAuraSuffering(target.id, damage);
     target.velocityX += request.knockback.x * knockbackScale;
     target.velocityY += request.knockback.y * knockbackScale * locationModifier.verticalScale + verticalLift * locationModifier.verticalScale;
     target.hitstun = Math.max(target.hitstun, effectiveStun * (request.label === "DOT" ? 1 : 1.08));
@@ -641,6 +649,7 @@ export class CombatSystem {
       }
     }
 
+    this.updateTimedVisuals(dt);
     this.updateInventory(dt);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
@@ -654,7 +663,6 @@ export class CombatSystem {
     this.updateContactCooldowns(dt);
     this.updateBodyContact(dt, players);
     this.updateDroppedWeapons(dt);
-    this.updateTimedVisuals(dt);
   }
 
   consumeEvents(): CombatEventPacket[] {
@@ -703,13 +711,17 @@ export class CombatSystem {
     };
   }
 
-  getDeathAuraState(ownerId: string): { active: boolean; radius: number; power: number } {
+  getDeathAuraState(ownerId: string): { active: boolean; radius: number; power: number; activeTimer: number; cooldownTimer: number; suffering: number } {
     const owner = this.combatants.get(ownerId);
-    const power = owner ? deathAuraPower(owner) : 0;
+    const state = this.deathAuras.get(ownerId);
+    const power = owner ? deathAuraPower(owner, state) : deathAuraPowerFromSuffering(state?.suffering ?? 0);
     return {
-      active: this.deathAuras.get(ownerId)?.active ?? false,
+      active: state?.active ?? false,
       radius: deathAuraRadius(power),
       power,
+      activeTimer: state?.activeTimer ?? 0,
+      cooldownTimer: state?.cooldownTimer ?? 0,
+      suffering: state?.suffering ?? 0,
     };
   }
 
@@ -1036,24 +1048,50 @@ export class CombatSystem {
     return nearest;
   }
 
-  private useDeathAura(context: WeaponUseContext): WeaponUseResult {
-    const weaponId: WeaponId = "death-aura";
-    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
-      return { kind: "blocked", weaponId, label: "Aura cooldown" };
+  private getOrCreateDeathAuraState(ownerId: string): DeathAuraState {
+    const existing = this.deathAuras.get(ownerId);
+    if (existing) {
+      return existing;
     }
-    const state = this.deathAuras.get(context.ownerId) ?? {
+    const state: DeathAuraState = {
       active: false,
+      activeTimer: 0,
+      cooldownTimer: 0,
+      suffering: 0,
       pulseTimer: 0,
       tickCooldowns: new Map<string, number>(),
     };
+    this.deathAuras.set(ownerId, state);
+    return state;
+  }
+
+  private recordDeathAuraSuffering(ownerId: string, damage: number): void {
+    if (damage <= 0) {
+      return;
+    }
+    const state = this.getOrCreateDeathAuraState(ownerId);
+    state.suffering = Math.min(deathAuraSufferingForMaxPower, state.suffering + damage);
+  }
+
+  private useDeathAura(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "death-aura";
+    const state = this.getOrCreateDeathAuraState(context.ownerId);
+    if (state.active) {
+      return { kind: "blocked", weaponId, label: "Aura active" };
+    }
+    if (state.cooldownTimer > 0) {
+      return { kind: "blocked", weaponId, label: "Aura cooldown" };
+    }
     state.active = true;
+    state.activeTimer = deathAuraActiveDuration;
     state.pulseTimer = 0;
-    this.deathAuras.set(context.ownerId, state);
-    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    state.tickCooldowns.clear();
+    this.inventory.cooldowns[weaponId] = 0;
     const owner = this.combatants.get(context.ownerId);
     const cx = owner ? owner.x + owner.width / 2 : context.player.x + context.player.width / 2;
     const cy = owner ? owner.y + owner.height / 2 : context.player.y + context.player.height / 2;
-    this.addEffect("aura", cx, cy, cx, cy - this.getDeathAuraState(context.ownerId).radius, "#08080c", "DEATH AURA");
+    const aura = this.getDeathAuraState(context.ownerId);
+    this.addEffect("aura", cx, cy, cx, cy - aura.radius, deathAuraColor(aura.power), "DEATH RELEASE");
     this.queueSound("death-aura");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", { x: cx, y: cy }, { x: 0, y: -1 }, "Death Aura", context.now));
     return { kind: "utility", weaponId, label: "Death Aura" };
@@ -1068,7 +1106,7 @@ export class CombatSystem {
     if (existing) {
       return { kind: "blocked", weaponId, label: "Rocket active" };
     }
-    const facing = context.player.facing || (context.aim.x >= 0 ? 1 : -1);
+    const facing = facingFromAim(context.aim.x, context.player.facing);
     const rocket: Projectile = {
       id: this.makeId("rocket"),
       ownerId: context.ownerId,
@@ -1113,7 +1151,7 @@ export class CombatSystem {
     if (rocket.state === "lit" || rocket.state === "chaotic") {
       return { kind: "blocked", weaponId, label: "Already lit" };
     }
-    const facing = context.player.facing || rocket.ownerFacing || (context.aim.x >= 0 ? 1 : -1);
+    const facing = facingFromAim(context.aim.x, rocket.ownerFacing ?? context.player.facing);
     const riderClose = Math.abs((context.player.x + context.player.width / 2) - rocket.x) < 54
       && Math.abs((context.player.y + context.player.height) - rocket.y) < 42;
     rocket.state = "lit";
@@ -2265,7 +2303,8 @@ export class CombatSystem {
       }
       if (combatant.statuses.some((status) => status.id === "deathFrozen")) {
         combatant.velocityX = 0;
-        combatant.velocityY = Math.min(combatant.velocityY, 0);
+        combatant.velocityY = Math.max(combatant.velocityY, 260);
+        combatant.velocityY += DEFAULT_PHYSICS.gravity * dt * deathFrozenGravityMultiplier;
         combatant.hitstun = Math.max(combatant.hitstun, 0.1);
       }
       combatant.hitstun = Math.max(0, combatant.hitstun - dt);
@@ -2904,7 +2943,22 @@ export class CombatSystem {
   private updateDeathAuras(dt: number): void {
     for (const [ownerId, state] of this.deathAuras.entries()) {
       const owner = this.combatants.get(ownerId);
+      if (state.cooldownTimer > 0 && !state.active) {
+        state.cooldownTimer = Math.max(0, state.cooldownTimer - dt);
+        this.inventory.cooldowns["death-aura"] = state.cooldownTimer;
+      }
       if (!owner || owner.respawnTimer > 0 || !state.active) {
+        continue;
+      }
+      state.activeTimer = Math.max(0, state.activeTimer - dt);
+      const power = deathAuraPower(owner, state);
+      const radius = deathAuraRadius(power);
+      if (state.activeTimer === 0) {
+        state.active = false;
+        state.cooldownTimer = deathAuraCooldownDuration;
+        this.inventory.cooldowns["death-aura"] = state.cooldownTimer;
+        this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y + owner.height / 2 - radius, deathAuraColor(power), "DEATH RECALL");
+        this.queueSound("death-aura");
         continue;
       }
       for (const [targetId, timer] of [...state.tickCooldowns.entries()]) {
@@ -2916,8 +2970,6 @@ export class CombatSystem {
         }
       }
       state.pulseTimer = Math.max(0, state.pulseTimer - dt);
-      const power = deathAuraPower(owner);
-      const radius = deathAuraRadius(power);
       if (state.pulseTimer === 0) {
         state.pulseTimer = 0.22;
         this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y + owner.height / 2 - radius, deathAuraColor(power), "DEATH AURA");
@@ -2936,7 +2988,7 @@ export class CombatSystem {
         const previousInvulnerable = target.invulnerable;
         target.invulnerable = 0;
         target.velocityX = 0;
-        target.velocityY = Math.min(target.velocityY, 0);
+        target.velocityY = Math.max(target.velocityY, 190 + power * 170);
         const damage = Math.round(lerp(deathAuraBaseDamage, deathAuraMaxDamage, power));
         const stun = lerp(deathAuraBaseFreeze, deathAuraMaxFreeze, power);
         const hit = this.applyDamage({
@@ -2950,6 +3002,10 @@ export class CombatSystem {
           status: "deathFrozen",
           skipHitLocationScaling: true,
         });
+        const frozen = target.statuses.find((status) => status.id === "deathFrozen");
+        if (frozen) {
+          frozen.duration = Math.max(frozen.duration, stun);
+        }
         if (!hit.applied) {
           target.invulnerable = previousInvulnerable;
         }
@@ -3442,8 +3498,13 @@ function lightningSelfDamageForHold(heldSeconds: number): number {
   return Math.round(7 + charge * 10.5);
 }
 
-function deathAuraPower(owner: Combatant): number {
-  return clamp(1 - owner.hp / Math.max(1, owner.maxHp), 0, 1);
+function deathAuraPower(owner: Combatant, state?: DeathAuraState): number {
+  const missingHealthPower = 1 - owner.hp / Math.max(1, owner.maxHp);
+  return clamp(Math.max(missingHealthPower, deathAuraPowerFromSuffering(state?.suffering ?? 0)), 0, 1);
+}
+
+function deathAuraPowerFromSuffering(suffering: number): number {
+  return clamp(suffering / deathAuraSufferingForMaxPower, 0, 1);
 }
 
 function deathAuraRadius(power: number): number {
@@ -3452,6 +3513,13 @@ function deathAuraRadius(power: number): number {
 
 function deathAuraColor(power: number): string {
   return power > 0.72 ? "#08080c" : power > 0.38 ? "#17101d" : "#23182b";
+}
+
+function facingFromAim(aimX: number, fallback: number): -1 | 1 {
+  if (Math.abs(aimX) > 0.15) {
+    return aimX < 0 ? -1 : 1;
+  }
+  return fallback < 0 ? -1 : 1;
 }
 
 function hasPositiveBuff(combatant: Combatant): boolean {

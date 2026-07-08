@@ -93,12 +93,28 @@ describe("network player packets", () => {
       hp: 64,
       statuses: ["marked", "legShotSlow"],
       respawnTimer: 0,
+      chargeWeaponId: "lightning-rod",
+      chargeHeldMs: 1850,
+      aimX: 0.03,
+      aimY: -1,
+      deathAuraActive: true,
+      deathAuraPower: 0.72,
+      rocketActive: true,
+      rocketLit: false,
     };
 
     const packet = encodePlayerStatePacket(state);
     expect(packet.w).toBe("sniper");
     expect(packet.hp).toBe(64);
     expect(packet.st).toEqual(["marked", "legShotSlow"]);
+    expect(packet.cw).toBe("lightning-rod");
+    expect(packet.ch).toBe(1850);
+    expect(packet.ax).toBe(0.03);
+    expect(packet.ay).toBe(-1);
+    expect(packet.da).toBe(1);
+    expect(packet.dp).toBe(0.72);
+    expect(packet.ra).toBe(1);
+    expect(packet.rl).toBe(0);
     expect(decodePlayerStatePacket(packet)).toEqual(state);
   });
 

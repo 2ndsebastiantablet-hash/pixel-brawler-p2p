@@ -1342,6 +1342,104 @@ describe("combat system", () => {
     ]));
   });
 
+  it("keeps Death Aura active for sixty seconds, cools down for forty, and preserves stored suffering", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("death-aura");
+    const player = { ...playerState, id: "peer-a", velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "attacker",
+      name: "Attacker",
+      color: "#ff6f91",
+      x: 130,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.applyDamage({
+      sourceId: "attacker",
+      targetId: "peer-a",
+      weaponId: "pistol",
+      damage: 34,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      label: "Setup",
+      skipHitLocationScaling: true,
+    });
+
+    const activated = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(activated).toMatchObject({ kind: "utility", label: "Death Aura" });
+    const initialState = combat.getDeathAuraState("peer-a");
+    expect(initialState).toMatchObject({
+      active: true,
+      activeTimer: expect.closeTo(60, 1),
+      cooldownTimer: 0,
+    });
+    expect(initialState.suffering).toBeGreaterThanOrEqual(34);
+    expect(initialState.power).toBeGreaterThan(0.3);
+    expect(combat.getSnapshot().effects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "DEATH RELEASE" }),
+    ]));
+
+    combat.update(0.5, [player]);
+    const secondClick = combat.useSecondary({ ownerId: "peer-a", player, aim: { x: -1, y: 0 }, now: 600, heldMs: 0, isNewPress: true });
+    expect(secondClick).toMatchObject({ kind: "blocked", label: "Aura active" });
+    expect(combat.getDeathAuraState("peer-a").activeTimer).toBeLessThan(60);
+
+    combat.update(59.6, [player]);
+    const ended = combat.getDeathAuraState("peer-a");
+    expect(ended.active).toBe(false);
+    expect(ended.cooldownTimer).toBeGreaterThan(39);
+    expect(ended.suffering).toBeGreaterThanOrEqual(34);
+    expect(combat.getSnapshot().effects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: "DEATH RECALL" }),
+    ]));
+
+    const cooldownBlocked = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 61000, heldMs: 0, isNewPress: true });
+    expect(cooldownBlocked).toMatchObject({ kind: "blocked", label: "Aura cooldown" });
+    expect(combat.getDeathAuraState("peer-a").suffering).toBeGreaterThanOrEqual(34);
+
+    combat.update(40.1, [player]);
+    expect(combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 102000, heldMs: 0, isNewPress: true })).toMatchObject({ kind: "utility", label: "Death Aura" });
+  });
+
+  it("gives Death Aura frozen airborne targets a heavy fall without permanent lock", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("death-aura");
+    const player = { ...playerState, id: "peer-a", velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "airborne",
+      name: "Airborne",
+      color: "#ff6f91",
+      x: 66,
+      y: 120,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: -60,
+    });
+    const owner = combat.getCombatant("peer-a")!;
+    owner.hp = 15;
+
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.25, [player]);
+    const target = combat.getCombatant("airborne")!;
+    expect(target.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "deathFrozen" })]));
+    combat.update(0.05, [player]);
+    expect(target.velocityY).toBeGreaterThan(DEFAULT_PHYSICS.gravity * 0.05 * 3);
+
+    target.x = 640;
+    target.invulnerable = 0;
+    combat.update(1.2, [player]);
+    expect(combat.getCombatant("airborne")!.statuses.some((status) => status.id === "deathFrozen")).toBe(false);
+  });
+
   it("places, lights, rides, destabilizes, and explodes Rockets", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -1383,6 +1481,33 @@ describe("combat system", () => {
     expect(combat.getCombatant("target")!.hp).toBeLessThan(100);
     expect(combat.getSnapshot().effects.some((effect) => effect.label === "BOOM")).toBe(true);
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["rocket-light", "rocket-explode"]));
+  });
+
+  it("places and launches Rockets in the aimed facing direction before chaos", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("rocket");
+    const player = { ...playerState, id: "peer-a", x: 0, facing: 1 as const, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+
+    expect(combat.usePrimary({ ownerId: "peer-a", player, aim: { x: -1, y: 0 }, now: 100, heldMs: 0, isNewPress: true })).toMatchObject({ kind: "utility", label: "Rocket Placed" });
+    const placedRocket = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")!;
+    expect(placedRocket.ownerFacing).toBe(-1);
+    const startX = placedRocket.x;
+
+    expect(combat.useSecondary({ ownerId: "peer-a", player, aim: { x: -1, y: 0 }, now: 300, heldMs: 0, isNewPress: true })).toMatchObject({ kind: "utility", label: "Rocket Lit" });
+    expect(combat.getSnapshot().projectiles[0]).toMatchObject({ ownerFacing: -1, label: "ROCKET LIT" });
+    expect(combat.getSnapshot().projectiles[0].vx).toBeLessThan(0);
+    const fire = combat.getSnapshot().effects.find((effect) => effect.label === "Rocket Fire")!;
+    expect(fire.tx).toBeGreaterThan(startX);
+
+    combat.update(0.24, [player]);
+    const straightRocket = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")!;
+    expect(straightRocket.x).toBeLessThan(startX - 70);
+    expect(straightRocket.state).toBe("lit");
+
+    combat.update(0.315, [player]);
+    expect(combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")?.state).toBe("chaotic");
   });
 
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {

@@ -351,12 +351,23 @@ export class Game {
     if (this.sendAccumulator >= 1 / 20) {
       this.sendAccumulator = 0;
       const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+      const deathAura = this.combat.getDeathAuraState(this.localPlayer.state.id);
+      const rocket = this.combat.getRocketState(this.localPlayer.state.id);
+      const chargeWeaponId = this.getNetworkChargeWeaponId();
       this.options.onLocalState(encodePlayerStatePacket({
         ...this.localPlayer.toNetState(time),
         weaponId: this.combat.getPlayerInventory().equippedWeapon,
         hp: localCombatant?.hp,
         statuses: localCombatant?.statuses.map((status) => status.id),
         respawnTimer: localCombatant?.respawnTimer,
+        aimX: this.lastAim.x,
+        aimY: this.lastAim.y,
+        chargeWeaponId,
+        chargeHeldMs: chargeWeaponId ? this.primaryHeldMs : undefined,
+        deathAuraActive: deathAura.active,
+        deathAuraPower: deathAura.power,
+        rocketActive: rocket.active,
+        rocketLit: rocket.lit,
         lastActivityAt: Date.now(),
       }));
     }
@@ -381,10 +392,13 @@ export class Game {
       if (remote.current.statuses?.includes("steady")) {
         continue;
       }
+      this.drawRemoteStatusVisuals(ctx, remote);
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
       if (remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
-        this.drawWings(ctx, remote.player.state, remote.player.color, remote.player.state.grounded ? "idle" : "glide");
+        const mode = remote.current.weaponId === "wings" && !remote.player.state.grounded && remote.player.state.velocityY < -120 ? "flap" : remote.player.state.grounded ? "idle" : "glide";
+        this.drawWings(ctx, remote.player.state, remote.player.color, mode);
       }
+      this.drawRemoteWeapon(ctx, remote);
       this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
@@ -735,6 +749,28 @@ export class Game {
     return { x: x / length, y: y / length };
   }
 
+  private getNetworkChargeWeaponId(): WeaponId | undefined {
+    const equipped = this.combat.getPlayerInventory().equippedWeapon;
+    const charge = this.combat.getPlayerInventory().charge[equipped];
+    if (equipped === "lightning-rod" && this.primaryHeldMs > 0 && this.lastAim.y < -0.55) {
+      return "lightning-rod";
+    }
+    if (equipped === "laser-blaster" && charge?.charging) {
+      return "laser-blaster";
+    }
+    return undefined;
+  }
+
+  private netAim(state: PlayerNetState, fallbackFacing: number): { x: number; y: number } {
+    const x = state.aimX ?? fallbackFacing;
+    const y = state.aimY ?? 0;
+    const length = Math.hypot(x, y);
+    if (length < 0.05) {
+      return { x: fallbackFacing < 0 ? -1 : 1, y: 0 };
+    }
+    return { x: x / length, y: y / length };
+  }
+
   private getWeightedPhysics(): PhysicsConfig {
     const weapon = weaponRegistry.get(this.combat.getPlayerInventory().equippedWeapon);
     const weight = weapon.weight;
@@ -819,6 +855,9 @@ export class Game {
       this.pixelRect(ctx, x, y - 4, facing * 38, 6);
       ctx.fillStyle = "#ffffff";
       this.pixelRect(ctx, x + facing * 32, y - 12, facing * 8, 20);
+      if (this.primaryHeldMs > 0 && aim.y < -0.55) {
+        this.drawLightningChargeVisual(ctx, state, aim, this.primaryHeldMs);
+      }
       const lightning = this.combat.getLightningState(state.id);
       if (lightning.empoweredTimer > 0 || lightning.charging) {
         ctx.fillStyle = "rgba(255, 216, 77, 0.75)";
@@ -1013,6 +1052,189 @@ export class Game {
     ctx.restore();
   }
 
+  private drawRemoteStatusVisuals(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
+    const state = remote.player.state;
+    const statuses = remote.current.statuses ?? [];
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const aim = this.netAim(remote.current, state.facing);
+    ctx.save();
+    if (remote.current.deathAuraActive) {
+      this.drawDeathAuraField(ctx, state, remote.current.deathAuraPower ?? 0.25);
+    }
+    if (remote.current.chargeWeaponId === "lightning-rod") {
+      this.drawLightningChargeVisual(ctx, state, aim, remote.current.chargeHeldMs ?? 0);
+    } else if (remote.current.chargeWeaponId === "laser-blaster") {
+      this.drawLaserChargeVisual(ctx, state, aim, remote.current.chargeHeldMs ?? 0);
+    }
+    if (statuses.some((status) => status === "empowered" || status === "holyBuff" || status === "blessed" || status === "angelWings")) {
+      ctx.strokeStyle = statuses.includes("holyBuff") || statuses.includes("blessed") ? "#fff4a8" : "#7cff6b";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 3, y - 4, state.width + 6, state.height + 8);
+    }
+    if (statuses.includes("deathFrozen")) {
+      ctx.fillStyle = "rgba(157, 225, 255, 0.24)";
+      ctx.fillRect(x - 6, y - 7, state.width + 12, state.height + 14);
+      ctx.strokeStyle = "#9de1ff";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - 6, y - 7, state.width + 12, state.height + 14);
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillRect(x + 2, y - 4, 8, 4);
+      ctx.fillRect(x + state.width - 10, y + state.height + 1, 7, 4);
+    }
+    if (statuses.includes("scrambled")) {
+      ctx.fillStyle = "#b8ffd0";
+      ctx.fillRect(x + 7, y + 1, 18, 5);
+    }
+    if (statuses.includes("handsMissing")) {
+      ctx.fillStyle = "#ff6f91";
+      ctx.fillRect(x - 4, y + 19, 5, 16);
+      ctx.fillRect(x + state.width - 1, y + 19, 5, 16);
+    }
+    if (remote.current.rocketActive) {
+      this.drawRemoteRocketState(ctx, state, remote.current.rocketLit ?? false);
+    }
+    ctx.restore();
+  }
+
+  private drawRemoteWeapon(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
+    const weaponId = remote.current.weaponId;
+    if (!weaponId || weaponId === "wings") {
+      return;
+    }
+    const state = remote.player.state;
+    const aim = this.netAim(remote.current, state.facing);
+    const centerX = state.x + state.width / 2 - this.camera.x;
+    const centerY = state.y + 24 - this.camera.y;
+    const facing = Math.sign(aim.x || state.facing) || 1;
+    const color = colorForWeapon(weaponId);
+    const x = Math.round(centerX + facing * 18);
+    const y = Math.round(centerY + aim.y * 8);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = color;
+
+    if (weaponId === "death-aura") {
+      ctx.fillStyle = remote.current.deathAuraActive ? "rgba(8, 8, 12, 0.72)" : "rgba(35, 24, 43, 0.5)";
+      this.pixelRect(ctx, x - facing * 8, y - 12, facing * 22, 24);
+      ctx.fillStyle = "#08080c";
+      this.pixelRect(ctx, x + facing * 12, y - 7, facing * 12, 14);
+    } else if (weaponId === "virgin-blood") {
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x - 6, y - 13, 12, 5);
+      this.pixelRect(ctx, x - 8, y - 8, 16, 21);
+      ctx.fillStyle = "#e33d54";
+      this.pixelRect(ctx, x - 5, y - 4, 10, 12);
+    } else if (weaponId === "rocket") {
+      ctx.fillStyle = "#56606f";
+      this.pixelRect(ctx, x, y - 7, facing * 34, 14);
+      ctx.fillStyle = "#ff8f3d";
+      this.pixelRect(ctx, x + facing * 25, y - 9, facing * 13, 18);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x + facing * 36, y - 4, facing * 9, 8);
+    } else if (weaponId === "hands") {
+      ctx.fillStyle = "#b8ffd0";
+      for (let index = 0; index < 3; index += 1) {
+        this.pixelRect(ctx, x + facing * index * 8, y + Math.sin(performance.now() * 0.01 + index) * 5, facing * 8, 6);
+      }
+    } else if (weaponId === "lightning-rod" || weaponId === "sniper" || weaponId === "minigun" || weaponId === "laser-blaster") {
+      this.pixelRect(ctx, x - facing * 8, y - 4, facing * 46, 8);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x + facing * 34, y - 8, facing * 8, 16);
+    } else if (weaponId === "machete" || weaponId === "axe" || weaponId === "knife" || weaponId === "sledgehammer") {
+      this.pixelRect(ctx, x - facing * 18, y + 4, facing * 24, 7);
+      ctx.fillStyle = weaponId === "sledgehammer" ? "#ff8f3d" : color;
+      this.pixelRect(ctx, x + facing * 4, y - 12, facing * (weaponId === "sledgehammer" ? 24 : 32), 20);
+    } else {
+      this.pixelRect(ctx, x - facing * 4, y - 5, facing * 30, 10);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x + facing * 24, y - 3, facing * 8, 6);
+    }
+    ctx.restore();
+  }
+
+  private drawDeathAuraField(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, power: number): void {
+    const radius = Math.round(84 + (300 - 84) * Math.min(Math.max(power, 0), 1));
+    const cx = Math.round(state.x + state.width / 2 - this.camera.x);
+    const cy = Math.round(state.y + state.height / 2 - this.camera.y);
+    ctx.save();
+    ctx.globalAlpha = 0.2 + power * 0.28;
+    ctx.strokeStyle = deathAuraColor(power);
+    ctx.fillStyle = deathAuraColor(power);
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cx - radius, cy - Math.round(radius * 0.56), radius * 2, Math.round(radius * 1.12));
+    for (let index = 0; index < 10; index += 1) {
+      const angle = performance.now() * 0.0018 + index * 0.65;
+      const px = cx + Math.cos(angle) * radius * (0.32 + (index % 4) * 0.14);
+      const py = cy + Math.sin(angle) * radius * 0.48;
+      ctx.fillRect(Math.round(px), Math.round(py), 5 + (index % 3), 5 + (index % 2));
+    }
+    ctx.restore();
+  }
+
+  private drawLightningChargeVisual(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, aim: { x: number; y: number }, heldMs: number): void {
+    if (aim.y > -0.45) {
+      return;
+    }
+    const progress = Math.min(Math.max(heldMs / 4200, 0.05), 1);
+    const color = lightningChargeColorForMs(heldMs);
+    const baseX = Math.round(state.x + state.width / 2 + aim.x * 18 - this.camera.x);
+    const baseY = Math.round(state.y + 15 - this.camera.y);
+    const reach = Math.round(160 + progress * 430);
+    const topX = Math.round(baseX + aim.x * 80);
+    const topY = baseY - reach;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 3 + progress * 3;
+    ctx.globalAlpha = 0.66 + progress * 0.28;
+    ctx.beginPath();
+    ctx.moveTo(topX, topY);
+    const segments = 7;
+    for (let index = 1; index < segments; index += 1) {
+      const t = index / segments;
+      const jitter = (index % 2 === 0 ? -1 : 1) * (8 + progress * 22 + (index % 3) * 4);
+      ctx.lineTo(Math.round(topX + (baseX - topX) * t + jitter), Math.round(topY + (baseY - topY) * t));
+    }
+    ctx.lineTo(baseX, baseY);
+    ctx.stroke();
+    for (let index = 0; index < 5; index += 1) {
+      const offset = Math.sin(performance.now() * 0.018 + index) * (10 + progress * 16);
+      ctx.fillRect(Math.round(baseX - 22 + index * 11 + offset), Math.round(baseY - 36 - index * 7), 4 + Math.round(progress * 3), 10);
+    }
+    ctx.restore();
+  }
+
+  private drawLaserChargeVisual(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, aim: { x: number; y: number }, heldMs: number): void {
+    const facing = Math.sign(aim.x || state.facing) || 1;
+    const progress = Math.min(Math.max(heldMs / 1100, 0.12), 1);
+    const centerX = Math.round(state.x + state.width / 2 - this.camera.x);
+    const centerY = Math.round(state.y + 23 + aim.y * 10 - this.camera.y);
+    ctx.save();
+    ctx.globalAlpha = 0.44 + progress * 0.24;
+    ctx.fillStyle = progress > 0.85 ? "#ff6f91" : "#5ad7ff";
+    this.pixelRect(ctx, centerX + facing * 26, centerY - 9, facing * Math.round(24 + progress * 34), 18);
+    ctx.fillStyle = "#d6f2ff";
+    this.pixelRect(ctx, centerX + facing * 42, centerY - 4, facing * Math.round(12 + progress * 20), 8);
+    ctx.restore();
+  }
+
+  private drawRemoteRocketState(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, lit: boolean): void {
+    const facing = state.facing;
+    const x = Math.round(state.x + state.width / 2 + facing * 42 - this.camera.x);
+    const y = Math.round(DEFAULT_PHYSICS.groundY - 12 - this.camera.y);
+    ctx.save();
+    ctx.fillStyle = "#56606f";
+    this.pixelRect(ctx, x, y - 6, facing * 28, 12);
+    ctx.fillStyle = lit ? "#ff8f3d" : "#8a6f55";
+    this.pixelRect(ctx, x + facing * 20, y - 8, facing * 10, 16);
+    if (lit) {
+      ctx.fillStyle = "rgba(255, 143, 61, 0.6)";
+      this.pixelRect(ctx, x - facing * 24, y - 5, facing * 18, 10);
+    }
+    ctx.restore();
+  }
+
   private drawWings(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, color: string, mode: "idle" | "glide" | "flap" | "dive"): void {
     const cx = Math.round(state.x + state.width / 2 - this.camera.x);
     const cy = Math.round(state.y + 22 - this.camera.y);
@@ -1100,9 +1322,14 @@ export class Game {
       ctx.fillRect(x + 32, y + 8 + Math.round(Math.cos(performance.now() * 0.01) * 4), 4, 30);
     }
     if (combatant.statuses.some((status) => status.id === "deathFrozen")) {
-      ctx.strokeStyle = "#08080c";
+      ctx.fillStyle = "rgba(157, 225, 255, 0.24)";
+      ctx.fillRect(x - 6, y - 7, 44, 62);
+      ctx.strokeStyle = "#9de1ff";
       ctx.lineWidth = 3;
       ctx.strokeRect(x - 5, y - 5, 42, 58);
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillRect(x + 2, y - 3, 8, 4);
+      ctx.fillRect(x + 25, y + 50, 7, 4);
     }
     if (combatant.statuses.some((status) => status.id === "scrambled")) {
       ctx.fillStyle = "#b8ffd0";
@@ -1358,10 +1585,28 @@ export class Game {
       ctx.fillRect(x - 18, y - 14, 6, 6);
       ctx.fillRect(x + 12, y - 14, 6, 6);
     } else if (effect.kind === "aura") {
-      const radius = Math.round(18 + Math.sin(performance.now() * 0.018) * 5);
-      ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
-      ctx.fillRect(x - 2, y - radius - 12, 4, 12);
+      const targetRadius = Math.max(18, Math.hypot(tx - x, ty - y));
+      const deathAura = effect.label === "DEATH AURA" || effect.label === "DEATH RELEASE" || effect.label === "DEATH RECALL";
+      const radius = deathAura
+        ? Math.round(effect.label === "DEATH RECALL"
+          ? 12 + targetRadius * (1 - progress)
+          : effect.label === "DEATH RELEASE"
+            ? 14 + targetRadius * progress
+            : targetRadius * (0.9 + Math.sin(performance.now() * 0.018) * 0.05))
+        : Math.round(18 + Math.sin(performance.now() * 0.018) * 5);
+      const ovalY = deathAura ? Math.round(radius * 0.58) : radius;
+      ctx.strokeRect(x - radius, y - ovalY, radius * 2, ovalY * 2);
+      ctx.fillRect(x - 2, y - ovalY - 12, 4, 12);
       ctx.fillRect(x + radius - 2, y - 2, 4, 12);
+      if (deathAura) {
+        for (let index = 0; index < 8; index += 1) {
+          const angle = index * 0.8 + performance.now() * 0.0015;
+          const pull = effect.label === "DEATH RECALL" ? 1 - progress : progress;
+          const px = x + Math.cos(angle) * radius * pull;
+          const py = y + Math.sin(angle) * ovalY * pull;
+          ctx.fillRect(Math.round(px), Math.round(py), 5, 5);
+        }
+      }
     } else if (effect.kind === "lightning") {
       ctx.beginPath();
       const dx = x - tx;
@@ -1625,6 +1870,23 @@ function machetePowerColor(redness: number): string {
   const g = Math.round(231 + (70 - 231) * clamped);
   const b = Math.round(195 + (88 - 195) * clamped);
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+function lightningChargeColorForMs(heldMs: number): string {
+  if (heldMs >= 3800) {
+    return "#b096ff";
+  }
+  if (heldMs >= 2450) {
+    return "#ff5c5c";
+  }
+  if (heldMs >= 1250) {
+    return "#5ad7ff";
+  }
+  return "#ffd84d";
+}
+
+function deathAuraColor(power: number): string {
+  return power > 0.72 ? "#08080c" : power > 0.38 ? "#17101d" : "#23182b";
 }
 
 function weaponHudDetail(

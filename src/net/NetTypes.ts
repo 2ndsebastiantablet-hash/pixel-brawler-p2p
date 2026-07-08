@@ -25,6 +25,14 @@ export interface PlayerNetState {
   hp?: number;
   statuses?: StatusEffectId[];
   respawnTimer?: number;
+  chargeWeaponId?: WeaponId;
+  chargeHeldMs?: number;
+  aimX?: number;
+  aimY?: number;
+  deathAuraActive?: boolean;
+  deathAuraPower?: number;
+  rocketActive?: boolean;
+  rocketLit?: boolean;
   lastActivityAt?: number;
 }
 
@@ -48,6 +56,14 @@ export interface PlayerStatePacket {
   hp?: number;
   st?: StatusEffectId[];
   ko?: number;
+  cw?: WeaponId;
+  ch?: number;
+  ax?: number;
+  ay?: number;
+  da?: 0 | 1;
+  dp?: number;
+  ra?: 0 | 1;
+  rl?: 0 | 1;
   act?: number;
 }
 
@@ -124,6 +140,14 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(typeof state.hp === "number" ? { hp: round(state.hp, 1) } : {}),
     ...(state.statuses ? { st: state.statuses } : {}),
     ...(typeof state.respawnTimer === "number" ? { ko: round(state.respawnTimer, 2) } : {}),
+    ...(state.chargeWeaponId ? { cw: state.chargeWeaponId } : {}),
+    ...(typeof state.chargeHeldMs === "number" ? { ch: Math.round(state.chargeHeldMs) } : {}),
+    ...(typeof state.aimX === "number" ? { ax: round(state.aimX, 2) } : {}),
+    ...(typeof state.aimY === "number" ? { ay: round(state.aimY, 2) } : {}),
+    ...(typeof state.deathAuraActive === "boolean" ? { da: state.deathAuraActive ? 1 : 0 } : {}),
+    ...(typeof state.deathAuraPower === "number" ? { dp: round(state.deathAuraPower, 2) } : {}),
+    ...(typeof state.rocketActive === "boolean" ? { ra: state.rocketActive ? 1 : 0 } : {}),
+    ...(typeof state.rocketLit === "boolean" ? { rl: state.rocketLit ? 1 : 0 } : {}),
     ...(typeof state.lastActivityAt === "number" ? { act: Math.round(state.lastActivityAt) } : {}),
   };
 }
@@ -152,6 +176,14 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.hp === "number" ? { hp: packet.hp } : {}),
     ...(packet.st ? { statuses: packet.st } : {}),
     ...(typeof packet.ko === "number" ? { respawnTimer: packet.ko } : {}),
+    ...(packet.cw ? { chargeWeaponId: packet.cw } : {}),
+    ...(typeof packet.ch === "number" ? { chargeHeldMs: packet.ch } : {}),
+    ...(typeof packet.ax === "number" ? { aimX: packet.ax } : {}),
+    ...(typeof packet.ay === "number" ? { aimY: packet.ay } : {}),
+    ...(packet.da !== undefined ? { deathAuraActive: packet.da === 1 } : {}),
+    ...(typeof packet.dp === "number" ? { deathAuraPower: packet.dp } : {}),
+    ...(packet.ra !== undefined ? { rocketActive: packet.ra === 1 } : {}),
+    ...(packet.rl !== undefined ? { rocketLit: packet.rl === 1 } : {}),
     ...(typeof packet.act === "number" ? { lastActivityAt: packet.act } : {}),
   };
 }
@@ -181,6 +213,14 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.hp === undefined || typeof value.hp === "number") &&
     (value.st === undefined || (Array.isArray(value.st) && value.st.every((item) => typeof item === "string"))) &&
     (value.ko === undefined || typeof value.ko === "number") &&
+    (value.cw === undefined || typeof value.cw === "string") &&
+    (value.ch === undefined || typeof value.ch === "number") &&
+    (value.ax === undefined || typeof value.ax === "number") &&
+    (value.ay === undefined || typeof value.ay === "number") &&
+    (value.da === undefined || value.da === 0 || value.da === 1) &&
+    (value.dp === undefined || typeof value.dp === "number") &&
+    (value.ra === undefined || value.ra === 0 || value.ra === 1) &&
+    (value.rl === undefined || value.rl === 0 || value.rl === 1) &&
     (value.act === undefined || typeof value.act === "number")
   );
 }
