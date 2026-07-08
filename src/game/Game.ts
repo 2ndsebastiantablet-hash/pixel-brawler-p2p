@@ -257,7 +257,8 @@ export class Game {
     const combatInput = this.input.consumeCombatFrame();
     this.lastMouse = { x: combatInput.mouseX, y: combatInput.mouseY };
     this.lastAim = this.getAim(combatInput);
-    const lockedOut = (this.combat.getCombatant(this.localPlayer.state.id)?.respawnTimer ?? 0) > 0;
+    const lockedOut = (this.combat.getCombatant(this.localPlayer.state.id)?.respawnTimer ?? 0) > 0
+      || this.combat.isMovementLocked(this.localPlayer.state.id);
     const previousState = { ...this.localPlayer.state };
     this.localPlayer.update(lockedOut ? neutralInput() : movementInput, dt, this.getWeightedPhysics());
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
@@ -369,7 +370,7 @@ export class Game {
         continue;
       }
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      if (remote.current.weaponId === "wings") {
+      if (remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
         this.drawWings(ctx, remote.player.state, remote.player.color, remote.player.state.grounded ? "idle" : "glide");
       }
       this.drawRemoteHealth(ctx, remote);
@@ -378,6 +379,10 @@ export class Game {
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
     if (!steady) {
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      if (localCombatant?.statuses.some((status) => status.id === "angelWings")) {
+        const mode = this.localPlayer.state.wingFlapping ? "flap" : this.localPlayer.state.wingDiving ? "dive" : this.localPlayer.state.grounded ? "idle" : "glide";
+        this.drawWings(ctx, this.localPlayer.state, this.localPlayer.color, mode);
+      }
       this.drawLocalWeapon(ctx);
     }
     this.drawLocalHealth(ctx);
@@ -398,14 +403,18 @@ export class Game {
     if (input.reloadPressed) {
       this.combat.reload(this.localPlayer.state.id, time);
     }
+    const equipped = this.combat.getPlayerInventory().equippedWeapon;
     if (input.pickupPressed) {
-      this.combat.pickUpNearest(this.localPlayer.state);
+      if (equipped === "virgin-blood") {
+        this.recordAttack(this.combat.activateVirginBlood(this.localPlayer.state.id, this.localPlayer.state, time), "reload");
+      } else {
+        this.combat.pickUpNearest(this.localPlayer.state);
+      }
     }
     if (input.dropPressed) {
       this.combat.dropCurrentWeapon(this.localPlayer.state.id, this.localPlayer.state, this.lastAim, time);
     }
 
-    const equipped = this.combat.getPlayerInventory().equippedWeapon;
     const aim = this.lastAim;
     if (input.primaryHeld) {
       this.primaryHeldMs += dt * 1000;
@@ -732,7 +741,9 @@ export class Game {
         ? COMBAT_TUNING.minigun.spinSlowMultiplier
         : 1;
     const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
-    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered;
+    const holy = local?.statuses.some((status) => status.id === "holyBuff") ? 1.16 : 1;
+    const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
+    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy;
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
@@ -743,7 +754,7 @@ export class Game {
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
-    return weapon.id === "wings" ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
+    return weapon.id === "wings" || angelWings ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
   }
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
@@ -933,6 +944,18 @@ export class Game {
         ctx.fillStyle = "rgba(255, 179, 92, 0.46)";
         this.pixelRect(ctx, x + facing * 14, y - 24, facing * 54, 48);
       }
+    } else if (weaponId === "virgin-blood") {
+      const x = Math.round(centerX + facing * 22);
+      const y = Math.round(centerY - 10 + Math.sin(performance.now() * 0.006) * 3);
+      ctx.fillStyle = "rgba(255, 244, 168, 0.32)";
+      this.pixelRect(ctx, x - 14, y - 14, 28, 28);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x - 6, y - 13, 12, 5);
+      this.pixelRect(ctx, x - 8, y - 8, 16, 21);
+      ctx.fillStyle = "#e33d54";
+      this.pixelRect(ctx, x - 5, y - 4, 10, 12);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x - 3, y - 6, 4, 4);
     } else if (weaponId === "wings") {
       const mode = state.wingFlapping ? "flap" : state.wingDiving ? "dive" : state.grounded ? "idle" : "glide";
       this.drawWings(ctx, state, this.localPlayer.color, mode);
@@ -1490,6 +1513,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "virgin-blood":
+      return "#fff4a8";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1533,9 +1558,15 @@ function weaponHudDetail(
     case "machete":
       return `Growth +${Math.round(runtime.rangeBonus)} range - Power +${Math.round(runtime.damageBonus)}`;
     case "axe":
-      return `Heavy swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
+      return runtime.axeReturning
+        ? "RETURNING AXE"
+        : runtime.axeThrown
+          ? "Right click recalls"
+          : `Rush swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
     case "wings":
       return "Hold Space flap - release glide - S dive - Shift burst";
+    case "virgin-blood":
+      return `F bless/heal - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
@@ -1574,9 +1605,11 @@ function weaponHelper(id: WeaponId): string {
     case "machete":
       return "Grows on hit - KO adds power - Right chop";
     case "axe":
-      return "Left heavy swing - Right/G spinning throw";
+      return "Left rushes target - Right throw/recall";
     case "wings":
       return "No attacks - Space fly/glide - flap gust pushes nearby";
+    case "virgin-blood":
+      return "F: full heal + holy buff - death revives with angel wings";
     default:
       return "";
   }

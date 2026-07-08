@@ -14,6 +14,7 @@ export type WeaponId =
   | "machete"
   | "axe"
   | "wings"
+  | "virgin-blood"
   | "teleport-ball"
   | "lightning-rod"
   | "sledgehammer";

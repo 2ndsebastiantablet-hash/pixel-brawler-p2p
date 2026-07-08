@@ -8,7 +8,10 @@ export type StatusEffectId =
   | "marked"
   | "steady"
   | "legShotSlow"
-  | "legStagger";
+  | "legStagger"
+  | "holyBuff"
+  | "blessed"
+  | "angelWings";
 
 export interface StatusEffect {
   id: StatusEffectId;

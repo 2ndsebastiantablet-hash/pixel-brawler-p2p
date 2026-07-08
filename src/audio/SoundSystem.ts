@@ -77,10 +77,14 @@ export type SoundId =
   | "axe-throw"
   | "axe-hit"
   | "axe-impact"
+  | "axe-rush"
+  | "axe-recall"
   | "wing-flap"
   | "wing-wind"
   | "wing-burst"
   | "wing-gust"
+  | "virgin-blood-activate"
+  | "virgin-blood-revive"
   | "respawn";
 
 interface SoundShape {
@@ -166,10 +170,14 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "axe-throw": { category: "heavy", frequency: 320, endFrequency: 96, duration: 0.15, noise: true, minInterval: 0.12 },
   "axe-hit": { category: "combat", frequency: 210, endFrequency: 72, duration: 0.11, noise: true, minInterval: 0.07 },
   "axe-impact": { category: "heavy", frequency: 120, endFrequency: 44, duration: 0.18, noise: true, minInterval: 0.12 },
+  "axe-rush": { category: "heavy", frequency: 260, endFrequency: 72, duration: 0.18, noise: true, minInterval: 0.18 },
+  "axe-recall": { category: "heavy", frequency: 520, endFrequency: 160, duration: 0.22, noise: true, minInterval: 0.16 },
   "wing-flap": { category: "movement", frequency: 180, endFrequency: 90, duration: 0.12, noise: true, minInterval: 0.18 },
   "wing-wind": { category: "movement", frequency: 260, endFrequency: 190, duration: 0.18, noise: true, minInterval: 0.45 },
   "wing-burst": { category: "movement", frequency: 420, endFrequency: 100, duration: 0.18, noise: true, minInterval: 0.32 },
   "wing-gust": { category: "combat", frequency: 360, endFrequency: 120, duration: 0.12, noise: true, minInterval: 0.12 },
+  "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
+  "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

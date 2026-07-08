@@ -177,6 +177,35 @@ describe("player physics", () => {
     expect(bursting.wingBurstCooldown).toBeGreaterThan(0);
   });
 
+  it("lets temporary angel wings reuse Wings flight after Virgin Blood revival", () => {
+    const angelWingFlight = {
+      enabled: true,
+      liftAcceleration: 1900,
+      climbAcceleration: 520,
+      glideGravityScale: 0.34,
+      diveAcceleration: 1450,
+      maxRiseSpeed: -620,
+      maxFallSpeed: 620,
+      horizontalAccelerationScale: 1.45,
+      airBurstSpeed: 780,
+      airBurstVerticalSpeed: -160,
+      airBurstCooldown: 0.7,
+    };
+    const revived = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 160),
+      grounded: false,
+      coyoteTimer: 0,
+      jumpsUsed: 2,
+      velocityX: 0,
+      velocityY: 90,
+    };
+
+    const flapping = stepPlayer(revived, { ...neutralInput, jumpHeld: true, up: true }, 1 / 30, { ...DEFAULT_PHYSICS, wingFlight: angelWingFlight });
+
+    expect(flapping.wingFlapping).toBe(true);
+    expect(flapping.velocityY).toBeLessThan(revived.velocityY);
+  });
+
   it("uses S in the air as a ground slam and recovers on landing", () => {
     const airborne = {
       ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 12),

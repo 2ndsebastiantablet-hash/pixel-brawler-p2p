@@ -114,6 +114,13 @@ const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
 const wingGustRadius = 130;
 const wingGustCooldown = 0.14;
+const axeRushRange = 540;
+const axeRushSpeed = 1080;
+const axeRushMaxTime = 0.46;
+const axeRushHitDistance = 78;
+const virginBloodBuffDuration = 25;
+const virginBloodReviveWingDuration = 30;
+const virginBloodCooldown = 52;
 const macheteHitGrowth = 12;
 const macheteKoGrowth = 60;
 const macheteKoDamageBonus = 3;
@@ -143,6 +150,15 @@ interface MacheteGrowthState {
   damageBonus: number;
 }
 
+interface AxeRushState {
+  targetId: string;
+  timer: number;
+}
+
+interface VirginBloodState {
+  reviveAvailable: boolean;
+}
+
 export interface WeaponRuntimeState {
   charge: number;
   heat: number;
@@ -154,6 +170,8 @@ export interface WeaponRuntimeState {
   rangeBonus: number;
   damageBonus: number;
   redness: number;
+  axeThrown: boolean;
+  axeReturning: boolean;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -174,6 +192,9 @@ export class CombatSystem {
   private readonly pendingTeleports = new Map<string, PendingTeleport>();
   private readonly lightning = new Map<string, LightningState>();
   private readonly machetes = new Map<string, MacheteGrowthState>();
+  private readonly axeRushes = new Map<string, AxeRushState>();
+  private readonly axeThrows = new Map<string, string>();
+  private readonly virginBlood = new Map<string, VirginBloodState>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private nextId = 0;
 
@@ -193,6 +214,9 @@ export class CombatSystem {
     this.pendingTeleports.clear();
     this.lightning.clear();
     this.machetes.clear();
+    this.axeRushes.clear();
+    this.axeThrows.clear();
+    this.virginBlood.clear();
     this.bodyContactCooldowns.clear();
   }
 
@@ -315,6 +339,12 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
+    if (this.inventory.equippedWeapon === "virgin-blood") {
+      return { kind: "blocked", weaponId: "virgin-blood", label: "F to bless" };
+    }
+    if (this.inventory.equippedWeapon === "axe") {
+      return this.useAxePrimary(context);
+    }
     if (this.inventory.equippedWeapon === "lightning-rod") {
       return this.callLightningSkyStrike(context);
     }
@@ -325,6 +355,9 @@ export class CombatSystem {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
     if (weapon.id === "wings") {
       return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
+    }
+    if (weapon.id === "virgin-blood") {
+      return { kind: "blocked", weaponId: weapon.id, label: "F to bless" };
     }
     if (weapon.id === "pistol" || weapon.id === "knife") {
       return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, weapon.id === "pistol" && this.inventory.ammo.pistol?.magazine === 0);
@@ -405,6 +438,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
+    if (this.inventory.equippedWeapon === "virgin-blood") {
+      return { kind: "blocked", weaponId: "virgin-blood", label: "F to bless" };
+    }
     return this.throwCurrentWeapon(ownerId, player, aim, now, false);
   }
 
@@ -441,8 +477,20 @@ export class CombatSystem {
       && request.sourceId !== target.id
       && request.sourceId !== "status"
       && Boolean(source?.statuses.some((status) => status.id === "empowered"));
-    const damageScale = (steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1) * (empoweredAttack ? empoweredDamageScale : 1);
-    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier * (steadyResist ? 0.25 : 1) * locationModifier.knockbackScale * (empoweredAttack ? empoweredKnockbackScale : 1);
+    const holyAttack = !request.skipSourceScaling
+      && request.sourceId !== target.id
+      && request.sourceId !== "status"
+      && Boolean(source?.statuses.some((status) => status.id === "holyBuff"));
+    const holyResist = target.statuses.some((status) => status.id === "holyBuff") && request.sourceId !== target.id;
+    const damageScale = (steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1)
+      * (holyResist ? 0.72 : 1)
+      * (empoweredAttack ? empoweredDamageScale : 1)
+      * (holyAttack ? 1.2 : 1);
+    const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier
+      * (steadyResist ? 0.25 : 1)
+      * locationModifier.knockbackScale
+      * (empoweredAttack ? empoweredKnockbackScale : 1)
+      * (holyAttack ? 1.16 : 1);
     const verticalLift = request.damage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
     const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
@@ -503,6 +551,9 @@ export class CombatSystem {
     }
 
     if (target.hp <= 0) {
+      if (this.consumeVirginBloodRevive(target)) {
+        return { applied: true, remainingHp: target.hp, hitLocation };
+      }
       target.respawnTimer = respawnDelay;
       target.hitstun = 0;
       target.invulnerable = respawnDelay;
@@ -527,6 +578,7 @@ export class CombatSystem {
     this.updateCombatants(dt);
     this.updateProjectiles(dt);
     this.updateTeleports(dt, players);
+    this.updateAxeRushes(dt, players);
     this.updateHitboxes(dt);
     this.updateLightning(dt, players);
     this.updateContactCooldowns(dt);
@@ -570,10 +622,23 @@ export class CombatSystem {
     };
   }
 
+  isMovementLocked(ownerId: string): boolean {
+    return this.axeRushes.has(ownerId);
+  }
+
+  getVirginBloodState(ownerId: string): { reviveAvailable: boolean; cooldown: number } {
+    return {
+      reviveAvailable: this.virginBlood.get(ownerId)?.reviveAvailable ?? false,
+      cooldown: this.inventory.cooldowns["virgin-blood"] ?? 0,
+    };
+  }
+
   getWeaponRuntimeState(id: WeaponId = this.inventory.equippedWeapon, ownerId = "local"): WeaponRuntimeState {
     const charge = this.inventory.charge[id];
     const heat = charge?.heat ?? 0;
     const machete = id === "machete" ? this.getMacheteState(ownerId) : { rangeBonus: 0, damageBonus: 0, redness: 0 };
+    const axeProjectileId = this.axeThrows.get(ownerId);
+    const axeProjectile = axeProjectileId ? this.projectiles.find((projectile) => projectile.id === axeProjectileId) : undefined;
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -585,7 +650,35 @@ export class CombatSystem {
       rangeBonus: machete.rangeBonus,
       damageBonus: machete.damageBonus,
       redness: machete.redness,
+      axeThrown: Boolean(axeProjectile),
+      axeReturning: axeProjectile?.label === "RETURNING AXE",
     };
+  }
+
+  activateVirginBlood(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "virgin-blood";
+    if (this.inventory.equippedWeapon !== weaponId) {
+      return { kind: "blocked", weaponId, label: "Not equipped" };
+    }
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Blessing cooldown" };
+    }
+    const owner = this.combatants.get(ownerId);
+    if (!owner || owner.respawnTimer > 0) {
+      return { kind: "blocked", weaponId, label: "No vessel" };
+    }
+    owner.hp = owner.maxHp;
+    owner.invulnerable = Math.max(owner.invulnerable, 0.45);
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("holyBuff"));
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("blessed"));
+    this.virginBlood.set(ownerId, { reviveAvailable: true });
+    this.inventory.cooldowns[weaponId] = virginBloodCooldown;
+    const center = this.muzzle(player);
+    this.addEffect("aura", center.x, center.y, center.x, center.y - 80, colorForWeapon(weaponId), "BLESSED");
+    this.addEffect("shockwave", center.x, center.y, center.x, center.y - 120, colorForWeapon(weaponId), "FULL HEAL");
+    this.queueSound("virgin-blood-activate");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "equip", center, { x: 0, y: -1 }, "Blessed", now));
+    return { kind: "utility", weaponId, label: "Blessed" };
   }
 
   triggerLaserOvercharge(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
@@ -769,6 +862,47 @@ export class CombatSystem {
     return { kind: "hitbox", weaponId: weapon.id, label: weapon.name };
   }
 
+  private useAxePrimary(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "axe";
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Cooldown" };
+    }
+    const target = this.findNearestAxeTarget(context.ownerId, context.player);
+    if (!target || target.distance <= 150 || target.distance > axeRushRange) {
+      return this.useAttack(context, "primary");
+    }
+
+    const direction = normalize({
+      x: target.combatant.x + target.combatant.width / 2 - (context.player.x + context.player.width / 2),
+      y: target.combatant.y + target.combatant.height / 2 - (context.player.y + context.player.height / 2),
+    });
+    context.player.facing = direction.x >= 0 ? 1 : -1;
+    context.player.velocityX = direction.x * axeRushSpeed;
+    context.player.velocityY = Math.min(context.player.velocityY, direction.y * axeRushSpeed * 0.22);
+    this.axeRushes.set(context.ownerId, { targetId: target.combatant.id, timer: axeRushMaxTime });
+    this.inventory.cooldowns[weaponId] = 0.2;
+    this.addEffect("tracer", context.player.x + context.player.width / 2, context.player.y + 24, target.combatant.x + target.combatant.width / 2, target.combatant.y + 24, colorForWeapon(weaponId), "Axe Rush");
+    this.queueSound("axe-rush");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", this.muzzle(context.player), direction, "Axe Rush", context.now));
+    return { kind: "utility", weaponId, label: "Axe Rush" };
+  }
+
+  private findNearestAxeTarget(ownerId: string, player: PlayerPhysicsState): { combatant: Combatant; distance: number } | null {
+    const ownerCenter = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
+    let nearest: { combatant: Combatant; distance: number } | null = null;
+    for (const combatant of this.combatants.values()) {
+      if (combatant.id === ownerId || combatant.respawnTimer > 0 || combatant.hp <= 0) {
+        continue;
+      }
+      const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+      const distance = Math.hypot(center.x - ownerCenter.x, center.y - ownerCenter.y);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { combatant, distance };
+      }
+    }
+    return nearest;
+  }
+
   private prepareMinigunPrimary(context: WeaponUseContext): WeaponUseResult | null {
     const weaponId: WeaponId = "minigun";
     const charge = this.inventory.charge[weaponId];
@@ -924,7 +1058,7 @@ export class CombatSystem {
       return {
         ...profile,
         damage: profile.damage + (fallingChop ? 5 : 0),
-        range: profile.range + (slideCleave ? 18 : 0),
+        range: profile.range + (slot === "primary" ? 46 : 0) + (slideCleave ? 18 : 0),
         knockback: profile.knockback * (1 + (slideCleave ? 0.24 : 0) + (fallingChop ? 0.16 : 0)),
         stun: profile.stun + (fallingChop ? 0.07 : slideCleave ? 0.04 : 0),
       };
@@ -1579,6 +1713,13 @@ export class CombatSystem {
   private throwAxe(context: WeaponUseContext): WeaponUseResult {
     const weaponId: WeaponId = "axe";
     const weapon = weaponRegistry.get(weaponId);
+    const existing = this.activeAxeProjectile(context.ownerId);
+    if (existing) {
+      if (existing.label === "RETURNING AXE") {
+        return { kind: "blocked", weaponId, label: "Already returning" };
+      }
+      return this.recallAxe(context, existing);
+    }
     if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
       return { kind: "blocked", weaponId, label: "Throw cooldown" };
     }
@@ -1591,7 +1732,7 @@ export class CombatSystem {
     const knockbackScale = slideThrow ? 1.24 : airThrow ? 1.08 : 1;
     this.inventory.cooldowns[weaponId] = weapon.secondary.cooldown;
     this.applySelfRecoil(context.player, aim, airThrow ? 112 : 84, airThrow ? 28 : 18);
-    this.projectiles.push({
+    const projectile: Projectile = {
       id: this.makeId("throw"),
       ownerId: context.ownerId,
       weaponId,
@@ -1607,7 +1748,7 @@ export class CombatSystem {
       lifetime: weapon.secondary.range / Math.max(weapon.throw.speed, 1),
       gravity: weapon.secondary.gravity ?? 340,
       bounces: weapon.secondary.bounces ?? 1,
-      pierce: 0,
+      pierce: 1,
       label: "Axe throw",
       color: colorForWeapon(weaponId),
       trailColor: colorForWeapon(weaponId),
@@ -1615,11 +1756,53 @@ export class CombatSystem {
       originY: start.y,
       status: weapon.secondary.status,
       hits: [],
-    });
+    };
+    this.projectiles.push(projectile);
+    this.axeThrows.set(context.ownerId, projectile.id);
     this.addEffect("tracer", start.x, start.y, start.x + aim.x * 92, start.y + aim.y * 92, colorForWeapon(weaponId), "Throw");
     this.queueSound("axe-throw");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "throw", start, aim, "Throw", context.now));
     return { kind: "fired", weaponId, label: "Throw" };
+  }
+
+  private activeAxeProjectile(ownerId: string): Projectile | undefined {
+    const projectileId = this.axeThrows.get(ownerId);
+    const projectile = projectileId ? this.projectiles.find((item) => item.id === projectileId) : undefined;
+    if (!projectile) {
+      this.axeThrows.delete(ownerId);
+    }
+    return projectile;
+  }
+
+  private recallAxe(context: WeaponUseContext, projectile: Projectile): WeaponUseResult {
+    const owner = this.combatants.get(context.ownerId);
+    const target = owner ?? {
+      x: context.player.x,
+      y: context.player.y,
+      width: context.player.width,
+      height: context.player.height,
+    };
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    const direction = normalize({ x: targetCenter.x - projectile.x, y: targetCenter.y - projectile.y });
+    projectile.vx = direction.x * 1120;
+    projectile.vy = direction.y * 1120;
+    projectile.gravity = 0;
+    projectile.bounces = 0;
+    projectile.pierce = 9;
+    projectile.radius = Math.max(projectile.radius, 18);
+    projectile.damage = 34;
+    projectile.knockback = { x: direction.x * 560, y: direction.y * 300 - 120 };
+    projectile.stun = 0.34;
+    projectile.age = 0;
+    projectile.lifetime = 2;
+    projectile.label = "RETURNING AXE";
+    projectile.color = "#d9f7ff";
+    projectile.trailColor = "#5ad7ff";
+    projectile.hits = [];
+    this.addEffect("lightning", projectile.x, projectile.y, targetCenter.x, targetCenter.y, "#5ad7ff", "Recall");
+    this.queueSound("axe-recall");
+    this.recentEvents.push(this.createEvent(context.ownerId, "axe", "throw", { x: projectile.x, y: projectile.y }, direction, "Recall", context.now));
+    return { kind: "utility", weaponId: "axe", label: "Recall" };
   }
 
   private throwCurrentWeapon(ownerId: string, player: PlayerPhysicsState, aimInput: Vec2, now: number, emptyToss: boolean): WeaponUseResult {
@@ -1809,6 +1992,12 @@ export class CombatSystem {
   private updateProjectiles(dt: number): void {
     for (const projectile of this.projectiles) {
       projectile.age += dt;
+      const returningAxe = projectile.weaponId === "axe" && projectile.label === "RETURNING AXE";
+      if (returningAxe) {
+        this.steerReturningAxe(projectile);
+      }
+      const previousX = projectile.x;
+      const previousY = projectile.y;
       projectile.vy += projectile.gravity * dt;
       projectile.x += projectile.vx * dt;
       projectile.y += projectile.vy * dt;
@@ -1849,7 +2038,8 @@ export class CombatSystem {
         if (target.id === projectile.ownerId || projectile.hits.includes(target.id)) {
           continue;
         }
-        if (intersectsRect(projectileBounds(projectile), target)) {
+        const bounds = returningAxe ? sweptProjectileBounds(projectile, previousX, previousY) : projectileBounds(projectile);
+        if (intersectsRect(bounds, target)) {
           const closePistolShot = projectile.weaponId === "pistol" && projectile.age < 0.13;
           const hitLocation = classifyHitLocation(target, projectile.y);
           const sniperLegShot = projectile.weaponId === "sniper" && hitLocation === "leg";
@@ -1901,7 +2091,7 @@ export class CombatSystem {
               this.queueSound("knife-hit");
             }
             if (projectile.weaponId === "axe" && projectile.id.startsWith("throw")) {
-              this.addEffect("spark", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 30, projectile.y - 10, colorForWeapon("axe"), "Heavy Hit");
+              this.addEffect(projectile.label === "RETURNING AXE" ? "lightning" : "spark", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 30, projectile.y - 10, projectile.trailColor, projectile.label === "RETURNING AXE" ? "RETURNING AXE" : "Heavy Hit");
               this.queueSound("axe-hit");
               this.queueSound("axe-impact");
             }
@@ -1917,12 +2107,54 @@ export class CombatSystem {
           }
         }
       }
+      if (returningAxe && projectile.age <= projectile.lifetime) {
+        this.catchReturningAxe(projectile);
+      }
     }
     const xLimit = 2400 + COMBAT_TUNING.projectiles.cleanupPadding;
     removeWhere(this.projectiles, (projectile) => projectile.age > projectile.lifetime
       || projectile.y > COMBAT_TUNING.projectiles.floorY + COMBAT_TUNING.projectiles.cleanupPadding
       || projectile.x < -xLimit
       || projectile.x > xLimit);
+    for (const [ownerId, projectileId] of [...this.axeThrows.entries()]) {
+      if (!this.projectiles.some((projectile) => projectile.id === projectileId)) {
+        this.axeThrows.delete(ownerId);
+      }
+    }
+  }
+
+  private steerReturningAxe(projectile: Projectile): void {
+    const owner = this.combatants.get(projectile.ownerId);
+    if (!owner) {
+      return;
+    }
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const direction = normalize({ x: ownerCenter.x - projectile.x, y: ownerCenter.y - projectile.y });
+    projectile.vx = direction.x * 1120;
+    projectile.vy = direction.y * 1120;
+    projectile.gravity = 0;
+    projectile.knockback = { x: direction.x * 560, y: direction.y * 300 - 120 };
+    projectile.pulseTimer = (projectile.pulseTimer ?? 0) - 1 / 60;
+    if ((projectile.pulseTimer ?? 0) <= 0) {
+      this.addEffect("tracer", projectile.x, projectile.y, ownerCenter.x, ownerCenter.y, projectile.trailColor, "RETURNING AXE");
+      projectile.pulseTimer = 0.08;
+    }
+  }
+
+  private catchReturningAxe(projectile: Projectile): boolean {
+    const owner = this.combatants.get(projectile.ownerId);
+    if (!owner) {
+      return false;
+    }
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    if (Math.hypot(ownerCenter.x - projectile.x, ownerCenter.y - projectile.y) > 34) {
+      return false;
+    }
+    this.addEffect("spark", ownerCenter.x, ownerCenter.y, ownerCenter.x, ownerCenter.y - 28, projectile.trailColor, "Caught");
+    this.queueSound("axe-recall");
+    this.axeThrows.delete(projectile.ownerId);
+    projectile.age = projectile.lifetime + 1;
+    return true;
   }
 
   private updateHitboxes(dt: number): void {
@@ -1944,7 +2176,7 @@ export class CombatSystem {
           const axeHit = hitbox.weaponId === "axe";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const macheteTipHit = macheteHit && isWhipTipHit(hitbox, target);
-          const axeTipHit = axeHit && isWhipTipHit(hitbox, target);
+          const axeTipHit = axeHit && hitbox.label !== "Axe Rush" && isWhipTipHit(hitbox, target);
           const combo = whipHit ? this.registerWhipHit(target.id) : { count: 0, pulled: false };
           const rodEmpowered = rodHit && owner?.statuses.some((status) => status.id === "empowered");
           const backstab = knifeHit && owner ? isBackstab(owner, target, hitbox.knockback.x) : false;
@@ -2020,6 +2252,71 @@ export class CombatSystem {
       }
     }
     removeWhere(this.hitboxes, (hitbox) => hitbox.age > hitbox.duration);
+  }
+
+  private updateAxeRushes(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [ownerId, rush] of [...this.axeRushes.entries()]) {
+      const player = players.find((item) => item.id === ownerId);
+      const owner = this.combatants.get(ownerId);
+      const target = this.combatants.get(rush.targetId);
+      if (!player || !owner || !target || target.hp <= 0 || target.respawnTimer > 0) {
+        this.axeRushes.delete(ownerId);
+        continue;
+      }
+
+      rush.timer -= dt;
+      const playerCenter = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const delta = { x: targetCenter.x - playerCenter.x, y: targetCenter.y - playerCenter.y };
+      const distance = Math.hypot(delta.x, delta.y);
+      const direction = normalize(delta);
+      player.facing = direction.x >= 0 ? 1 : -1;
+      player.velocityX = direction.x * axeRushSpeed;
+      player.velocityY = direction.y * axeRushSpeed * 0.18;
+      const travel = Math.min(Math.max(0, distance - axeRushHitDistance), axeRushSpeed * dt);
+      player.x += direction.x * travel;
+      player.y += direction.y * travel;
+      owner.x = player.x;
+      owner.y = player.y;
+      owner.velocityX = player.velocityX;
+      owner.velocityY = player.velocityY;
+
+      if (distance - travel <= axeRushHitDistance || rush.timer <= 0) {
+        this.spawnAxeRushHitbox(ownerId, player, direction);
+        this.inventory.cooldowns.axe = Math.max(this.inventory.cooldowns.axe ?? 0, 0.48);
+        this.axeRushes.delete(ownerId);
+      } else {
+        this.axeRushes.set(ownerId, rush);
+      }
+    }
+  }
+
+  private spawnAxeRushHitbox(ownerId: string, player: PlayerPhysicsState, direction: Vec2): void {
+    const center = this.muzzle(player);
+    const width = 104;
+    const height = 52;
+    const facing = Math.sign(direction.x || player.facing) || 1;
+    this.hitboxes.push({
+      id: this.makeId("hit"),
+      ownerId,
+      weaponId: "axe",
+      x: facing >= 0 ? center.x : center.x - width,
+      y: center.y - height / 2,
+      width,
+      height,
+      damage: 30,
+      knockback: { x: facing * 430, y: -125 },
+      stun: 0.34,
+      age: 0,
+      duration: 0.18,
+      label: "Axe Rush",
+      color: colorForWeapon("axe"),
+      status: "bleed",
+      heavy: true,
+      hits: [],
+    });
+    this.addEffect("whip", center.x, center.y, center.x + facing * width, center.y, colorForWeapon("axe"), "Axe Rush");
+    this.queueSound("axe-swing");
   }
 
   private updateTeleports(dt: number, players: PlayerPhysicsState[]): void {
@@ -2286,6 +2583,29 @@ export class CombatSystem {
     return this.getMacheteState(ownerId);
   }
 
+  private consumeVirginBloodRevive(target: Combatant): boolean {
+    const state = this.virginBlood.get(target.id);
+    if (!state?.reviveAvailable) {
+      return false;
+    }
+    state.reviveAvailable = false;
+    this.virginBlood.set(target.id, state);
+    target.hp = target.maxHp;
+    target.respawnTimer = 0;
+    target.hitstun = 0;
+    target.invulnerable = 1.15;
+    target.velocityY = Math.min(target.velocityY, -360);
+    target.statuses = target.statuses.filter((status) => status.id !== "blessed");
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("holyBuff"));
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("angelWings"));
+    const cx = target.x + target.width / 2;
+    const cy = target.y + target.height / 2;
+    this.addEffect("shockwave", cx, cy, cx, cy - 150, colorForWeapon("virgin-blood"), "REVIVED");
+    this.addEffect("aura", cx, cy, cx, cy - 90, "#ffffff", "Angel Wings");
+    this.queueSound("virgin-blood-revive");
+    return true;
+  }
+
   private updateDroppedWeapons(dt: number): void {
     for (const dropped of this.droppedWeapons) {
       dropped.age += dt;
@@ -2511,6 +2831,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "virgin-blood":
+      return "#fff4a8";
     default:
       return "#ffffff";
   }
@@ -2606,6 +2928,12 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Leg Shot", duration: COMBAT_TUNING.sniper.legShotSlowDuration, stacks: 1 };
     case "legStagger":
       return { id, label: "Leg Stagger", duration: 2.4, stacks: 1 };
+    case "holyBuff":
+      return { id, label: "Holy Buff", duration: virginBloodBuffDuration, stacks: 1 };
+    case "blessed":
+      return { id, label: "Revive Ready", duration: virginBloodCooldown, stacks: 1 };
+    case "angelWings":
+      return { id, label: "Angel Wings", duration: virginBloodReviveWingDuration, stacks: 1 };
   }
 }
 
@@ -2615,6 +2943,19 @@ function removeWhere<T>(items: T[], predicate: (item: T) => boolean): void {
       items.splice(index, 1);
     }
   }
+}
+
+function sweptProjectileBounds(projectile: Projectile, previousX: number, previousY: number): { x: number; y: number; width: number; height: number } {
+  const minX = Math.min(previousX, projectile.x) - projectile.radius;
+  const maxX = Math.max(previousX, projectile.x) + projectile.radius;
+  const minY = Math.min(previousY, projectile.y) - projectile.radius;
+  const maxY = Math.max(previousY, projectile.y) + projectile.radius;
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
 }
 
 function round(value: number): number {

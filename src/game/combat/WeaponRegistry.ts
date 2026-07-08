@@ -11,6 +11,7 @@ import { sledgeHammer } from "./weapons/SledgeHammer";
 import { slingshot } from "./weapons/Slingshot";
 import { sniper } from "./weapons/Sniper";
 import { teleportBall } from "./weapons/TeleportBall";
+import { virginBlood } from "./weapons/VirginBlood";
 import { whip } from "./weapons/Whip";
 import { wings } from "./weapons/Wings";
 import { COMBAT_TUNING } from "./CombatTuning";
@@ -30,6 +31,7 @@ export const WEAPON_IDS = [
   "machete",
   "axe",
   "wings",
+  "virgin-blood",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -44,6 +46,7 @@ const ALL_WEAPON_IDS = [
   "machete",
   "axe",
   "wings",
+  "virgin-blood",
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
@@ -61,6 +64,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   machete,
   axe,
   wings,
+  virginBlood,
   teleportBall,
   lightningRod,
   sledgeHammer,

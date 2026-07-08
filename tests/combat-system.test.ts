@@ -35,7 +35,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(14);
+    expect(fighter.weaponInventory).toHaveLength(15);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -950,6 +950,145 @@ describe("combat system", () => {
     expect(target.velocityX).toBeGreaterThan(550);
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-throw", "axe-hit"]));
     expect(combat.getSnapshot().droppedWeapons.filter((dropped) => dropped.weaponId === "axe")).toHaveLength(0);
+  });
+
+  it("rushes Axe users into nearby targets before swinging", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("axe");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 360,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const rush = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(rush.kind).toBe("utility");
+    expect(rush.label).toBe("Axe Rush");
+    expect(combat.isMovementLocked("peer-a")).toBe(true);
+    expect(player.velocityX).toBeGreaterThan(850);
+
+    combat.update(0.28, [player]);
+    const target = combat.getCombatant("peer-b")!;
+    expect(combat.isMovementLocked("peer-a")).toBe(false);
+    expect(player.x).toBeGreaterThan(220);
+    expect(target.hp).toBeLessThanOrEqual(72);
+    expect(target.velocityX).toBeGreaterThan(650);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-rush", "axe-hit"]));
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "axe", targetId: "peer-b", label: expect.stringContaining("Axe Rush") }),
+    ]));
+  });
+
+  it("uses an extended normal Axe swing when no rush target is close", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("axe");
+    const player = { ...playerState, id: "local", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 128, y: playerState.y });
+
+    const swing = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(swing.kind).toBe("hitbox");
+    combat.update(1 / 60, [player]);
+
+    expect(combat.getCombatant(dummy.id)?.hp).toBeLessThan(100);
+  });
+
+  it("throws and recalls Axe as a piercing returning weapon", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("axe");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Guest",
+      color: "#ff6f91",
+      x: 210,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.syncRemotePlayer({
+      id: "peer-c",
+      name: "Guest 2",
+      color: "#ffd84d",
+      x: 118,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    expect(combat.useSecondary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true }).kind).toBe("fired");
+    combat.update(0.18, [player]);
+    const recall = combat.useSecondary({ ownerId: "peer-a", player, aim: { x: -1, y: 0 }, now: 400, heldMs: 0, isNewPress: true });
+
+    expect(recall.kind).toBe("utility");
+    expect(recall.label).toBe("Recall");
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "axe" && projectile.label === "RETURNING AXE" && projectile.pierce >= 8)).toBe(true);
+
+    combat.getCombatant("peer-b")!.invulnerable = 0;
+    combat.getCombatant("peer-c")!.invulnerable = 0;
+    combat.update(0.18, [player]);
+
+    expect(combat.getCombatant("peer-b")!.hp).toBeLessThanOrEqual(66);
+    expect(combat.getCombatant("peer-c")!.hp).toBeLessThanOrEqual(66);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["axe-recall", "axe-hit"]));
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "axe", targetId: "peer-b", label: "RETURNING AXE" }),
+      expect.objectContaining({ action: "hit", weaponId: "axe", targetId: "peer-c", label: "RETURNING AXE" }),
+    ]));
+  });
+
+  it("activates Virgin Blood with F semantics, heals, buffs, and revives once with angel wings", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("virgin-blood");
+    const player = { ...playerState, id: "peer-a", velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    combat.applyDamage({ sourceId: "status", targetId: "peer-a", damage: 54, knockback: { x: 0, y: 0 }, stun: 0, label: "Setup" });
+    const wounded = combat.getCombatant("peer-a")!;
+    wounded.invulnerable = 0;
+
+    const activated = combat.activateVirginBlood("peer-a", player, 100);
+    expect(activated.kind).toBe("utility");
+    expect(wounded.hp).toBe(100);
+    expect(wounded.statuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "holyBuff", duration: expect.closeTo(25, 1) }),
+      expect.objectContaining({ id: "blessed" }),
+    ]));
+    expect(combat.getVirginBloodState("peer-a")).toMatchObject({ reviveAvailable: true });
+    expect(combat.getPlayerInventory().cooldowns["virgin-blood"]).toBeGreaterThanOrEqual(45);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["virgin-blood-activate"]));
+
+    wounded.invulnerable = 0;
+    combat.applyDamage({ sourceId: "peer-b", targetId: "peer-a", weaponId: "axe", damage: 180, knockback: { x: 600, y: -220 }, stun: 0.4, label: "Fatal" });
+
+    expect(wounded.hp).toBeGreaterThan(0);
+    expect(wounded.respawnTimer).toBe(0);
+    expect(wounded.statuses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "angelWings", duration: expect.closeTo(30, 1) }),
+      expect.objectContaining({ id: "holyBuff" }),
+    ]));
+    expect(combat.getVirginBloodState("peer-a").reviveAvailable).toBe(false);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "REVIVED")).toBe(true);
+
+    wounded.invulnerable = 0;
+    combat.applyDamage({ sourceId: "peer-b", targetId: "peer-a", weaponId: "axe", damage: 180, knockback: { x: 600, y: -220 }, stun: 0.4, label: "Fatal Again" });
+    expect(wounded.respawnTimer).toBeGreaterThan(0);
   });
 
   it("keeps Wings click inputs non-offensive and inventory-safe", () => {
