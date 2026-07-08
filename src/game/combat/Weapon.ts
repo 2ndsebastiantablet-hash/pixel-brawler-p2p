@@ -15,6 +15,9 @@ export type WeaponId =
   | "axe"
   | "wings"
   | "virgin-blood"
+  | "death-aura"
+  | "rocket"
+  | "hands"
   | "teleport-ball"
   | "lightning-rod"
   | "sledgehammer";

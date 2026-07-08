@@ -114,13 +114,25 @@ const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
 const wingGustRadius = 130;
 const wingGustCooldown = 0.14;
-const axeRushRange = 540;
-const axeRushSpeed = 1080;
-const axeRushMaxTime = 0.46;
+const axeRushRange = 940;
+const axeRushSpeed = 1320;
+const axeRushMaxTime = 0.72;
 const axeRushHitDistance = 78;
 const virginBloodBuffDuration = 25;
 const virginBloodReviveWingDuration = 30;
 const virginBloodCooldown = 52;
+const deathAuraBaseRadius = 84;
+const deathAuraMaxRadius = 300;
+const deathAuraBaseDamage = 2;
+const deathAuraMaxDamage = 8;
+const deathAuraBaseFreeze = 0.22;
+const deathAuraMaxFreeze = 0.96;
+const rocketExplosionRadius = 180;
+const rocketExplosionDamage = 38;
+const rocketLaunchSpeed = 660;
+const rocketChaosSpeed = 850;
+const handsMissingDuration = 40;
+const handSummonCount = 5;
 const macheteHitGrowth = 12;
 const macheteKoGrowth = 60;
 const macheteKoDamageBonus = 3;
@@ -159,6 +171,18 @@ interface VirginBloodState {
   reviveAvailable: boolean;
 }
 
+interface DeathAuraState {
+  active: boolean;
+  pulseTimer: number;
+  tickCooldowns: Map<string, number>;
+}
+
+interface HandAttachmentState {
+  ownerId: string;
+  attached: number;
+  resist: number;
+}
+
 export interface WeaponRuntimeState {
   charge: number;
   heat: number;
@@ -172,6 +196,11 @@ export interface WeaponRuntimeState {
   redness: number;
   axeThrown: boolean;
   axeReturning: boolean;
+  deathAuraActive: boolean;
+  rocketActive: boolean;
+  rocketLit: boolean;
+  rocketRiding: boolean;
+  attachedHands: number;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -195,6 +224,10 @@ export class CombatSystem {
   private readonly axeRushes = new Map<string, AxeRushState>();
   private readonly axeThrows = new Map<string, string>();
   private readonly virginBlood = new Map<string, VirginBloodState>();
+  private readonly deathAuras = new Map<string, DeathAuraState>();
+  private readonly rockets = new Map<string, string>();
+  private readonly handAttachments = new Map<string, HandAttachmentState>();
+  private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private nextId = 0;
 
@@ -217,6 +250,10 @@ export class CombatSystem {
     this.axeRushes.clear();
     this.axeThrows.clear();
     this.virginBlood.clear();
+    this.deathAuras.clear();
+    this.rockets.clear();
+    this.handAttachments.clear();
+    this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
   }
 
@@ -336,11 +373,23 @@ export class CombatSystem {
   }
 
   usePrimary(context: WeaponUseContext): WeaponUseResult {
+    if (this.hasMissingHands(context.ownerId)) {
+      return { kind: "blocked", weaponId: this.inventory.equippedWeapon, label: "No hands" };
+    }
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
     if (this.inventory.equippedWeapon === "virgin-blood") {
-      return { kind: "blocked", weaponId: "virgin-blood", label: "F to bless" };
+      return this.activateVirginBlood(context.ownerId, context.player, context.now);
+    }
+    if (this.inventory.equippedWeapon === "death-aura") {
+      return this.useDeathAura(context);
+    }
+    if (this.inventory.equippedWeapon === "rocket") {
+      return this.placeRocket(context);
+    }
+    if (this.inventory.equippedWeapon === "hands") {
+      return this.spawnHands(context);
     }
     if (this.inventory.equippedWeapon === "axe") {
       return this.useAxePrimary(context);
@@ -353,11 +402,23 @@ export class CombatSystem {
 
   useSecondary(context: WeaponUseContext): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
+    if (this.hasMissingHands(context.ownerId)) {
+      return { kind: "blocked", weaponId: weapon.id, label: "No hands" };
+    }
     if (weapon.id === "wings") {
       return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
     }
     if (weapon.id === "virgin-blood") {
-      return { kind: "blocked", weaponId: weapon.id, label: "F to bless" };
+      return this.activateVirginBlood(context.ownerId, context.player, context.now);
+    }
+    if (weapon.id === "death-aura") {
+      return this.useDeathAura(context);
+    }
+    if (weapon.id === "rocket") {
+      return this.lightRocket(context);
+    }
+    if (weapon.id === "hands") {
+      return this.spawnHands(context);
     }
     if (weapon.id === "pistol" || weapon.id === "knife") {
       return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, weapon.id === "pistol" && this.inventory.ammo.pistol?.magazine === 0);
@@ -409,6 +470,9 @@ export class CombatSystem {
 
   reload(ownerId: string, now: number): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
+    if (this.hasMissingHands(ownerId)) {
+      return { kind: "blocked", weaponId: weapon.id, label: "No hands" };
+    }
     const ammo = this.inventory.ammo[weapon.id];
     if (!weapon.ammo || !ammo) {
       return { kind: "blocked", weaponId: weapon.id, label: "Reload blocked" };
@@ -435,11 +499,14 @@ export class CombatSystem {
   }
 
   dropCurrentWeapon(ownerId: string, player: PlayerPhysicsState, aim: Vec2, now: number): WeaponUseResult {
+    if (this.hasMissingHands(ownerId)) {
+      return { kind: "blocked", weaponId: this.inventory.equippedWeapon, label: "No hands" };
+    }
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
     if (this.inventory.equippedWeapon === "virgin-blood") {
-      return { kind: "blocked", weaponId: "virgin-blood", label: "F to bless" };
+      return { kind: "blocked", weaponId: "virgin-blood", label: "Click to bless" };
     }
     return this.throwCurrentWeapon(ownerId, player, aim, now, false);
   }
@@ -576,11 +643,14 @@ export class CombatSystem {
 
     this.updateInventory(dt);
     this.updateCombatants(dt);
-    this.updateProjectiles(dt);
+    this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
     this.updateAxeRushes(dt, players);
     this.updateHitboxes(dt);
     this.updateLightning(dt, players);
+    this.updateDeathAuras(dt);
+    this.updateHandAttachments();
+    this.updatePositiveBuffVisuals(dt);
     this.updateContactCooldowns(dt);
     this.updateBodyContact(dt, players);
     this.updateDroppedWeapons(dt);
@@ -633,12 +703,70 @@ export class CombatSystem {
     };
   }
 
+  getDeathAuraState(ownerId: string): { active: boolean; radius: number; power: number } {
+    const owner = this.combatants.get(ownerId);
+    const power = owner ? deathAuraPower(owner) : 0;
+    return {
+      active: this.deathAuras.get(ownerId)?.active ?? false,
+      radius: deathAuraRadius(power),
+      power,
+    };
+  }
+
+  getRocketState(ownerId: string): { active: boolean; lit: boolean; riding: boolean } {
+    const projectile = this.activeRocket(ownerId);
+    return {
+      active: Boolean(projectile),
+      lit: projectile?.state === "lit" || projectile?.state === "chaotic",
+      riding: projectile?.riderId === ownerId,
+    };
+  }
+
+  getHandsState(id: string): { attached: number; missing: number; active: number } {
+    const attached = this.handAttachments.get(id)?.attached ?? 0;
+    const missing = this.combatants.get(id)?.statuses.find((status) => status.id === "handsMissing")?.duration ?? 0;
+    const active = this.projectiles.filter((projectile) => projectile.weaponId === "hands" && projectile.ownerId === id).length;
+    return { attached, missing, active };
+  }
+
+  resistAttachedHands(targetId: string, effort = 1): boolean {
+    const attachment = this.handAttachments.get(targetId);
+    const target = this.combatants.get(targetId);
+    if (!attachment || !target) {
+      return false;
+    }
+    attachment.resist += effort;
+    if (attachment.resist < 5) {
+      return false;
+    }
+    this.handAttachments.delete(targetId);
+    target.statuses = target.statuses.filter((status) => status.id !== "scrambled");
+    this.addEffect("spark", target.x + target.width / 2, target.y + 12, target.x + target.width / 2, target.y - 36, colorForWeapon("hands"), "FLICKED");
+    this.queueSound("hand-flick");
+    return true;
+  }
+
+  jumpOffRocket(ownerId: string, player: PlayerPhysicsState): boolean {
+    const rocket = this.activeRocket(ownerId);
+    if (!rocket || rocket.riderId !== ownerId) {
+      return false;
+    }
+    rocket.riderId = undefined;
+    rocket.state = "chaotic";
+    rocket.chaos = Math.max(rocket.chaos ?? 0, 1.2);
+    player.velocityY = Math.min(player.velocityY, -520);
+    player.velocityX += -Math.sign(rocket.vx || player.facing || 1) * 130;
+    this.addEffect("spark", rocket.x, rocket.y - 20, rocket.x, rocket.y - 60, colorForWeapon("rocket"), "Jump Off");
+    return true;
+  }
+
   getWeaponRuntimeState(id: WeaponId = this.inventory.equippedWeapon, ownerId = "local"): WeaponRuntimeState {
     const charge = this.inventory.charge[id];
     const heat = charge?.heat ?? 0;
     const machete = id === "machete" ? this.getMacheteState(ownerId) : { rangeBonus: 0, damageBonus: 0, redness: 0 };
     const axeProjectileId = this.axeThrows.get(ownerId);
     const axeProjectile = axeProjectileId ? this.projectiles.find((projectile) => projectile.id === axeProjectileId) : undefined;
+    const rocket = this.activeRocket(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -652,6 +780,11 @@ export class CombatSystem {
       redness: machete.redness,
       axeThrown: Boolean(axeProjectile),
       axeReturning: axeProjectile?.label === "RETURNING AXE",
+      deathAuraActive: this.deathAuras.get(ownerId)?.active ?? false,
+      rocketActive: Boolean(rocket),
+      rocketLit: rocket?.state === "lit" || rocket?.state === "chaotic",
+      rocketRiding: rocket?.riderId === ownerId,
+      attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
   }
 
@@ -901,6 +1034,146 @@ export class CombatSystem {
       }
     }
     return nearest;
+  }
+
+  private useDeathAura(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "death-aura";
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Aura cooldown" };
+    }
+    const state = this.deathAuras.get(context.ownerId) ?? {
+      active: false,
+      pulseTimer: 0,
+      tickCooldowns: new Map<string, number>(),
+    };
+    state.active = true;
+    state.pulseTimer = 0;
+    this.deathAuras.set(context.ownerId, state);
+    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    const owner = this.combatants.get(context.ownerId);
+    const cx = owner ? owner.x + owner.width / 2 : context.player.x + context.player.width / 2;
+    const cy = owner ? owner.y + owner.height / 2 : context.player.y + context.player.height / 2;
+    this.addEffect("aura", cx, cy, cx, cy - this.getDeathAuraState(context.ownerId).radius, "#08080c", "DEATH AURA");
+    this.queueSound("death-aura");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", { x: cx, y: cy }, { x: 0, y: -1 }, "Death Aura", context.now));
+    return { kind: "utility", weaponId, label: "Death Aura" };
+  }
+
+  private placeRocket(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "rocket";
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Rocket cooldown" };
+    }
+    const existing = this.activeRocket(context.ownerId);
+    if (existing) {
+      return { kind: "blocked", weaponId, label: "Rocket active" };
+    }
+    const facing = context.player.facing || (context.aim.x >= 0 ? 1 : -1);
+    const rocket: Projectile = {
+      id: this.makeId("rocket"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: context.player.x + context.player.width / 2 + facing * 10,
+      y: COMBAT_TUNING.projectiles.floorY - 12,
+      vx: 0,
+      vy: 0,
+      radius: 18,
+      damage: 0,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      age: 0,
+      lifetime: 8,
+      gravity: 0,
+      bounces: 0,
+      pierce: 0,
+      label: "ROCKET RESTING",
+      color: colorForWeapon(weaponId),
+      trailColor: "#ff8f3d",
+      originX: context.player.x,
+      originY: context.player.y,
+      state: "resting",
+      ownerFacing: facing,
+      hits: [],
+    };
+    this.projectiles.push(rocket);
+    this.rockets.set(context.ownerId, rocket.id);
+    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    this.addEffect("pickup", rocket.x, rocket.y, rocket.x, rocket.y - 22, colorForWeapon(weaponId), "Rocket");
+    this.queueSound("rocket-place");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", { x: rocket.x, y: rocket.y }, { x: facing, y: 0 }, "Rocket Placed", context.now));
+    return { kind: "utility", weaponId, label: "Rocket Placed" };
+  }
+
+  private lightRocket(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "rocket";
+    const rocket = this.activeRocket(context.ownerId);
+    if (!rocket) {
+      return { kind: "blocked", weaponId, label: "No rocket" };
+    }
+    if (rocket.state === "lit" || rocket.state === "chaotic") {
+      return { kind: "blocked", weaponId, label: "Already lit" };
+    }
+    const facing = context.player.facing || rocket.ownerFacing || (context.aim.x >= 0 ? 1 : -1);
+    const riderClose = Math.abs((context.player.x + context.player.width / 2) - rocket.x) < 54
+      && Math.abs((context.player.y + context.player.height) - rocket.y) < 42;
+    rocket.state = "lit";
+    rocket.label = "ROCKET LIT";
+    rocket.age = 0;
+    rocket.vx = facing * rocketLaunchSpeed;
+    rocket.vy = -34;
+    rocket.damage = rocketExplosionDamage;
+    rocket.knockback = { x: facing * 720, y: -260 };
+    rocket.stun = 0.48;
+    rocket.riderId = riderClose ? context.ownerId : undefined;
+    rocket.ownerFacing = facing;
+    this.addEffect("tracer", rocket.x, rocket.y, rocket.x - facing * 54, rocket.y + 4, "#ff8f3d", "Rocket Fire");
+    this.queueSound("rocket-light");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", { x: rocket.x, y: rocket.y }, { x: facing, y: 0 }, "Rocket Lit", context.now));
+    return { kind: "utility", weaponId, label: "Rocket Lit" };
+  }
+
+  private spawnHands(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "hands";
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Hands cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId, label: "No owner" };
+    }
+    const facing = context.player.facing || (context.aim.x >= 0 ? 1 : -1);
+    for (let index = 0; index < handSummonCount; index += 1) {
+      const offset = (index - 2) * 9;
+      this.projectiles.push({
+        id: this.makeId("hand"),
+        ownerId: context.ownerId,
+        weaponId,
+        x: owner.x + owner.width / 2 + offset,
+        y: COMBAT_TUNING.projectiles.floorY - 7,
+        vx: facing * (64 + index * 8),
+        vy: 0,
+        radius: 7,
+        damage: 1,
+        knockback: { x: facing * 45, y: -25 },
+        stun: 0.05,
+        age: 0,
+        lifetime: 12,
+        gravity: 0,
+        bounces: 0,
+        pierce: 0,
+        label: "MINI HAND",
+        color: colorForWeapon(weaponId),
+        trailColor: colorForWeapon(weaponId),
+        ownerFacing: facing,
+        hits: [],
+      });
+    }
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("handsMissing"));
+    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    this.addEffect("aura", owner.x + owner.width / 2, owner.y + 12, owner.x + owner.width / 2, owner.y - 34, colorForWeapon(weaponId), "NO HANDS");
+    this.queueSound("hand-spawn");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", this.muzzle(context.player), { x: facing, y: 0 }, "Hands", context.now));
+    return { kind: "utility", weaponId, label: "Hands" };
   }
 
   private prepareMinigunPrimary(context: WeaponUseContext): WeaponUseResult | null {
@@ -1176,6 +1449,7 @@ export class CombatSystem {
     };
     const upwardSelfCharge = aim.y < -0.86 && Math.abs(aim.x) < 0.36;
     const heldSeconds = clamp(context.heldMs / 1000, 0.16, lightningMaxHoldSeconds);
+    const chargeColor = lightningChargeColorForHold(heldSeconds);
     state.chargeTimer = 0;
     state.strain = Math.min(1.8, state.strain + (upwardSelfCharge ? 0.18 + heldSeconds * 0.18 : 0.16));
     state.pulseTimer = 0;
@@ -1199,9 +1473,10 @@ export class CombatSystem {
       });
       owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
       owner.statuses = upsertStatusEffect(owner.statuses, { id: "empowered", label: "Empowered", duration: empoweredDuration, stacks: 1 });
-      this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 70 - heldSeconds * 18, "#ffd84d", "Energized");
+      this.addEffect("lightning", owner.x + owner.width / 2, owner.y + 18, owner.x + owner.width / 2, owner.y - 190 - heldSeconds * 34, chargeColor, "FORMING LIGHTNING");
+      this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 70 - heldSeconds * 18, chargeColor, "Energized");
       if (heldSeconds > 1.25) {
-        this.addEffect("shockwave", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 36, "#fff4a8", "Charge");
+        this.addEffect("shockwave", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 36, chargeColor, "Charge");
       }
       this.queueSound("lightning-pulse");
     } else {
@@ -1209,7 +1484,7 @@ export class CombatSystem {
       this.clearStatus(context.ownerId, "empowered");
     }
 
-    this.addEffect("lightning", center.x, center.y + 12, source.x, source.y, upwardSelfCharge ? "#fff4a8" : "#ffd84d", "Sky Strike");
+    this.addEffect("lightning", center.x, center.y + 12, source.x, source.y, upwardSelfCharge ? chargeColor : "#ffd84d", "Sky Strike");
     this.applyLightningLineDamage(context.ownerId, source, center, upwardSelfCharge ? 18 + Math.round(heldSeconds * 2) : 24, upwardSelfCharge ? 360 : 430, upwardSelfCharge ? 0.24 : 0.3, "Sky Strike");
     this.queueSound("lightning-strike");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, aim, "Sky Strike", context.now));
@@ -1774,6 +2049,19 @@ export class CombatSystem {
     return projectile;
   }
 
+  private activeRocket(ownerId: string): Projectile | undefined {
+    const projectileId = this.rockets.get(ownerId);
+    const projectile = projectileId ? this.projectiles.find((item) => item.id === projectileId) : undefined;
+    if (!projectile) {
+      this.rockets.delete(ownerId);
+    }
+    return projectile;
+  }
+
+  private hasMissingHands(ownerId: string): boolean {
+    return this.combatants.get(ownerId)?.statuses.some((status) => status.id === "handsMissing") ?? false;
+  }
+
   private recallAxe(context: WeaponUseContext, projectile: Projectile): WeaponUseResult {
     const owner = this.combatants.get(context.ownerId);
     const target = owner ?? {
@@ -1975,6 +2263,11 @@ export class CombatSystem {
       if (statusUpdate.damage > 0 && combatant.invulnerable === 0) {
         this.applyDamage({ sourceId: "status", targetId: combatant.id, damage: statusUpdate.damage, knockback: { x: 0, y: 0 }, stun: 0, label: "DOT" });
       }
+      if (combatant.statuses.some((status) => status.id === "deathFrozen")) {
+        combatant.velocityX = 0;
+        combatant.velocityY = Math.min(combatant.velocityY, 0);
+        combatant.hitstun = Math.max(combatant.hitstun, 0.1);
+      }
       combatant.hitstun = Math.max(0, combatant.hitstun - dt);
       combatant.invulnerable = Math.max(0, combatant.invulnerable - dt);
       combatant.x += combatant.velocityX * dt;
@@ -1989,8 +2282,16 @@ export class CombatSystem {
     }
   }
 
-  private updateProjectiles(dt: number): void {
+  private updateProjectiles(dt: number, players: PlayerPhysicsState[]): void {
     for (const projectile of this.projectiles) {
+      if (projectile.weaponId === "rocket") {
+        this.updateRocketProjectile(projectile, dt, players);
+        continue;
+      }
+      if (projectile.weaponId === "hands") {
+        this.updateHandProjectile(projectile, dt);
+        continue;
+      }
       projectile.age += dt;
       const returningAxe = projectile.weaponId === "axe" && projectile.label === "RETURNING AXE";
       if (returningAxe) {
@@ -2121,6 +2422,175 @@ export class CombatSystem {
         this.axeThrows.delete(ownerId);
       }
     }
+    for (const [ownerId, projectileId] of [...this.rockets.entries()]) {
+      if (!this.projectiles.some((projectile) => projectile.id === projectileId)) {
+        this.rockets.delete(ownerId);
+      }
+    }
+  }
+
+  private updateRocketProjectile(projectile: Projectile, dt: number, players: PlayerPhysicsState[]): void {
+    projectile.age += dt;
+    const groundY = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+    if (projectile.state === "resting") {
+      projectile.y = groundY;
+      if (projectile.age > projectile.lifetime) {
+        projectile.age = projectile.lifetime + 1;
+      }
+      return;
+    }
+
+    const previousX = projectile.x;
+    const previousY = projectile.y;
+    if (projectile.age > 0.55 || projectile.state === "chaotic") {
+      projectile.state = "chaotic";
+      projectile.chaos = (projectile.chaos ?? 0) + dt;
+      const facing = Math.sign(projectile.vx || projectile.ownerFacing || 1);
+      projectile.vx = facing * (rocketChaosSpeed + Math.min(260, (projectile.chaos ?? 0) * 180));
+      projectile.vy += Math.sin(projectile.age * 10 + projectile.id.length) * 260 * dt - 90 * dt;
+      projectile.label = "ROCKET LIT";
+      this.addEffect("tracer", projectile.x, projectile.y, projectile.x - facing * 70, projectile.y + Math.sin(projectile.age * 14) * 30, "#ffcf5a", "Chaotic");
+    } else {
+      this.addEffect("tracer", projectile.x, projectile.y, projectile.x - Math.sign(projectile.vx || 1) * 58, projectile.y + 5, "#ff8f3d", "Rocket Fire");
+    }
+
+    projectile.x += projectile.vx * dt;
+    projectile.y += projectile.vy * dt;
+    if (projectile.riderId) {
+      const player = players.find((item) => item.id === projectile.riderId);
+      const rider = this.combatants.get(projectile.riderId);
+      const rideX = projectile.x - (player?.width ?? rider?.width ?? DEFAULT_PHYSICS.width) / 2;
+      const rideY = projectile.y - (player?.height ?? rider?.height ?? DEFAULT_PHYSICS.height) - 7;
+      if (player) {
+        player.x = rideX;
+        player.y = rideY;
+        player.velocityX = projectile.vx;
+        player.velocityY = projectile.vy;
+        player.grounded = false;
+      }
+      if (rider) {
+        rider.x = rideX;
+        rider.y = rideY;
+        rider.velocityX = projectile.vx;
+        rider.velocityY = projectile.vy;
+      }
+    }
+
+    const swept = sweptProjectileBounds(projectile, previousX, previousY);
+    for (const target of this.combatants.values()) {
+      if (target.id === projectile.ownerId || target.respawnTimer > 0) {
+        continue;
+      }
+      if (intersectsRect(swept, target)) {
+        projectile.x = target.x + target.width / 2;
+        projectile.y = target.y + target.height / 2;
+        this.explodeRocket(projectile);
+        return;
+      }
+    }
+    if (projectile.y >= groundY && projectile.age > 0.18) {
+      projectile.y = groundY;
+      this.explodeRocket(projectile);
+      return;
+    }
+    if (projectile.age > projectile.lifetime) {
+      this.explodeRocket(projectile);
+    }
+  }
+
+  private explodeRocket(projectile: Projectile): void {
+    if (projectile.age > projectile.lifetime + 0.5) {
+      return;
+    }
+    this.applyBurstDamage(projectile.ownerId, projectile.x, projectile.y, rocketExplosionRadius, rocketExplosionDamage, 760, 0.52, "Rocket Explosion", "shockwave");
+    const owner = this.combatants.get(projectile.ownerId);
+    if (owner) {
+      const ox = owner.x + owner.width / 2;
+      const oy = owner.y + owner.height / 2;
+      const distance = Math.hypot(ox - projectile.x, oy - projectile.y);
+      if (projectile.riderId === projectile.ownerId || distance <= rocketExplosionRadius * 0.72) {
+        const previousInvulnerable = owner.invulnerable;
+        owner.invulnerable = 0;
+        this.applyDamage({
+          sourceId: projectile.ownerId,
+          targetId: projectile.ownerId,
+          weaponId: "rocket",
+          damage: projectile.riderId === projectile.ownerId ? 48 : 32,
+          knockback: { x: Math.sign(ox - projectile.x || 1) * 460, y: -420 },
+          stun: 0.5,
+          label: "Rocket Backfire",
+          skipHitLocationScaling: true,
+        });
+        owner.invulnerable = Math.max(owner.invulnerable, previousInvulnerable);
+      }
+    }
+    this.addEffect("shockwave", projectile.x, projectile.y, projectile.x, projectile.y, "#ff8f3d", "BOOM");
+    this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 70, "#2b2b32", "Smoke");
+    this.queueSound("rocket-explode");
+    this.rockets.delete(projectile.ownerId);
+    projectile.age = projectile.lifetime + 1;
+  }
+
+  private updateHandProjectile(projectile: Projectile, dt: number): void {
+    projectile.age += dt;
+    const target = this.findNearestHandTarget(projectile);
+    if (!target) {
+      projectile.x += projectile.vx * dt;
+      projectile.y = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+      return;
+    }
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height * 0.28 };
+    const direction = normalize({ x: targetCenter.x - projectile.x, y: targetCenter.y - projectile.y });
+    const lunge = Math.hypot(targetCenter.x - projectile.x, targetCenter.y - projectile.y) < 62;
+    projectile.vx = direction.x * (lunge ? 210 : 118);
+    projectile.vy = lunge ? direction.y * 180 - 60 : 0;
+    projectile.x += projectile.vx * dt;
+    projectile.y = lunge ? projectile.y + projectile.vy * dt : COMBAT_TUNING.projectiles.floorY - projectile.radius;
+    this.addEffect("spark", projectile.x, projectile.y, projectile.x - direction.x * 14, projectile.y, colorForWeapon("hands"), lunge ? "LUNGE" : "Skitter");
+    if (projectile.age % 0.5 < dt) {
+      this.queueSound("hand-skitter");
+    }
+    if (intersectsRect(projectileBounds(projectile), target)) {
+      this.attachHand(projectile, target);
+    }
+    if (projectile.age > projectile.lifetime) {
+      projectile.age = projectile.lifetime + 1;
+    }
+  }
+
+  private findNearestHandTarget(projectile: Projectile): Combatant | undefined {
+    let nearest: { target: Combatant; distance: number } | undefined;
+    for (const target of this.combatants.values()) {
+      if (target.id === projectile.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      const distance = Math.hypot(target.x + target.width / 2 - projectile.x, target.y + target.height / 2 - projectile.y);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { target, distance };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private attachHand(projectile: Projectile, target: Combatant): void {
+    const existing = this.handAttachments.get(target.id) ?? { ownerId: projectile.ownerId, attached: 0, resist: 0 };
+    existing.attached = Math.min(5, existing.attached + 1);
+    existing.ownerId = projectile.ownerId;
+    existing.resist = 0;
+    this.handAttachments.set(target.id, existing);
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("scrambled"));
+    target.hitstun = Math.max(target.hitstun, 0.12);
+    this.addEffect("stun", target.x + target.width / 2, target.y + 8, target.x + target.width / 2, target.y - 18, colorForWeapon("hands"), "FACE HAND");
+    this.queueSound("hand-attach");
+    this.recentEvents.push(this.createEvent(projectile.ownerId, "hands", "hit", { x: target.x + target.width / 2, y: target.y + 10 }, { x: 0, y: -1 }, "Hand Attach", performanceNow(), {
+      targetId: target.id,
+      damage: 0,
+      kx: 0,
+      ky: 0,
+      stun: 0.12,
+      status: "scrambled",
+    }));
+    projectile.age = projectile.lifetime + 1;
   }
 
   private steerReturningAxe(projectile: Projectile): void {
@@ -2431,6 +2901,97 @@ export class CombatSystem {
     }
   }
 
+  private updateDeathAuras(dt: number): void {
+    for (const [ownerId, state] of this.deathAuras.entries()) {
+      const owner = this.combatants.get(ownerId);
+      if (!owner || owner.respawnTimer > 0 || !state.active) {
+        continue;
+      }
+      for (const [targetId, timer] of [...state.tickCooldowns.entries()]) {
+        const next = Math.max(0, timer - dt);
+        if (next === 0) {
+          state.tickCooldowns.delete(targetId);
+        } else {
+          state.tickCooldowns.set(targetId, next);
+        }
+      }
+      state.pulseTimer = Math.max(0, state.pulseTimer - dt);
+      const power = deathAuraPower(owner);
+      const radius = deathAuraRadius(power);
+      if (state.pulseTimer === 0) {
+        state.pulseTimer = 0.22;
+        this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y + owner.height / 2 - radius, deathAuraColor(power), "DEATH AURA");
+      }
+      for (const target of this.combatants.values()) {
+        if (target.id === ownerId || target.respawnTimer > 0 || state.tickCooldowns.has(target.id)) {
+          continue;
+        }
+        const ox = owner.x + owner.width / 2;
+        const oy = owner.y + owner.height / 2;
+        const tx = target.x + target.width / 2;
+        const ty = target.y + target.height / 2;
+        if (Math.hypot(tx - ox, ty - oy) > radius) {
+          continue;
+        }
+        const previousInvulnerable = target.invulnerable;
+        target.invulnerable = 0;
+        target.velocityX = 0;
+        target.velocityY = Math.min(target.velocityY, 0);
+        const damage = Math.round(lerp(deathAuraBaseDamage, deathAuraMaxDamage, power));
+        const stun = lerp(deathAuraBaseFreeze, deathAuraMaxFreeze, power);
+        const hit = this.applyDamage({
+          sourceId: ownerId,
+          targetId: target.id,
+          weaponId: "death-aura",
+          damage,
+          knockback: { x: Math.sign(tx - ox || 1) * (60 + power * 120), y: -40 },
+          stun,
+          label: "Death Aura",
+          status: "deathFrozen",
+          skipHitLocationScaling: true,
+        });
+        if (!hit.applied) {
+          target.invulnerable = previousInvulnerable;
+        }
+        this.addEffect("stun", tx, target.y + 12, tx, target.y - 18, deathAuraColor(power), "FROZEN");
+        this.queueSound("death-aura");
+        state.tickCooldowns.set(target.id, lerp(0.68, 0.38, power));
+      }
+    }
+  }
+
+  private updateHandAttachments(): void {
+    for (const [targetId, attachment] of [...this.handAttachments.entries()]) {
+      const target = this.combatants.get(targetId);
+      if (!target || target.respawnTimer > 0 || attachment.attached <= 0) {
+        this.handAttachments.delete(targetId);
+        continue;
+      }
+      if (!target.statuses.some((status) => status.id === "scrambled")) {
+        target.statuses = upsertStatusEffect(target.statuses, createStatus("scrambled"));
+      }
+      this.addEffect("aura", target.x + target.width / 2, target.y + 9, target.x + target.width / 2, target.y - 18, colorForWeapon("hands"), "SCRAMBLED");
+    }
+  }
+
+  private updatePositiveBuffVisuals(dt: number): void {
+    for (const combatant of this.combatants.values()) {
+      const timer = Math.max(0, (this.buffVisualTimers.get(combatant.id) ?? 0) - dt);
+      if (timer > 0) {
+        this.buffVisualTimers.set(combatant.id, timer);
+        continue;
+      }
+      if (!hasPositiveBuff(combatant)) {
+        continue;
+      }
+      this.buffVisualTimers.set(combatant.id, 0.22);
+      const cx = combatant.x + combatant.width / 2;
+      const cy = combatant.y + combatant.height / 2;
+      this.addEffect("aura", cx, cy, cx, cy - 42, "#7cff6b", "BUFFED");
+      this.addEffect("spark", cx - 12, combatant.y + combatant.height - 4, cx - 12, combatant.y - 10, "#7cff6b", "Buff");
+    }
+  }
+
   private updateBodyContact(_dt: number, players: PlayerPhysicsState[]): void {
     for (const player of players) {
       const owner = this.combatants.get(player.id);
@@ -2675,6 +3236,8 @@ export class CombatSystem {
   }
 
   private addEffect(kind: CombatEffect["kind"], x: number, y: number, tx: number, ty: number, color: string, label?: string): void {
+    const rocketEffect = label === "Rocket Fire" || label === "Chaotic" || label === "BOOM" || label === "Smoke";
+    const lingeringAura = label === "DEATH AURA" || label === "FROZEN" || label === "BUFFED";
     this.effects.push({
       id: this.makeId("fx"),
       kind,
@@ -2683,7 +3246,7 @@ export class CombatSystem {
       tx,
       ty,
       age: 0,
-      duration: kind === "lightning" ? 0.42 : kind === "shockwave" ? 0.36 : kind === "aura" ? 0.34 : 0.24,
+      duration: rocketEffect ? 1.35 : lingeringAura ? 0.9 : kind === "lightning" ? 0.42 : kind === "shockwave" ? 0.36 : kind === "aura" ? 0.34 : 0.24,
       color,
       label,
     });
@@ -2833,6 +3396,12 @@ function colorForWeapon(id: WeaponId): string {
       return "#d9f7ff";
     case "virgin-blood":
       return "#fff4a8";
+    case "death-aura":
+      return "#08080c";
+    case "rocket":
+      return "#ff8f3d";
+    case "hands":
+      return "#b8ffd0";
     default:
       return "#ffffff";
   }
@@ -2855,9 +3424,41 @@ function lightningDurationForHold(heldSeconds: number): number {
   return lightningDefaultEmpoweredDuration + charge * 11.5;
 }
 
+function lightningChargeColorForHold(heldSeconds: number): string {
+  if (heldSeconds >= 3.8) {
+    return "#b096ff";
+  }
+  if (heldSeconds >= 2.45) {
+    return "#ff5c5c";
+  }
+  if (heldSeconds >= 1.25) {
+    return "#5ad7ff";
+  }
+  return "#ffd84d";
+}
+
 function lightningSelfDamageForHold(heldSeconds: number): number {
   const charge = clamp(heldSeconds, 0.16, lightningMaxHoldSeconds);
   return Math.round(7 + charge * 10.5);
+}
+
+function deathAuraPower(owner: Combatant): number {
+  return clamp(1 - owner.hp / Math.max(1, owner.maxHp), 0, 1);
+}
+
+function deathAuraRadius(power: number): number {
+  return lerp(deathAuraBaseRadius, deathAuraMaxRadius, power);
+}
+
+function deathAuraColor(power: number): string {
+  return power > 0.72 ? "#08080c" : power > 0.38 ? "#17101d" : "#23182b";
+}
+
+function hasPositiveBuff(combatant: Combatant): boolean {
+  return combatant.statuses.some((status) => status.id === "empowered"
+    || status.id === "holyBuff"
+    || status.id === "blessed"
+    || status.id === "angelWings");
 }
 
 function dryFireSoundFor(id: WeaponId): SoundId {
@@ -2934,6 +3535,12 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Revive Ready", duration: virginBloodCooldown, stacks: 1 };
     case "angelWings":
       return { id, label: "Angel Wings", duration: virginBloodReviveWingDuration, stacks: 1 };
+    case "deathFrozen":
+      return { id, label: "Frozen", duration: 0.55, stacks: 1 };
+    case "scrambled":
+      return { id, label: "Scrambled", duration: 7.5, stacks: 1, tickDamage: 1, tickEvery: 1 };
+    case "handsMissing":
+      return { id, label: "No Hands", duration: handsMissingDuration, stacks: 1 };
   }
 }
 
@@ -2964,6 +3571,10 @@ function round(value: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * clamp(amount, 0, 1);
 }
 
 function performanceNow(): number {

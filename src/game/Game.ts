@@ -253,11 +253,23 @@ export class Game {
   };
 
   private update(dt: number, time: number): void {
-    const movementInput = this.input.consumeFrame();
+    let movementInput = this.input.consumeFrame();
     const combatInput = this.input.consumeCombatFrame();
     this.lastMouse = { x: combatInput.mouseX, y: combatInput.mouseY };
     this.lastAim = this.getAim(combatInput);
-    const lockedOut = (this.combat.getCombatant(this.localPlayer.state.id)?.respawnTimer ?? 0) > 0
+    const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+    const scrambled = localCombatant?.statuses.some((status) => status.id === "scrambled") ?? false;
+    if (scrambled) {
+      if (isMovementInputActive(movementInput)) {
+        this.combat.resistAttachedHands(this.localPlayer.state.id, movementInput.jumpPressed || movementInput.downPressed || movementInput.dashPressed ? 1.25 : 0.35);
+      }
+      movementInput = scrambledInput(movementInput);
+    }
+    if (movementInput.jumpPressed && this.combat.getRocketState(this.localPlayer.state.id).riding) {
+      this.combat.jumpOffRocket(this.localPlayer.state.id, this.localPlayer.state);
+    }
+    const lockedOut = (localCombatant?.respawnTimer ?? 0) > 0
+      || (localCombatant?.statuses.some((status) => status.id === "deathFrozen") ?? false)
       || this.combat.isMovementLocked(this.localPlayer.state.id);
     const previousState = { ...this.localPlayer.state };
     this.localPlayer.update(lockedOut ? neutralInput() : movementInput, dt, this.getWeightedPhysics());
@@ -403,18 +415,14 @@ export class Game {
     if (input.reloadPressed) {
       this.combat.reload(this.localPlayer.state.id, time);
     }
-    const equipped = this.combat.getPlayerInventory().equippedWeapon;
     if (input.pickupPressed) {
-      if (equipped === "virgin-blood") {
-        this.recordAttack(this.combat.activateVirginBlood(this.localPlayer.state.id, this.localPlayer.state, time), "reload");
-      } else {
-        this.combat.pickUpNearest(this.localPlayer.state);
-      }
+      this.combat.pickUpNearest(this.localPlayer.state);
     }
     if (input.dropPressed) {
       this.combat.dropCurrentWeapon(this.localPlayer.state.id, this.localPlayer.state, this.lastAim, time);
     }
 
+    const equipped = this.combat.getPlayerInventory().equippedWeapon;
     const aim = this.lastAim;
     if (input.primaryHeld) {
       this.primaryHeldMs += dt * 1000;
@@ -605,6 +613,7 @@ export class Game {
         break;
       case "ground-slam-impact":
       case "laser-overcharge":
+      case "rocket-explode":
         this.shakeTimer = Math.max(this.shakeTimer, 0.22);
         break;
       case "lightning-strike":
@@ -956,6 +965,31 @@ export class Game {
       this.pixelRect(ctx, x - 5, y - 4, 10, 12);
       ctx.fillStyle = "#ffffff";
       this.pixelRect(ctx, x - 3, y - 6, 4, 4);
+    } else if (weaponId === "death-aura") {
+      const runtime = this.combat.getWeaponRuntimeState("death-aura", state.id);
+      const pulse = Math.round(22 + Math.sin(performance.now() * 0.012) * 5);
+      ctx.fillStyle = runtime.deathAuraActive ? "rgba(8, 8, 12, 0.52)" : "rgba(35, 24, 43, 0.32)";
+      this.pixelRect(ctx, Math.round(centerX - pulse), Math.round(centerY - pulse), pulse * 2, pulse * 2);
+      ctx.fillStyle = "#08080c";
+      this.pixelRect(ctx, Math.round(centerX + facing * 18), Math.round(centerY - 10), facing * 18, 20);
+    } else if (weaponId === "rocket") {
+      const x = Math.round(centerX + facing * 17);
+      const y = Math.round(centerY - 5);
+      ctx.fillStyle = "#56606f";
+      this.pixelRect(ctx, x, y - 7, facing * 34, 14);
+      ctx.fillStyle = "#ff8f3d";
+      this.pixelRect(ctx, x + facing * 25, y - 9, facing * 13, 18);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x + facing * 36, y - 4, facing * 9, 8);
+    } else if (weaponId === "hands") {
+      const x = Math.round(centerX + facing * 20);
+      const y = Math.round(centerY - 2);
+      ctx.fillStyle = "#b8ffd0";
+      for (let index = 0; index < 3; index += 1) {
+        this.pixelRect(ctx, x + facing * index * 8, y + Math.sin(performance.now() * 0.01 + index) * 5, facing * 8, 6);
+      }
+      ctx.fillStyle = "#344136";
+      this.pixelRect(ctx, x - facing * 4, y - 10, facing * 18, 4);
     } else if (weaponId === "wings") {
       const mode = state.wingFlapping ? "flap" : state.wingDiving ? "dive" : state.grounded ? "idle" : "glide";
       this.drawWings(ctx, state, this.localPlayer.color, mode);
@@ -1057,6 +1091,28 @@ export class Game {
     const flash = combatant.invulnerable > 0 && Math.floor(performance.now() / 80) % 2 === 0;
     ctx.save();
     ctx.globalAlpha = combatant.respawnTimer > 0 ? 0.25 : 1;
+    if (combatant.statuses.some((status) => status.id === "empowered" || status.id === "holyBuff" || status.id === "blessed" || status.id === "angelWings")) {
+      ctx.strokeStyle = "#7cff6b";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y - 2, 32, 48);
+      ctx.fillStyle = "rgba(124, 255, 107, 0.34)";
+      ctx.fillRect(x - 4, y + 4 + Math.round(Math.sin(performance.now() * 0.01) * 4), 4, 30);
+      ctx.fillRect(x + 32, y + 8 + Math.round(Math.cos(performance.now() * 0.01) * 4), 4, 30);
+    }
+    if (combatant.statuses.some((status) => status.id === "deathFrozen")) {
+      ctx.strokeStyle = "#08080c";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x - 5, y - 5, 42, 58);
+    }
+    if (combatant.statuses.some((status) => status.id === "scrambled")) {
+      ctx.fillStyle = "#b8ffd0";
+      ctx.fillRect(x + 7, y + 1, 18, 5);
+    }
+    if (combatant.statuses.some((status) => status.id === "handsMissing")) {
+      ctx.fillStyle = "#ff6f91";
+      ctx.fillRect(x - 4, y + 19, 5, 16);
+      ctx.fillRect(x + 31, y + 19, 5, 16);
+    }
     ctx.fillStyle = flash ? "#ffffff" : combatant.color;
     ctx.fillRect(x + 8, y + 4, 16, 8);
     ctx.fillRect(x + 5, y + 12, 22, 26);
@@ -1081,6 +1137,36 @@ export class Game {
       ctx.fillRect(x - 10, y - 10, 20, 20);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(x - 4, y - 4, 8, 8);
+      return;
+    }
+    if (projectile.weaponId === "rocket") {
+      const facing = Math.sign(projectile.vx || projectile.ownerFacing || 1);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(projectile.state === "chaotic" ? Math.sin(projectile.age * 12) * 0.45 : 0);
+      ctx.fillStyle = "#56606f";
+      ctx.fillRect(-18, -7, 34, 14);
+      ctx.fillStyle = "#ff8f3d";
+      ctx.fillRect(facing > 0 ? 8 : -20, -9, 14, 18);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(facing > 0 ? 18 : -28, -4, 10, 8);
+      if (projectile.state === "lit" || projectile.state === "chaotic") {
+        ctx.fillStyle = "rgba(255, 143, 61, 0.72)";
+        ctx.fillRect(facing > 0 ? -35 : 21, -6, 22, 12);
+        ctx.fillStyle = "rgba(43, 43, 50, 0.55)";
+        ctx.fillRect(facing > 0 ? -50 : 34, -4, 18, 8);
+      }
+      ctx.restore();
+      return;
+    }
+    if (projectile.weaponId === "hands") {
+      ctx.fillStyle = "#b8ffd0";
+      ctx.fillRect(x - 5, y - 3, 10, 7);
+      ctx.fillRect(x - 8, y - 1, 4, 4);
+      ctx.fillRect(x + 4, y - 1, 4, 4);
+      ctx.fillStyle = "#344136";
+      ctx.fillRect(x - 3, y - 6, 2, 4);
+      ctx.fillRect(x + 1, y - 6, 2, 4);
       return;
     }
     if (projectile.id.startsWith("throw")) {
@@ -1515,6 +1601,12 @@ function colorForWeapon(id: WeaponId): string {
       return "#d9f7ff";
     case "virgin-blood":
       return "#fff4a8";
+    case "death-aura":
+      return "#08080c";
+    case "rocket":
+      return "#ff8f3d";
+    case "hands":
+      return "#b8ffd0";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -1566,7 +1658,13 @@ function weaponHudDetail(
     case "wings":
       return "Hold Space flap - release glide - S dive - Shift burst";
     case "virgin-blood":
-      return `F bless/heal - Cooldown ${runtime.chamber.toFixed(1)}s`;
+      return `Click bless/heal - Cooldown ${runtime.chamber.toFixed(1)}s`;
+    case "death-aura":
+      return runtime.deathAuraActive ? "Aura active - missing HP strengthens" : "Click pulse aura";
+    case "rocket":
+      return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
+    case "hands":
+      return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
       return "Marker arms for 3.0s";
     case "lightning-rod":
@@ -1609,7 +1707,13 @@ function weaponHelper(id: WeaponId): string {
     case "wings":
       return "No attacks - Space fly/glide - flap gust pushes nearby";
     case "virgin-blood":
-      return "F: full heal + holy buff - death revives with angel wings";
+      return "Left/right: full heal + holy buff - death revives with angel wings";
+    case "death-aura":
+      return "Dark aura freezes and drains - stronger when hurt";
+    case "rocket":
+      return "Left place - Right light - stand on it to ride";
+    case "hands":
+      return "Summon 5 face hands - lose your own hands for 40s";
     default:
       return "";
   }
@@ -1620,6 +1724,24 @@ function rectsOverlap(a: PlayerPhysicsState, b: PlayerPhysicsState): boolean {
     && a.x + a.width > b.x
     && a.y < b.y + b.height
     && a.y + a.height > b.y;
+}
+
+function isMovementInputActive(input: InputFrame): boolean {
+  return input.left || input.right || input.up || input.down || input.jumpPressed || input.jumpHeld || input.dashPressed || input.downPressed;
+}
+
+function scrambledInput(input: InputFrame): InputFrame {
+  const jumpSuppressed = Math.floor(performance.now() / 240) % 2 === 1;
+  return {
+    left: input.right,
+    right: input.left,
+    up: input.down,
+    down: input.up,
+    downPressed: input.up && !input.down,
+    jumpPressed: jumpSuppressed ? false : input.jumpPressed,
+    jumpHeld: jumpSuppressed ? false : input.jumpHeld,
+    dashPressed: input.dashPressed,
+  };
 }
 
 function neutralInput(): InputFrame {

@@ -17,10 +17,13 @@ const enabledWeapons = [
   "axe",
   "wings",
   "virgin-blood",
+  "death-aura",
+  "rocket",
+  "hands",
 ] as const;
 
 describe("weapon registry", () => {
-  it("enables the first fifteen polished weapons with movement weight metadata", () => {
+  it("enables the first eighteen polished weapons and items with movement weight metadata", () => {
     expect(WEAPON_IDS).toEqual([
       "pistol",
       "whip",
@@ -37,6 +40,9 @@ describe("weapon registry", () => {
       "axe",
       "wings",
       "virgin-blood",
+      "death-aura",
+      "rocket",
+      "hands",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -73,9 +79,15 @@ describe("weapon registry", () => {
     expect(inventory.ammo.axe).toBeUndefined();
     expect(inventory.ammo.wings).toBeUndefined();
     expect(inventory.ammo["virgin-blood"]).toBeUndefined();
+    expect(inventory.ammo["death-aura"]).toBeUndefined();
+    expect(inventory.ammo.rocket).toBeUndefined();
+    expect(inventory.ammo.hands).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
-    expect(weaponRegistry.get("virgin-blood").description).toContain("revive");
+    expect(weaponRegistry.get("virgin-blood").description).toContain("Left/right click consumes");
+    expect(weaponRegistry.get("death-aura").description).toContain("freezes and damages nearby targets");
+    expect(weaponRegistry.get("rocket").description).toContain("Ride it by standing on it");
+    expect(weaponRegistry.get("hands").description).toContain("lose your own hands for 40 seconds");
   });
 });

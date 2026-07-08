@@ -85,6 +85,15 @@ export type SoundId =
   | "wing-gust"
   | "virgin-blood-activate"
   | "virgin-blood-revive"
+  | "death-aura"
+  | "rocket-place"
+  | "rocket-light"
+  | "rocket-explode"
+  | "hand-spawn"
+  | "hand-skitter"
+  | "hand-attach"
+  | "hand-flick"
+  | "hand-defeat"
   | "respawn";
 
 interface SoundShape {
@@ -178,6 +187,15 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "wing-gust": { category: "combat", frequency: 360, endFrequency: 120, duration: 0.12, noise: true, minInterval: 0.12 },
   "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
   "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
+  "death-aura": { category: "combat", frequency: 96, endFrequency: 52, duration: 0.28, noise: true, minInterval: 0.32 },
+  "rocket-place": { category: "weapon", frequency: 180, endFrequency: 110, duration: 0.12, noise: true, minInterval: 0.18 },
+  "rocket-light": { category: "heavy", frequency: 260, endFrequency: 820, duration: 0.22, noise: true, minInterval: 0.2 },
+  "rocket-explode": { category: "heavy", frequency: 72, endFrequency: 30, duration: 0.42, noise: true, minInterval: 0.34 },
+  "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },
+  "hand-skitter": { category: "movement", frequency: 320, endFrequency: 260, duration: 0.045, type: "square", minInterval: 0.22 },
+  "hand-attach": { category: "combat", frequency: 540, endFrequency: 210, duration: 0.12, noise: true, minInterval: 0.16 },
+  "hand-flick": { category: "combat", frequency: 680, endFrequency: 160, duration: 0.12, noise: true, minInterval: 0.12 },
+  "hand-defeat": { category: "combat", frequency: 240, endFrequency: 90, duration: 0.1, noise: true, minInterval: 0.1 },
   respawn: { category: "ui", frequency: 380, endFrequency: 780, duration: 0.16, type: "triangle" },
 };
 

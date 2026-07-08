@@ -26,6 +26,10 @@ export interface Projectile {
   teleportsOwner?: boolean;
   pulseTimer?: number;
   status?: string;
+  state?: "resting" | "lit" | "chaotic" | "attached";
+  riderId?: string;
+  chaos?: number;
+  ownerFacing?: number;
   hits: string[];
 }
 

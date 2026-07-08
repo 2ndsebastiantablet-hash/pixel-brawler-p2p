@@ -1,5 +1,7 @@
 import type { WeaponDefinition, WeaponId, WeaponInventoryState } from "./Weapon";
 import { axe } from "./weapons/Axe";
+import { deathAura } from "./weapons/DeathAura";
+import { hands } from "./weapons/Hands";
 import { knife } from "./weapons/Knife";
 import { laserBlaster } from "./weapons/LaserBlaster";
 import { lightningRod } from "./weapons/LightningRod";
@@ -7,6 +9,7 @@ import { machete } from "./weapons/Machete";
 import { minigun } from "./weapons/Minigun";
 import { pistol } from "./weapons/Pistol";
 import { revolver } from "./weapons/Revolver";
+import { rocket } from "./weapons/Rocket";
 import { sledgeHammer } from "./weapons/SledgeHammer";
 import { slingshot } from "./weapons/Slingshot";
 import { sniper } from "./weapons/Sniper";
@@ -32,6 +35,9 @@ export const WEAPON_IDS = [
   "axe",
   "wings",
   "virgin-blood",
+  "death-aura",
+  "rocket",
+  "hands",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -47,6 +53,9 @@ const ALL_WEAPON_IDS = [
   "axe",
   "wings",
   "virgin-blood",
+  "death-aura",
+  "rocket",
+  "hands",
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
@@ -65,6 +74,9 @@ const weaponDefinitions: WeaponDefinition[] = [
   axe,
   wings,
   virginBlood,
+  deathAura,
+  rocket,
+  hands,
   teleportBall,
   lightningRod,
   sledgeHammer,

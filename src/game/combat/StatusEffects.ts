@@ -11,7 +11,10 @@ export type StatusEffectId =
   | "legStagger"
   | "holyBuff"
   | "blessed"
-  | "angelWings";
+  | "angelWings"
+  | "deathFrozen"
+  | "scrambled"
+  | "handsMissing";
 
 export interface StatusEffect {
   id: StatusEffectId;
