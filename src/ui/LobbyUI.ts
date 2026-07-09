@@ -57,6 +57,7 @@ export class LobbyUI {
   private selectedColor: string;
   private selectedLoadoutItem: WeaponId = "pistol";
   private selectedLoadoutCategory: LoadoutCategory = "all";
+  private cancelLoadoutPointerDrag: (() => void) | null = null;
   private status: ConnectionStatus | string = "Offline";
   private session: SessionView | null = null;
   private pauseOpen = false;
@@ -526,6 +527,9 @@ export class LobbyUI {
         this.assignLoadoutDrop(root, slot, weapon, button);
       }
     });
+    if (weaponId) {
+      button.addEventListener("pointerdown", (event) => this.startLoadoutPointerDrag(root, event, weaponId, button));
+    }
     button.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       if (!weaponId) {
@@ -569,6 +573,8 @@ export class LobbyUI {
     if (error) {
       error.textContent = message;
     }
+    target.classList.remove("is-invalid-drop");
+    void target.offsetWidth;
     target.classList.add("is-invalid-drop");
   }
 
@@ -682,6 +688,7 @@ export class LobbyUI {
         event.dataTransfer.setData("application/x-pixel-weapon", item.id);
         event.dataTransfer.setData("text/plain", item.id);
       });
+      button.addEventListener("pointerdown", (event) => this.startLoadoutPointerDrag(root, event, item.id, button));
       button.addEventListener("click", () => {
         this.selectedLoadoutItem = item.id;
         if (root.querySelector("[data-loadout-slots]")) {
@@ -697,6 +704,143 @@ export class LobbyUI {
       empty.className = "empty-list";
       empty.textContent = "No matching items.";
       container.append(empty);
+    }
+  }
+
+  private startLoadoutPointerDrag(root: HTMLElement, event: PointerEvent, weaponId: WeaponId, source: HTMLElement): void {
+    if (event.button !== 0) {
+      return;
+    }
+
+    this.cancelLoadoutPointerDrag?.();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const originalDraggable = source.draggable;
+    let dragging = false;
+    let ghost: HTMLElement | null = null;
+    let currentTarget: HTMLElement | null = null;
+
+    source.draggable = false;
+    try {
+      source.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been captured by the browser drag system.
+    }
+
+    const setCurrentTarget = (target: HTMLElement | null): void => {
+      if (target === currentTarget) {
+        return;
+      }
+      currentTarget?.classList.remove("is-valid-drop", "is-invalid-drop");
+      currentTarget = target;
+      if (!currentTarget) {
+        return;
+      }
+      const slot = loadoutSlotFromTarget(currentTarget);
+      if (!slot) {
+        return;
+      }
+      const compatible = isSlotCompatible(weaponId, slot);
+      currentTarget.classList.toggle("is-valid-drop", compatible);
+      currentTarget.classList.toggle("is-invalid-drop", !compatible);
+    };
+
+    const moveGhost = (clientX: number, clientY: number): void => {
+      if (!ghost) {
+        return;
+      }
+      ghost.style.left = `${clientX}px`;
+      ghost.style.top = `${clientY}px`;
+    };
+
+    const beginDrag = (clientX: number, clientY: number): void => {
+      dragging = true;
+      source.classList.add("is-drag-source");
+      root.classList.add("is-loadout-dragging");
+      this.clearLoadoutDropHighlights(root);
+
+      ghost = document.createElement("div");
+      ghost.className = "loadout-drag-ghost";
+      const swatch = document.createElement("span");
+      swatch.style.backgroundColor = colorForLoadoutItem(weaponId);
+      const label = document.createElement("strong");
+      label.textContent = loadoutWeaponName(weaponId);
+      ghost.append(swatch, label);
+      document.body.append(ghost);
+      moveGhost(clientX, clientY);
+    };
+
+    let cleanup = (): void => undefined;
+
+    const onPointerMove = (moveEvent: PointerEvent): void => {
+      if (!dragging) {
+        const distance = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+        if (distance < 5) {
+          return;
+        }
+        beginDrag(moveEvent.clientX, moveEvent.clientY);
+      }
+      moveEvent.preventDefault();
+      moveGhost(moveEvent.clientX, moveEvent.clientY);
+      setCurrentTarget(this.loadoutDropTargetAt(root, moveEvent.clientX, moveEvent.clientY));
+    };
+
+    const onPointerUp = (upEvent: PointerEvent): void => {
+      const target = currentTarget;
+      const slot = target ? loadoutSlotFromTarget(target) : null;
+      const shouldDrop = dragging && target && slot;
+      if (dragging) {
+        upEvent.preventDefault();
+      }
+      cleanup();
+      if (shouldDrop) {
+        this.assignLoadoutDrop(root, slot, weaponId, target);
+      }
+    };
+
+    const onPointerCancel = (cancelEvent: PointerEvent): void => {
+      if (dragging) {
+        cancelEvent.preventDefault();
+      }
+      cleanup();
+    };
+
+    cleanup = (): void => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      source.classList.remove("is-drag-source");
+      source.draggable = originalDraggable;
+      root.classList.remove("is-loadout-dragging");
+      ghost?.remove();
+      ghost = null;
+      this.clearLoadoutDropHighlights(root);
+      if (this.cancelLoadoutPointerDrag === cleanup) {
+        this.cancelLoadoutPointerDrag = null;
+      }
+      try {
+        if (source.hasPointerCapture(event.pointerId)) {
+          source.releasePointerCapture(event.pointerId);
+        }
+      } catch {
+        // The source may have been re-rendered after a successful drop.
+      }
+    };
+
+    this.cancelLoadoutPointerDrag = cleanup;
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+  }
+
+  private loadoutDropTargetAt(root: HTMLElement, clientX: number, clientY: number): HTMLElement | null {
+    const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-loadout-drop-slot]");
+    return target && root.contains(target) ? target : null;
+  }
+
+  private clearLoadoutDropHighlights(root: HTMLElement): void {
+    for (const target of root.querySelectorAll<HTMLElement>("[data-loadout-drop-slot]")) {
+      target.classList.remove("is-valid-drop", "is-invalid-drop");
     }
   }
 
@@ -956,6 +1100,21 @@ function readDraggedWeapon(event: DragEvent): WeaponId | null {
     || event.dataTransfer?.getData("text/plain");
   const item = LOADOUT_ITEMS.find((candidate) => candidate.id === value);
   return item?.id ?? null;
+}
+
+function loadoutSlotFromTarget(target: HTMLElement): LoadoutSlotId | null {
+  const value = target.dataset.loadoutDropSlot;
+  if (
+    value === "frontStrap"
+    || value === "backStrap"
+    || value === "leftHand"
+    || value === "rightHand"
+    || value === "attachment"
+    || value === "legs"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function requireElement<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
