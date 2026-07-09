@@ -17,6 +17,7 @@ import {
   loadoutHasWeapon,
   loadoutWeaponName,
   normalizeLoadout,
+  swapAttachmentWithHand,
   type LoadoutSlotId,
   type LoadoutState,
 } from "./loadout/Loadout";
@@ -510,33 +511,32 @@ export class Game {
       this.useLoadoutSlot("backStrap", "primary", time);
     }
     if (input.attachmentPressed) {
-      this.useAttachmentSlot(time);
+      this.useAttachmentSlot();
     }
 
-    const leftWeapon = this.loadout.leftHand;
-    const rightWeapon = this.loadout.rightHand;
-    if (leftWeapon && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
-      this.handleWeaponAction(leftWeapon, "primary", {
+    const primaryAction = resolveMouseWeaponAction("primary", this.loadout);
+    if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
+      this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
         held: input.primaryHeld,
         released: input.primaryReleased,
         heldMs: this.primaryHeldMs,
         isFirstHeldFrame: this.primaryHeldMs < dt * 1000 + 1,
-        attackKind: "primary",
+        attackKind: primaryAction.action,
         now: time,
         aim,
       });
     }
 
-    if (rightWeapon && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
-      const twoHanded = leftWeapon === rightWeapon && isTwoHandedWeapon(rightWeapon);
-      this.handleWeaponAction(rightWeapon, twoHanded ? "secondary" : "primary", {
+    const secondaryAction = resolveMouseWeaponAction("secondary", this.loadout);
+    if (secondaryAction && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
+      this.handleWeaponAction(secondaryAction.weaponId, secondaryAction.action, {
         pressed: input.secondaryPressed,
         held: input.secondaryHeld,
         released: input.secondaryReleased,
         heldMs: this.secondaryHeldMs,
         isFirstHeldFrame: this.secondaryHeldMs < dt * 1000 + 1,
-        attackKind: twoHanded ? "secondary" : "primary",
+        attackKind: secondaryAction.action,
         now: time,
         aim,
       });
@@ -555,6 +555,7 @@ export class Game {
     if (!weaponId) {
       return;
     }
+    const previousWeapon = this.combat.getPlayerInventory().equippedWeapon;
     this.combat.setEquippedWeapon(weaponId);
     const context = {
       ownerId: this.localPlayer.state.id,
@@ -565,17 +566,27 @@ export class Game {
       isNewPress: true,
     };
     this.recordAttack(action === "primary" ? this.combat.usePrimary(context) : this.combat.useSecondary(context), action);
+    if ((slot === "frontStrap" || slot === "backStrap") && previousWeapon) {
+      this.combat.setEquippedWeapon(previousWeapon);
+    }
   }
 
-  private useAttachmentSlot(time: number): void {
+  private useAttachmentSlot(): void {
     const picked = this.combat.pickUpNearest(this.localPlayer.state);
     if (picked) {
       this.assignPickedLoadoutItem(picked);
       return;
     }
-    if (this.loadout.attachment) {
-      this.useLoadoutSlot("attachment", "primary", time);
+    const preferredSlot = this.preferredHandSlot();
+    const swap = swapAttachmentWithHand(this.loadout, preferredSlot);
+    if (!swap.swapped) {
+      this.recordAttack({ kind: "blocked", weaponId: this.loadout.attachment ?? this.loadout[preferredSlot] ?? "pistol", label: swap.reason ?? "Cannot swap" }, "primary");
+      return;
     }
+    this.loadout = swap.loadout;
+    this.combat.setEquippedWeapon(this.loadout[preferredSlot] ?? this.loadout.rightHand ?? this.loadout.leftHand ?? "pistol");
+    this.attachmentVisual.initialized = false;
+    playSound("weapon-pickup");
   }
 
   private assignPickedLoadoutItem(weaponId: WeaponId): void {
@@ -591,6 +602,14 @@ export class Game {
     }
     this.loadout = assignLoadoutItem(this.loadout, slot, weaponId);
     this.combat.setEquippedWeapon(weaponId);
+  }
+
+  private preferredHandSlot(): Extract<LoadoutSlotId, "leftHand" | "rightHand"> {
+    const equipped = this.combat.getPlayerInventory().equippedWeapon;
+    if (this.loadout.leftHand === equipped && this.loadout.rightHand !== equipped) {
+      return "leftHand";
+    }
+    return "rightHand";
   }
 
   private handleWeaponAction(weaponId: WeaponId, action: "primary" | "secondary", input: WeaponActionInput): void {
@@ -1006,12 +1025,16 @@ export class Game {
     const ey = Math.round(end.y - this.camera.y);
     ctx.save();
     ctx.strokeStyle = "rgba(214, 242, 255, 0.72)";
+    ctx.shadowColor = "rgba(90, 215, 255, 0.85)";
+    ctx.shadowBlur = 8;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(ax, ay);
-    ctx.lineTo(Math.round((ax + ex) / 2), Math.round((ay + ey) / 2 + 6));
     ctx.lineTo(ex, ey);
     ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
+    ctx.strokeRect(ex - 10, ey - 10, 20, 20);
     this.drawTinyLoadoutItem(ctx, weaponId, ex, ey, 8);
     ctx.restore();
   }
@@ -1034,6 +1057,11 @@ export class Game {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = colorForWeapon(weaponId);
+
+    if (this.drawMouseAimedHeldWeapon(ctx, weaponId, state, centerX, centerY, aim, active, this.primaryHeldMs)) {
+      ctx.restore();
+      return;
+    }
 
     if (weaponId === "pistol") {
       const kick = active > 0 ? 8 : 0;
@@ -1244,12 +1272,7 @@ export class Game {
     } else if (weaponId === "hands") {
       const x = Math.round(centerX + facing * 20);
       const y = Math.round(centerY - 2);
-      ctx.fillStyle = "#b8ffd0";
-      for (let index = 0; index < 3; index += 1) {
-        this.pixelRect(ctx, x + facing * index * 8, y + Math.sin(performance.now() * 0.01 + index) * 5, facing * 8, 6);
-      }
-      ctx.fillStyle = "#344136";
-      this.pixelRect(ctx, x - facing * 4, y - 10, facing * 18, 4);
+      this.drawMiniHand(ctx, x, y, facing, performance.now() * 0.012, "lunge");
     } else if (weaponId === "wings") {
       const mode = state.wingFlapping ? "flap" : state.wingDiving ? "dive" : state.grounded ? "idle" : "glide";
       this.drawWings(ctx, state, this.localPlayer.color, mode);
@@ -1269,6 +1292,191 @@ export class Game {
           ctx.fillRect(Math.round(centerX + facing * (20 + index * 13)), Math.round(centerY + 22 + index * 2), 10, 6);
         }
       }
+    }
+    ctx.restore();
+  }
+
+  private drawMouseAimedHeldWeapon(
+    ctx: CanvasRenderingContext2D,
+    weaponId: WeaponId,
+    state: PlayerPhysicsState,
+    centerX: number,
+    centerY: number,
+    aim: { x: number; y: number },
+    active: number,
+    heldMs: number,
+    remote = false,
+  ): boolean {
+    if (
+      weaponId !== "knife"
+      && weaponId !== "machete"
+      && weaponId !== "axe"
+      && weaponId !== "sledgehammer"
+      && weaponId !== "rocket"
+      && weaponId !== "lightning-rod"
+      && weaponId !== "slingshot"
+      && weaponId !== "whip"
+    ) {
+      return false;
+    }
+
+    const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
+    if (weaponId === "axe" && runtime?.axeThrown) {
+      return true;
+    }
+
+    const directionX = Math.abs(aim.x) + Math.abs(aim.y) > 0.01 ? aim.x : state.facing;
+    const angle = Math.atan2(aim.y, directionX);
+    const color = colorForWeapon(weaponId);
+    const pulse = performance.now() * 0.012;
+    ctx.save();
+    ctx.translate(Math.round(centerX), Math.round(centerY));
+    ctx.rotate(angle);
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = color;
+
+    if (weaponId === "knife") {
+      const reach = active > 0 ? 13 : 0;
+      ctx.fillStyle = "#2b3542";
+      this.pixelRect(ctx, 2 + reach, 3, 16, 6);
+      ctx.fillStyle = "#d8f0ff";
+      this.pixelRect(ctx, 15 + reach, -4, 33, 8);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, 40 + reach, -2, 9, 4);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(216, 240, 255, 0.48)";
+        this.pixelRect(ctx, 28, -15, 44, 30);
+      }
+    } else if (weaponId === "machete") {
+      const machete = remote ? undefined : this.combat.getMacheteState(state.id);
+      const growth = Math.min(machete?.rangeBonus ?? 0, 360);
+      const blade = 46 + growth;
+      ctx.fillStyle = "#344136";
+      this.pixelRect(ctx, 0, 5, 22, 8);
+      ctx.fillStyle = machete ? machetePowerColor(machete.redness) : color;
+      this.pixelRect(ctx, 18, -7, blade, 14);
+      this.pixelRect(ctx, 18 + blade - 13, -13, 14, 21);
+      ctx.fillStyle = "#f0fff7";
+      this.pixelRect(ctx, 18 + Math.max(25, blade - 8), -4, 12, 6);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(158, 231, 195, 0.34)";
+        this.pixelRect(ctx, 28, -18, 54 + growth, 36);
+      }
+    } else if (weaponId === "axe") {
+      const swing = active > 0 ? 10 : 0;
+      ctx.fillStyle = "#5d3f29";
+      this.pixelRect(ctx, 0 + swing, 3, 50, 8);
+      ctx.fillStyle = "#ffb35c";
+      this.pixelRect(ctx, 41 + swing, -16, 18, 32);
+      this.pixelRect(ctx, 54 + swing, -10, 17, 20);
+      ctx.fillStyle = "#fff0c2";
+      this.pixelRect(ctx, 65 + swing, -6, 8, 12);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(255, 179, 92, 0.42)";
+        this.pixelRect(ctx, 35, -25, 62, 50);
+      }
+    } else if (weaponId === "sledgehammer") {
+      const charge = Math.min(heldMs / 900, 1);
+      ctx.fillStyle = "#b8bfd7";
+      this.pixelRect(ctx, -4, -4, 55, 8);
+      ctx.fillStyle = "#ff8f3d";
+      this.pixelRect(ctx, 42, -17 - Math.round(charge * 5), 25, 30 + Math.round(charge * 10));
+      this.pixelRect(ctx, 36, -9, 36, 10);
+      if (active > 0 || charge > 0.2) {
+        ctx.fillStyle = "rgba(255, 143, 61, 0.5)";
+        this.pixelRect(ctx, 35, -24, 48 + Math.round(charge * 32), 48);
+      }
+    } else if (weaponId === "rocket") {
+      ctx.fillStyle = "#56606f";
+      this.pixelRect(ctx, 2, -8, 43, 16);
+      ctx.fillStyle = "#ff8f3d";
+      this.pixelRect(ctx, 33, -10, 15, 20);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, 46, -5, 11, 10);
+      if (active > 0) {
+        ctx.fillStyle = "rgba(255, 143, 61, 0.55)";
+        this.pixelRect(ctx, -24, -6, 24, 12);
+      }
+    } else if (weaponId === "lightning-rod") {
+      ctx.fillStyle = "#ffd84d";
+      this.pixelRect(ctx, 0, -4, 58, 8);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, 49, -13, 8, 26);
+      ctx.fillStyle = "rgba(255, 216, 77, 0.58)";
+      this.pixelRect(ctx, 58, -7, 16 + Math.round(Math.sin(pulse) * 4), 14);
+    } else if (weaponId === "slingshot") {
+      const charge = Math.min(heldMs / 850, 1);
+      ctx.fillStyle = "#8b5a2b";
+      this.pixelRect(ctx, 8, -16, 7, 32);
+      this.pixelRect(ctx, 12, -17, 22, 6);
+      this.pixelRect(ctx, 12, 11, 22, 6);
+      ctx.strokeStyle = "#7cff6b";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(32, -13);
+      ctx.lineTo(-10 - charge * 24, 0);
+      ctx.lineTo(32, 13);
+      ctx.stroke();
+      ctx.fillStyle = "#7cff6b";
+      this.pixelRect(ctx, -15 - Math.round(charge * 24), -4, 8, 8);
+    } else if (weaponId === "whip") {
+      const reach = active > 0 ? 286 : 86;
+      const segments = active > 0 ? 12 : 5;
+      for (let index = 1; index <= segments; index += 1) {
+        const t = index / segments;
+        const curve = Math.sin(t * Math.PI) * 34;
+        const size = index === segments ? 10 : Math.max(3, 8 - index * 0.35);
+        ctx.fillRect(Math.round(reach * t - size / 2), Math.round(curve * t - size / 2), Math.round(size), Math.round(size));
+      }
+      if (active > 0) {
+        ctx.fillStyle = "#ffffff";
+        this.pixelRect(ctx, reach - 5, -5, 10, 10);
+      }
+    }
+
+    ctx.restore();
+    if (weaponId === "lightning-rod" && heldMs > 0 && aim.y < -0.55) {
+      this.drawLightningChargeVisual(ctx, state, aim, heldMs);
+    }
+    return true;
+  }
+
+  private drawMiniHand(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    facing: number,
+    phase: number,
+    pose: "crawl" | "lunge" | "attached" | "flicked",
+  ): void {
+    const crawlLift = pose === "crawl" ? Math.sin(phase) : pose === "lunge" ? -3 : pose === "attached" ? 2 : 5;
+    ctx.save();
+    ctx.translate(Math.round(x), Math.round(y));
+    ctx.scale(facing >= 0 ? 1 : -1, 1);
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#b8ffd0";
+    this.pixelRect(ctx, -7, -4 + Math.round(crawlLift * 0.25), 15, 11);
+    this.pixelRect(ctx, -12, -2, 6, 7);
+    ctx.fillStyle = "#d9ffe4";
+    this.pixelRect(ctx, -4, -2, 6, 5);
+    ctx.fillStyle = "#b8ffd0";
+    for (let index = 0; index < 5; index += 1) {
+      const baseX = -7 + index * 4;
+      const walk = pose === "crawl" ? Math.round(Math.sin(phase + index * 1.3) * 3) : 0;
+      const lunge = pose === "lunge" ? -3 - (index % 2) : 0;
+      const attached = pose === "attached" ? 4 + (index % 2) : 0;
+      const fingerY = -13 + walk + lunge + attached;
+      const length = 7 + (index === 2 ? 3 : index === 0 || index === 4 ? -1 : 1);
+      this.pixelRect(ctx, baseX, fingerY, 3, length);
+      this.pixelRect(ctx, baseX - 1, fingerY - 2, 5, 3);
+    }
+    ctx.fillStyle = "#7cff6b";
+    this.pixelRect(ctx, 4, 1, 3, 3);
+    ctx.fillStyle = "#344136";
+    this.pixelRect(ctx, -2, 5, 5, 2);
+    if (pose === "flicked") {
+      ctx.fillStyle = "rgba(255, 111, 145, 0.72)";
+      this.pixelRect(ctx, -12, -12, 25, 4);
     }
     ctx.restore();
   }
@@ -1335,6 +1543,11 @@ export class Game {
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = color;
 
+    if (this.drawMouseAimedHeldWeapon(ctx, weaponId, state, centerX, centerY, aim, 0, remote.current.chargeHeldMs ?? 0, true)) {
+      ctx.restore();
+      return;
+    }
+
     if (weaponId === "death-aura") {
       ctx.fillStyle = remote.current.deathAuraActive ? "rgba(8, 8, 12, 0.72)" : "rgba(35, 24, 43, 0.5)";
       this.pixelRect(ctx, x - facing * 8, y - 12, facing * 22, 24);
@@ -1354,10 +1567,7 @@ export class Game {
       ctx.fillStyle = "#fff4a8";
       this.pixelRect(ctx, x + facing * 36, y - 4, facing * 9, 8);
     } else if (weaponId === "hands") {
-      ctx.fillStyle = "#b8ffd0";
-      for (let index = 0; index < 3; index += 1) {
-        this.pixelRect(ctx, x + facing * index * 8, y + Math.sin(performance.now() * 0.01 + index) * 5, facing * 8, 6);
-      }
+      this.drawMiniHand(ctx, x, y, facing, performance.now() * 0.012, "crawl");
     } else if (weaponId === "lightning-rod" || weaponId === "sniper" || weaponId === "minigun" || weaponId === "laser-blaster") {
       this.pixelRect(ctx, x - facing * 8, y - 4, facing * 46, 8);
       ctx.fillStyle = "#ffffff";
@@ -1616,13 +1826,9 @@ export class Game {
       return;
     }
     if (projectile.weaponId === "hands") {
-      ctx.fillStyle = "#b8ffd0";
-      ctx.fillRect(x - 5, y - 3, 10, 7);
-      ctx.fillRect(x - 8, y - 1, 4, 4);
-      ctx.fillRect(x + 4, y - 1, 4, 4);
-      ctx.fillStyle = "#344136";
-      ctx.fillRect(x - 3, y - 6, 2, 4);
-      ctx.fillRect(x + 1, y - 6, 2, 4);
+      const facing = Math.sign(projectile.vx || projectile.ownerFacing || 1);
+      const pose = projectile.hits.length > 0 ? "attached" : projectile.vy < -20 ? "lunge" : "crawl";
+      this.drawMiniHand(ctx, x, y, facing, projectile.age * 18, pose);
       return;
     }
     if (projectile.id.startsWith("throw")) {
@@ -2087,6 +2293,15 @@ export class Game {
       this.renderEmpty();
     }
   };
+}
+
+export function resolveMouseWeaponAction(
+  button: "primary" | "secondary",
+  loadout: Partial<LoadoutState>,
+): { weaponId: WeaponId; action: "primary" | "secondary" } | null {
+  const normalized = normalizeLoadout(loadout);
+  const weaponId = button === "primary" ? normalized.leftHand : normalized.rightHand;
+  return weaponId ? { weaponId, action: button } : null;
 }
 
 function colorForWeapon(id: WeaponId): string {

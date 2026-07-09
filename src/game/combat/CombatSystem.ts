@@ -1027,6 +1027,9 @@ export class CombatSystem {
 
   private useAxePrimary(context: WeaponUseContext): WeaponUseResult {
     const weaponId: WeaponId = "axe";
+    if (this.activeAxeProjectile(context.ownerId)) {
+      return { kind: "blocked", weaponId, label: "Axe thrown" };
+    }
     if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
       return { kind: "blocked", weaponId, label: "Cooldown" };
     }

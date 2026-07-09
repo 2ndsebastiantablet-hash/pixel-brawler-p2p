@@ -71,14 +71,12 @@ const oneHandedWeapons = new Set<WeaponId>([
 const strapWeapons = new Set<WeaponId>([
   "death-aura",
   "hands",
-  "virgin-blood",
   "wings",
 ]);
 
 const attachmentWeapons = new Set<WeaponId>([
-  "hands",
-  "teleport-ball",
-  "virgin-blood",
+  ...oneHandedWeapons,
+  ...twoHandedWeapons,
 ]);
 
 export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
@@ -143,6 +141,56 @@ export function assignLoadoutItem(current: Partial<LoadoutState>, slot: LoadoutS
 
   next[slot] = weaponId;
   return next;
+}
+
+export function assignHeldLoadoutItem(current: Partial<LoadoutState>, weaponId: WeaponId): LoadoutState {
+  const next = normalizeLoadout(current);
+  if (!isSlotCompatible(weaponId, "rightHand")) {
+    return next;
+  }
+  next.leftHand = weaponId;
+  next.rightHand = weaponId;
+  return next;
+}
+
+export function swapAttachmentWithHand(
+  current: Partial<LoadoutState>,
+  preferredSlot: Extract<LoadoutSlotId, "leftHand" | "rightHand"> = "rightHand",
+): { loadout: LoadoutState; swapped: boolean; reason?: string } {
+  const next = normalizeLoadout(current);
+  const attachment = next.attachment;
+  if (!attachment) {
+    return { loadout: next, swapped: false, reason: "No attachment" };
+  }
+  if (!isSlotCompatible(attachment, preferredSlot)) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} cannot be held` };
+  }
+
+  const fallbackSlot = preferredSlot === "rightHand" ? "leftHand" : "rightHand";
+  const handSlot = next[preferredSlot] ? preferredSlot : fallbackSlot;
+  const held = next[handSlot];
+  if (!held) {
+    return { loadout: next, swapped: false, reason: "No held item" };
+  }
+  if (!isSlotCompatible(held, "attachment")) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(held)} cannot attach to ${LOADOUT_SLOT_LABELS.attachment}` };
+  }
+
+  const handsMatch = next.leftHand !== undefined && next.leftHand === next.rightHand;
+  const attachmentNeedsBothHands = isTwoHandedWeapon(attachment);
+  const heldUsesBothHands = isTwoHandedWeapon(held) || handsMatch;
+  if (attachmentNeedsBothHands && !heldUsesBothHands) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} needs both hands` };
+  }
+
+  if (heldUsesBothHands || attachmentNeedsBothHands) {
+    next.leftHand = attachment;
+    next.rightHand = attachment;
+  } else {
+    next[handSlot] = attachment;
+  }
+  next.attachment = held;
+  return { loadout: next, swapped: true };
 }
 
 export function isSlotCompatible(weaponId: WeaponId, slot: LoadoutSlotId): boolean {

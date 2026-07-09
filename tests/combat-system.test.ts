@@ -1212,6 +1212,27 @@ describe("combat system", () => {
     ]));
   });
 
+  it("removes the held Axe from melee use while the thrown Axe is still out", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("axe");
+    const player = { ...playerState, id: "local", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
+    combat.spawnTrainingDummy({ x: 118, y: playerState.y });
+
+    expect(combat.useSecondary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true }).kind).toBe("fired");
+    expect(combat.getWeaponRuntimeState("axe", "local").axeThrown).toBe(true);
+
+    combat.getPlayerInventory().cooldowns.axe = 0;
+    const blockedSwing = combat.usePrimary({ ownerId: "local", player, aim: { x: 1, y: 0 }, now: 180, heldMs: 0, isNewPress: true });
+
+    expect(blockedSwing).toMatchObject({ kind: "blocked", weaponId: "axe", label: "Axe thrown" });
+    expect(combat.getSnapshot().hitboxes.some((hitbox) => hitbox.weaponId === "axe")).toBe(false);
+
+    const recall = combat.useSecondary({ ownerId: "local", player, aim: { x: -1, y: 0 }, now: 260, heldMs: 0, isNewPress: true });
+    expect(recall).toMatchObject({ kind: "utility", weaponId: "axe", label: "Recall" });
+  });
+
   it("activates Virgin Blood with left or right click, heals, buffs, and revives once with angel wings", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());

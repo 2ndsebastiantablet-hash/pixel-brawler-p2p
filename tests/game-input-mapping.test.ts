@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+import { resolveMouseWeaponAction } from "../src/game/Game";
+import type { LoadoutState } from "../src/game/loadout/Loadout";
+
+describe("game mouse weapon input mapping", () => {
+  it("routes left mouse to primary and right mouse to alternate/secondary behavior", () => {
+    const loadout: LoadoutState = {
+      leftHand: "pistol",
+      rightHand: "knife",
+      frontStrap: "wings",
+      backStrap: "death-aura",
+      attachment: "virgin-blood",
+    };
+
+    expect(resolveMouseWeaponAction("primary", loadout)).toEqual({ weaponId: "pistol", action: "primary" });
+    expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "knife", action: "secondary" });
+  });
+
+  it("keeps two-handed held items on left primary and right secondary controls", () => {
+    const loadout: LoadoutState = {
+      leftHand: "axe",
+      rightHand: "axe",
+      frontStrap: "wings",
+      backStrap: "death-aura",
+      attachment: "virgin-blood",
+    };
+
+    expect(resolveMouseWeaponAction("primary", loadout)).toEqual({ weaponId: "axe", action: "primary" });
+    expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "axe", action: "secondary" });
+  });
+});

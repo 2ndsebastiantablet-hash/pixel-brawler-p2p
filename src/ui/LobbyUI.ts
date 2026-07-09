@@ -10,6 +10,7 @@ import { playSound } from "../audio/SoundSystem";
 import {
   LOADOUT_ITEMS,
   LOADOUT_SLOT_LABELS,
+  assignHeldLoadoutItem,
   assignLoadoutItem,
   isSlotCompatible,
   loadoutWeaponName,
@@ -342,7 +343,6 @@ export class LobbyUI {
           <p class="loadout-error" data-loadout-error aria-live="polite"></p>
           <div class="loadout-filters">
             <input class="text-input" data-loadout-search placeholder="Search items" autocomplete="off" />
-            <div class="loadout-categories" data-loadout-categories></div>
           </div>
           <div class="loadout-items" data-loadout-items></div>
         </aside>
@@ -414,7 +414,6 @@ export class LobbyUI {
     if (root.querySelector("[data-loadout-slots]")) {
       this.renderLoadoutSlots(root);
     }
-    this.renderLoadoutCategories(root);
     this.renderLoadoutItems(root);
 
     const search = requireElement<HTMLInputElement>(root, "[data-loadout-search]");
@@ -429,19 +428,11 @@ export class LobbyUI {
     views.append(
       this.createLoadoutView(root, "front", [
         { slot: "frontStrap", label: "Front", className: "front-strap" },
-        { slot: "leftHand", label: "L", className: "left-hand" },
-        { slot: "rightHand", label: "R", className: "right-hand" },
+        { slot: "rightHand", label: "Hand", className: "hand" },
         { slot: "attachment", label: "F", className: "attachment" },
-      ], [
-        { label: "Left Leg", className: "left-leg" },
-        { label: "Right Leg", className: "right-leg" },
       ]),
       this.createLoadoutView(root, "back", [
         { slot: "backStrap", label: "Back", className: "back-strap" },
-        { slot: "attachment", label: "F", className: "back-attachment" },
-      ], [
-        { label: "Back Left Leg", className: "back-left-leg" },
-        { label: "Back Right Leg", className: "back-right-leg" },
       ]),
     );
     preview.append(views);
@@ -451,7 +442,6 @@ export class LobbyUI {
     root: HTMLElement,
     view: "front" | "back",
     targets: Array<{ slot: LoadoutSlotId; label: string; className: string }>,
-    legTargets: Array<{ label: string; className: string }>,
   ): HTMLElement {
     const figure = document.createElement("div");
     figure.className = `loadout-view ${view}`;
@@ -470,17 +460,12 @@ export class LobbyUI {
     }
 
     for (const target of targets) {
+      if (target.slot === "attachment") {
+        const string = document.createElement("span");
+        string.className = "loadout-attachment-string";
+        figure.append(string);
+      }
       figure.append(this.createLoadoutDropTarget(root, target.slot, target.label, target.className));
-    }
-    for (const target of legTargets) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.disabled = true;
-      button.className = `loadout-x-target disabled ${target.className}`;
-      button.dataset.loadoutLegSlot = target.className;
-      button.title = `${target.label} reserved for future leg equipment`;
-      button.textContent = "X";
-      figure.append(button);
     }
 
     return figure;
@@ -493,7 +478,7 @@ export class LobbyUI {
     button.type = "button";
     button.className = `loadout-x-target ${className}`;
     button.dataset.loadoutDropSlot = slot;
-    button.title = `${LOADOUT_SLOT_LABELS[slot]}: ${loadoutWeaponName(weaponId)}`;
+    button.title = `${slot === "rightHand" ? "Hand" : LOADOUT_SLOT_LABELS[slot]}: ${loadoutWeaponName(weaponId)}`;
     button.draggable = Boolean(weaponId);
 
     const marker = document.createElement("span");
@@ -503,7 +488,6 @@ export class LobbyUI {
     value.textContent = weaponId ? loadoutWeaponName(weaponId) : label;
     button.append(marker, value);
 
-    button.addEventListener("click", () => this.assignLoadoutDrop(root, slot, this.selectedLoadoutItem, button));
     button.addEventListener("dragstart", (event) => {
       if (!weaponId || !event.dataTransfer) {
         return;
@@ -543,7 +527,9 @@ export class LobbyUI {
     }
     this.profile = {
       ...this.profile,
-      loadout: assignLoadoutItem(this.profile.loadout ?? {}, slot, weaponId),
+      loadout: slot === "rightHand"
+        ? assignHeldLoadoutItem(this.profile.loadout ?? {}, weaponId)
+        : assignLoadoutItem(this.profile.loadout ?? {}, slot, weaponId),
     };
     this.selectedLoadoutItem = weaponId;
     const error = root.querySelector("[data-loadout-error]");
@@ -599,7 +585,10 @@ export class LobbyUI {
   }
 
   private renderLoadoutCategories(root: HTMLElement): void {
-    const container = requireElement(root, "[data-loadout-categories]");
+    const container = root.querySelector("[data-loadout-categories]");
+    if (!container) {
+      return;
+    }
     container.replaceChildren();
     const categories: Array<{ id: LoadoutCategory; label: string }> = [
       { id: "all", label: "All" },
@@ -633,12 +622,10 @@ export class LobbyUI {
     const search = root.querySelector<HTMLInputElement>("[data-loadout-search]")?.value.trim().toLowerCase() ?? "";
     container.replaceChildren();
     const items = LOADOUT_ITEMS.filter((item) => {
-      const matchesCategory = this.selectedLoadoutCategory === "all"
-        || item.category === this.selectedLoadoutCategory;
       const matchesSearch = !search
         || item.name.toLowerCase().includes(search)
         || item.summary.toLowerCase().includes(search);
-      return matchesCategory && matchesSearch;
+      return matchesSearch;
     });
 
     for (const item of items) {

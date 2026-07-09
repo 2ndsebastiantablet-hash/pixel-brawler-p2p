@@ -67,6 +67,8 @@ button {
 .menu-panel,
 .pause-panel {
   width: min(430px, calc(100vw - 32px));
+  max-height: calc(100vh - 44px);
+  overflow: auto;
   padding: 18px;
   border: 2px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
@@ -513,7 +515,7 @@ button {
 
 .loadout-views {
   display: grid;
-  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  grid-template-columns: repeat(2, minmax(230px, 1fr));
   gap: 10px;
 }
 
@@ -647,8 +649,8 @@ button {
 }
 
 .loadout-x-target.front-strap {
-  left: calc(50% + 18px);
-  top: 55px;
+  left: calc(50% - 21px);
+  top: 66px;
 }
 
 .loadout-x-target.back-strap {
@@ -666,9 +668,14 @@ button {
   top: 96px;
 }
 
-.loadout-x-target.attachment {
+.loadout-x-target.hand {
   left: calc(50% - 21px);
-  top: 82px;
+  top: 112px;
+}
+
+.loadout-x-target.attachment {
+  left: calc(50% + 82px);
+  top: 74px;
 }
 
 .loadout-x-target.back-attachment {
@@ -701,6 +708,17 @@ button {
 .loadout-x-target.is-invalid-drop {
   border-color: #ff6f91;
   box-shadow: 0 0 0 2px rgba(255, 111, 145, 0.22);
+}
+
+.loadout-attachment-string {
+  left: calc(50% + 20px);
+  top: 91px;
+  z-index: 2;
+  width: 86px;
+  height: 3px;
+  border-radius: 999px;
+  background: #d6f2ff;
+  box-shadow: 0 0 8px rgba(90, 215, 255, 0.86), 0 0 14px rgba(214, 242, 255, 0.5);
 }
 
 .loadout-error {
@@ -978,6 +996,10 @@ button:focus-visible {
   .loadout-slots,
   .loadout-items {
     grid-template-columns: 1fr;
+  }
+
+  .loadout-views {
+    grid-template-columns: minmax(230px, 1fr);
   }
 
   .loadout-preview {
