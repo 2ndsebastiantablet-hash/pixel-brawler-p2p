@@ -36,6 +36,8 @@ export interface PhysicsConfig {
   deceleration: number;
   jumpVelocity: number;
   doubleJumpVelocity: number;
+  thirdJumpVelocity?: number;
+  maxAirJumps?: number;
   coyoteTime: number;
   jumpBufferTime: number;
   slideSpeed: number;
@@ -294,10 +296,17 @@ export function stepPlayer(
   }
 
   const canGroundJump = next.grounded || next.coyoteTimer > 0;
-  const canDoubleJump = !canGroundJump && next.jumpsUsed < 2;
+  const maxAirJumps = config.maxAirJumps ?? 2;
+  const canAirJump = !canGroundJump && next.jumpsUsed < maxAirJumps;
   let jumpedThisFrame = false;
-  if (!next.groundSlamming && next.slamRecoveryTimer === 0 && next.jumpBufferTimer > 0 && (canGroundJump || canDoubleJump)) {
-    applyJump(next, canGroundJump ? config.jumpVelocity : config.doubleJumpVelocity, canGroundJump ? 1 : 2);
+  if (!next.groundSlamming && next.slamRecoveryTimer === 0 && next.jumpBufferTimer > 0 && (canGroundJump || canAirJump)) {
+    const jumpNumber = canGroundJump ? 1 : next.jumpsUsed + 1;
+    const jumpVelocity = canGroundJump
+      ? config.jumpVelocity
+      : jumpNumber >= 3
+        ? config.thirdJumpVelocity ?? config.doubleJumpVelocity
+        : config.doubleJumpVelocity;
+    applyJump(next, jumpVelocity, jumpNumber);
     jumpedThisFrame = true;
   }
   if (wings && !jumpedThisFrame && next.grounded && input.jumpHeld && next.slamRecoveryTimer === 0) {

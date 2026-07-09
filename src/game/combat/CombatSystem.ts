@@ -41,6 +41,14 @@ export interface DroppedWeapon {
   pickupable: boolean;
 }
 
+export interface AmmoPickup {
+  id: string;
+  weaponId: WeaponId;
+  x: number;
+  y: number;
+  age: number;
+}
+
 export interface CombatEffect {
   id: string;
   kind:
@@ -78,6 +86,7 @@ export interface CombatSnapshot {
   hitboxes: Hitbox[];
   combatants: Combatant[];
   droppedWeapons: DroppedWeapon[];
+  ammoPickups: AmmoPickup[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
 }
@@ -118,7 +127,7 @@ const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
 const wingGustRadius = 130;
 const wingGustCooldown = 0.14;
-const superLegsArmorDamageScale = 0.55;
+const superLegsArmorDamageScale = 0.38;
 const superLegsStatusRefresh = 0.35;
 const axeRushRange = 940;
 const axeRushSpeed = 1320;
@@ -146,6 +155,21 @@ const rocketExplosionCenterStun = 0.74;
 const rocketExplosionEdgeStun = 0.42;
 const rocketLaunchSpeed = 660;
 const rocketChaosSpeed = 850;
+const holyBazookaAmmoSpawnSeconds = 10;
+const holyBazookaMaxAmmoPickups = 4;
+const holyBazookaMaxLoadedAmmo = 6;
+const holyBazookaPickupRadius = 48;
+const holyBazookaMissileSpeed = 620;
+const holyBazookaMissileMaxSpeed = 820;
+const holyBazookaHomingStrength = 3.7;
+const holyBazookaExplosionRadius = 440;
+const holyBazookaExplosionCenterDamage = 122;
+const holyBazookaExplosionEdgeDamage = 42;
+const holyBazookaExplosionCenterKnockback = 2200;
+const holyBazookaExplosionEdgeKnockback = 960;
+const holyBazookaExplosionCenterStun = 0.96;
+const holyBazookaExplosionEdgeStun = 0.52;
+const holyBazookaMaxHpCap = 260;
 const handsMissingDuration = 40;
 const handSummonCount = 5;
 const macheteHitGrowth = 12;
@@ -231,6 +255,7 @@ export class CombatSystem {
   private readonly projectiles: Projectile[] = [];
   private readonly hitboxes: Hitbox[] = [];
   private readonly droppedWeapons: DroppedWeapon[] = [];
+  private readonly ammoPickups: AmmoPickup[] = [];
   private readonly damageNumbers: DamageNumber[] = [];
   private readonly effects: CombatEffect[] = [];
   private readonly recentEvents: CombatEventPacket[] = [];
@@ -247,6 +272,8 @@ export class CombatSystem {
   private readonly handAttachments = new Map<string, HandAttachmentState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
+  private holyBazookaAmmoSpawnTimer = holyBazookaAmmoSpawnSeconds;
+  private holyBazookaAmmoSpawnIndex = 0;
   private nextId = 0;
 
   constructor(_options: CombatOptions) {}
@@ -257,6 +284,7 @@ export class CombatSystem {
     this.projectiles.length = 0;
     this.hitboxes.length = 0;
     this.droppedWeapons.length = 0;
+    this.ammoPickups.length = 0;
     this.damageNumbers.length = 0;
     this.effects.length = 0;
     this.recentEvents.length = 0;
@@ -273,6 +301,8 @@ export class CombatSystem {
     this.handAttachments.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
+    this.holyBazookaAmmoSpawnTimer = holyBazookaAmmoSpawnSeconds;
+    this.holyBazookaAmmoSpawnIndex = 0;
   }
 
   syncLocalPlayer(player: PlayerPhysicsState, name: string, color: string): Combatant {
@@ -287,7 +317,7 @@ export class CombatSystem {
       spawnX: existing?.spawnX ?? player.x,
       spawnY: existing?.spawnY ?? player.y,
       hp: existing?.hp ?? maxHp,
-      maxHp,
+      maxHp: existing?.maxHp ?? maxHp,
       velocityX: player.velocityX,
       velocityY: player.velocityY,
       hitstun: existing?.hitstun ?? 0,
@@ -426,6 +456,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "rocket") {
       return this.placeRocket(context);
     }
+    if (this.inventory.equippedWeapon === "holy-bazooka") {
+      return this.fireHolyBazooka(context);
+    }
     if (this.inventory.equippedWeapon === "hands") {
       return this.spawnHands(context);
     }
@@ -457,6 +490,9 @@ export class CombatSystem {
     }
     if (weapon.id === "rocket") {
       return this.lightRocket(context);
+    }
+    if (weapon.id === "holy-bazooka") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Use primary" };
     }
     if (weapon.id === "hands") {
       return this.spawnHands(context);
@@ -743,6 +779,7 @@ export class CombatSystem {
 
     this.updateTimedVisuals(dt);
     this.updateInventory(dt);
+    this.updateHolyBazookaAmmo(dt, players);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
@@ -1159,6 +1196,7 @@ export class CombatSystem {
       hitboxes: this.hitboxes,
       combatants: [...this.combatants.values()],
       droppedWeapons: this.droppedWeapons,
+      ammoPickups: this.ammoPickups,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
     };
@@ -1414,6 +1452,61 @@ export class CombatSystem {
     this.queueSound("rocket-light");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", { x: rocket.x, y: rocket.y }, { x: facing, y: 0 }, "Rocket Lit", context.now));
     return { kind: "utility", weaponId, label: "Rocket Lit" };
+  }
+
+  private fireHolyBazooka(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "holy-bazooka";
+    const weapon = weaponRegistry.get(weaponId);
+    const cooldown = this.inventory.cooldowns[weaponId] ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Cooldown" };
+    }
+
+    const ammo = this.inventory.ammo[weaponId];
+    if (!ammo || ammo.magazine <= 0) {
+      const dry = this.muzzle(context.player);
+      this.addEffect("dry-fire", dry.x, dry.y, dry.x + context.aim.x * 18, dry.y + context.aim.y * 18, "#fff4a8", "EMPTY");
+      this.queueSound("pistol-empty");
+      return { kind: "dry-fire", weaponId, label: "Dry fire" };
+    }
+
+    const aim = normalize(context.aim);
+    const start = this.muzzle(context.player);
+    ammo.magazine = Math.max(0, ammo.magazine - 1);
+    ammo.reloadTimer = 0;
+    this.inventory.cooldowns[weaponId] = weapon.primary.cooldown;
+    this.projectiles.push({
+      id: this.makeId("holy"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: start.x,
+      y: start.y,
+      vx: aim.x * holyBazookaMissileSpeed,
+      vy: aim.y * holyBazookaMissileSpeed,
+      radius: weapon.primary.radius ?? 18,
+      damage: 0,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      age: 0,
+      lifetime: weapon.primary.range / holyBazookaMissileSpeed,
+      gravity: 0,
+      bounces: 0,
+      pierce: 0,
+      label: "HOLY MISSILE",
+      color: colorForWeapon(weaponId),
+      trailColor: "#ffffff",
+      originX: start.x,
+      originY: start.y,
+      homingStrength: holyBazookaHomingStrength,
+      ownerFacing: aim.x >= 0 ? 1 : -1,
+      hits: [],
+    });
+    this.applySelfRecoil(context.player, aim, 430, 245);
+    this.addEffect("muzzle", start.x, start.y, start.x + aim.x * 48, start.y + aim.y * 48, colorForWeapon(weaponId), "HOLY FIRE");
+    this.addEffect("tracer", start.x, start.y, start.x - aim.x * 52, start.y - aim.y * 52, "#fff4a8", "RECOIL");
+    this.queueSound("holy-bazooka-fire");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", start, aim, "Holy Bazooka", context.now));
+    return { kind: "fired", weaponId, label: "Holy Bazooka" };
   }
 
   private spawnHands(context: WeaponUseContext): WeaponUseResult {
@@ -1887,26 +1980,26 @@ export class CombatSystem {
   private addSuperLegsSelfMotion(player: PlayerPhysicsState, kind: SuperLegsKickKind, facing: number): void {
     switch (kind) {
       case "forward":
-        player.velocityX += facing * 250;
-        player.velocityY = Math.min(player.velocityY, -130);
+        player.velocityX += facing * 380;
+        player.velocityY = Math.min(player.velocityY, -190);
         break;
       case "back":
-        player.velocityX -= facing * 170;
-        player.velocityY = Math.min(player.velocityY, -90);
+        player.velocityX -= facing * 250;
+        player.velocityY = Math.min(player.velocityY, -150);
         break;
       case "downward":
-        player.velocityY = Math.max(player.velocityY, 760);
+        player.velocityY = Math.max(player.velocityY, 1040);
         break;
       case "slam":
-        player.velocityY = Math.max(player.velocityY, 980);
+        player.velocityY = Math.max(player.velocityY, 1280);
         break;
       case "bounce":
-        player.velocityY = Math.min(player.velocityY, -620);
+        player.velocityY = Math.min(player.velocityY, -840);
         player.jumpsUsed = Math.min(player.jumpsUsed, 1);
         break;
       case "neutral":
       default:
-        player.velocityY = Math.min(player.velocityY, -300);
+        player.velocityY = Math.min(player.velocityY, -520);
         break;
     }
   }
@@ -1930,6 +2023,9 @@ export class CombatSystem {
   }
 
   private collectDroppedWeapon(dropped: DroppedWeapon): WeaponId {
+    if (!this.inventory.weaponInventory.includes(dropped.weaponId)) {
+      this.inventory.weaponInventory.push(dropped.weaponId);
+    }
     this.inventory.equippedWeapon = dropped.weaponId;
     const index = this.droppedWeapons.indexOf(dropped);
     if (index >= 0) {
@@ -1942,6 +2038,25 @@ export class CombatSystem {
       this.queueSound("knife-pickup");
     }
     return dropped.weaponId;
+  }
+
+  private removeThrownWeaponFromInventory(weaponId: WeaponId): void {
+    const index = this.inventory.weaponInventory.indexOf(weaponId);
+    if (index < 0) {
+      return;
+    }
+    this.inventory.weaponInventory.splice(index, 1);
+    if (this.inventory.equippedWeapon !== weaponId) {
+      return;
+    }
+    const fallback = this.inventory.weaponInventory[Math.min(index, this.inventory.weaponInventory.length - 1)]
+      ?? this.inventory.weaponInventory[this.inventory.weaponInventory.length - 1];
+    if (fallback) {
+      this.inventory.equippedWeapon = fallback;
+      return;
+    }
+    this.inventory.weaponInventory.push("knife");
+    this.inventory.equippedWeapon = "knife";
   }
 
   private pickUpDroppedWeaponsInHitbox(hitbox: Hitbox): void {
@@ -2074,14 +2189,15 @@ export class CombatSystem {
         target.invulnerable = previousInvulnerable;
       }
     }
-    this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, "#ff8f3d", "EXPLOSION");
-    this.addEffect("explosion", options.x, options.y, options.x + options.radius * 0.7, options.y, "#fff4a8", "FIREBALL");
-    this.addEffect("aura", options.x, options.y, options.x + options.radius * 0.9, options.y, "#2b2b32", "SMOKE CLOUD");
-    this.addEffect("shockwave", options.x, options.y, options.x + options.radius, options.y, "#ffcf5a", "BOOM");
-    for (let index = 0; index < 12; index += 1) {
-      const angle = (Math.PI * 2 * index) / 12;
+    const holy = options.weaponId === "holy-bazooka";
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, holy ? "#fff4a8" : "#ff8f3d", holy ? "HOLY EXPLOSION" : "EXPLOSION");
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius * 0.7, options.y, holy ? "#ffffff" : "#fff4a8", holy ? "HOLY FIREBALL" : "FIREBALL");
+    this.addEffect("aura", options.x, options.y, options.x + options.radius * 0.9, options.y, holy ? "#d9f7ff" : "#2b2b32", holy ? "HOLY SMOKE" : "SMOKE CLOUD");
+    this.addEffect("shockwave", options.x, options.y, options.x + options.radius, options.y, holy ? "#ffffff" : "#ffcf5a", holy ? "HOLY BOOM" : "BOOM");
+    for (let index = 0; index < (holy ? 18 : 12); index += 1) {
+      const angle = (Math.PI * 2 * index) / (holy ? 18 : 12);
       const reach = options.radius * (0.24 + (index % 4) * 0.12);
-      this.addEffect("spark", options.x, options.y, options.x + Math.cos(angle) * reach, options.y + Math.sin(angle) * reach, index % 2 === 0 ? "#ffcf5a" : "#ff8f3d", "DEBRIS");
+      this.addEffect("spark", options.x, options.y, options.x + Math.cos(angle) * reach, options.y + Math.sin(angle) * reach, holy ? (index % 2 === 0 ? "#ffffff" : "#fff4a8") : index % 2 === 0 ? "#ffcf5a" : "#ff8f3d", holy ? "HOLY DEBRIS" : "DEBRIS");
     }
   }
 
@@ -2505,6 +2621,7 @@ export class CombatSystem {
         age: 0,
         pickupable: false,
       });
+      this.removeThrownWeaponFromInventory(weaponId);
     }
     this.projectiles.push({
       id: this.makeId("throw"),
@@ -2570,6 +2687,68 @@ export class CombatSystem {
         }
       }
     }
+  }
+
+  private updateHolyBazookaAmmo(dt: number, players: PlayerPhysicsState[]): void {
+    const ammo = this.inventory.ammo["holy-bazooka"];
+    if (!ammo) {
+      return;
+    }
+
+    this.holyBazookaAmmoSpawnTimer -= dt;
+    while (this.holyBazookaAmmoSpawnTimer <= 0) {
+      this.holyBazookaAmmoSpawnTimer += holyBazookaAmmoSpawnSeconds;
+      if (this.ammoPickups.length < holyBazookaMaxAmmoPickups) {
+        this.spawnHolyBazookaAmmoPickup(players);
+      }
+    }
+
+    for (const pickup of this.ammoPickups) {
+      pickup.age += dt;
+    }
+
+    for (const pickup of [...this.ammoPickups]) {
+      if (pickup.weaponId !== "holy-bazooka") {
+        continue;
+      }
+      if (ammo.magazine >= holyBazookaMaxLoadedAmmo) {
+        continue;
+      }
+      for (const player of players) {
+        const center = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
+        if (Math.hypot(center.x - pickup.x, center.y - pickup.y) > holyBazookaPickupRadius) {
+          continue;
+        }
+        ammo.magazine = Math.min(holyBazookaMaxLoadedAmmo, ammo.magazine + 1);
+        const index = this.ammoPickups.indexOf(pickup);
+        if (index >= 0) {
+          this.ammoPickups.splice(index, 1);
+        }
+        this.addEffect("pickup", pickup.x, pickup.y, pickup.x, pickup.y - 34, colorForWeapon("holy-bazooka"), "+1 HOLY");
+        this.addEffect("aura", pickup.x, pickup.y, pickup.x, pickup.y - 32, "#ffffff", "AMMO");
+        this.queueSound("holy-bazooka-pickup");
+        break;
+      }
+    }
+
+    removeWhere(this.ammoPickups, (pickup) => pickup.age > 45);
+  }
+
+  private spawnHolyBazookaAmmoPickup(players: PlayerPhysicsState[]): void {
+    const offsets = [-760, -480, -180, 160, 460, 740, 0, 620];
+    const anchor = players[this.holyBazookaAmmoSpawnIndex % Math.max(players.length, 1)];
+    const anchorX = anchor ? anchor.x + anchor.width / 2 : 0;
+    const x = clamp(anchorX + offsets[this.holyBazookaAmmoSpawnIndex % offsets.length], DEFAULT_PHYSICS.platformLeft + 80, DEFAULT_PHYSICS.platformRight - 80);
+    const y = DEFAULT_PHYSICS.groundY - 20;
+    this.holyBazookaAmmoSpawnIndex += 1;
+    this.ammoPickups.push({
+      id: this.makeId("ammo"),
+      weaponId: "holy-bazooka",
+      x,
+      y,
+      age: 0,
+    });
+    this.addEffect("aura", x, y, x, y - 42, colorForWeapon("holy-bazooka"), "HOLY AMMO");
   }
 
   private updateWeaponCharge(id: WeaponId, charge: WeaponChargeState, dt: number): void {
@@ -2693,6 +2872,10 @@ export class CombatSystem {
     for (const projectile of this.projectiles) {
       if (projectile.weaponId === "rocket") {
         this.updateRocketProjectile(projectile, dt, players);
+        continue;
+      }
+      if (projectile.weaponId === "holy-bazooka") {
+        this.updateHolyBazookaProjectile(projectile, dt);
         continue;
       }
       if (projectile.weaponId === "hands") {
@@ -2837,6 +3020,138 @@ export class CombatSystem {
         this.rockets.delete(ownerId);
       }
     }
+  }
+
+  private updateHolyBazookaProjectile(projectile: Projectile, dt: number): void {
+    projectile.age += dt;
+    const previousX = projectile.x;
+    const previousY = projectile.y;
+    if (!projectile.visualOnly) {
+      const target = this.findNearestHolyBazookaTarget(projectile);
+      if (target) {
+        const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height * 0.36 };
+        const desired = normalize({ x: targetCenter.x - projectile.x, y: targetCenter.y - projectile.y });
+        const current = normalize({ x: projectile.vx, y: projectile.vy });
+        const turn = Math.min(1, (projectile.homingStrength ?? holyBazookaHomingStrength) * dt);
+        const blended = normalize({
+          x: lerp(current.x, desired.x, turn),
+          y: lerp(current.y, desired.y, turn),
+        });
+        const speed = clamp(Math.hypot(projectile.vx, projectile.vy) + dt * 120, holyBazookaMissileSpeed, holyBazookaMissileMaxSpeed);
+        projectile.vx = blended.x * speed;
+        projectile.vy = blended.y * speed;
+        projectile.targetId = target.id;
+      }
+    }
+
+    projectile.x += projectile.vx * dt;
+    projectile.y += projectile.vy * dt;
+    const direction = normalize({ x: projectile.vx, y: projectile.vy });
+    this.addEffect("tracer", projectile.x, projectile.y, projectile.x - direction.x * 74, projectile.y - direction.y * 44, projectile.visualOnly ? "#fff4a8" : colorForWeapon("holy-bazooka"), "HOLY TRAIL");
+
+    if (projectile.visualOnly) {
+      if (projectile.age > projectile.lifetime || projectile.y >= COMBAT_TUNING.projectiles.floorY - projectile.radius) {
+        projectile.age = projectile.lifetime + 1;
+      }
+      return;
+    }
+
+    const swept = sweptProjectileBounds(projectile, previousX, previousY);
+    for (const target of this.combatants.values()) {
+      if (target.id === projectile.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      if (intersectsRect(swept, target)) {
+        projectile.x = target.x + target.width / 2;
+        projectile.y = target.y + target.height / 2;
+        this.explodeHolyBazooka(projectile);
+        return;
+      }
+    }
+
+    const groundY = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+    if (projectile.y >= groundY && projectile.age > 0.12) {
+      projectile.y = groundY;
+      this.explodeHolyBazooka(projectile);
+      return;
+    }
+    if (projectile.age > projectile.lifetime) {
+      this.explodeHolyBazooka(projectile);
+    }
+  }
+
+  private findNearestHolyBazookaTarget(projectile: Projectile): Combatant | undefined {
+    let nearest: { target: Combatant; distance: number } | undefined;
+    for (const target of this.combatants.values()) {
+      if (target.id === projectile.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      const distance = Math.hypot(target.x + target.width / 2 - projectile.x, target.y + target.height / 2 - projectile.y);
+      if (distance > 1500) {
+        continue;
+      }
+      if (!nearest || distance < nearest.distance) {
+        nearest = { target, distance };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private explodeHolyBazooka(projectile: Projectile): void {
+    if (projectile.age > projectile.lifetime + 0.5) {
+      return;
+    }
+    const before = new Map<string, number>();
+    for (const target of this.combatants.values()) {
+      if (target.id !== projectile.ownerId && target.respawnTimer <= 0 && target.hp > 0) {
+        before.set(target.id, target.hp);
+      }
+    }
+    this.applyExplosionDamage({
+      sourceId: projectile.ownerId,
+      weaponId: "holy-bazooka",
+      x: projectile.x,
+      y: projectile.y,
+      radius: holyBazookaExplosionRadius,
+      centerDamage: holyBazookaExplosionCenterDamage,
+      edgeDamage: holyBazookaExplosionEdgeDamage,
+      centerKnockback: holyBazookaExplosionCenterKnockback,
+      edgeKnockback: holyBazookaExplosionEdgeKnockback,
+      centerStun: holyBazookaExplosionCenterStun,
+      edgeStun: holyBazookaExplosionEdgeStun,
+      label: "Holy Bazooka Explosion",
+    });
+    let capturedHealth = 0;
+    for (const [id, hpBefore] of before.entries()) {
+      const target = this.combatants.get(id);
+      capturedHealth += Math.max(0, hpBefore - (target?.hp ?? 0));
+    }
+    this.applyHolyBazookaHealthSteal(projectile.ownerId, capturedHealth);
+    this.queueSound("holy-bazooka-explode");
+    projectile.age = projectile.lifetime + 1;
+  }
+
+  private applyHolyBazookaHealthSteal(ownerId: string, capturedHealth: number): void {
+    const owner = this.combatants.get(ownerId);
+    if (!owner || capturedHealth <= 0) {
+      return;
+    }
+    if (owner.respawnTimer > 0) {
+      owner.respawnTimer = 0;
+      owner.invulnerable = Math.max(owner.invulnerable, 0.6);
+    }
+    if (capturedHealth > Math.max(1, owner.hp)) {
+      owner.maxHp = Math.min(holyBazookaMaxHpCap, owner.maxHp + Math.round(capturedHealth));
+    }
+    const heal = capturedHealth > owner.hp
+      ? Math.max(45, Math.round(capturedHealth * 0.65))
+      : Math.round(capturedHealth);
+    owner.hp = Math.min(owner.maxHp, Math.max(1, owner.hp) + heal);
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("holyBuff"));
+    const cx = owner.x + owner.width / 2;
+    const cy = owner.y + owner.height / 2;
+    this.addEffect("aura", cx, cy, cx, cy - 72, colorForWeapon("holy-bazooka"), "HEALTH STEAL");
+    this.addEffect("spark", cx - 14, owner.y + owner.height - 4, cx - 14, owner.y - 24, "#fff4a8", `+${Math.round(capturedHealth)}`);
   }
 
   private updateRocketProjectile(projectile: Projectile, dt: number, players: PlayerPhysicsState[]): void {
@@ -3443,6 +3758,7 @@ export class CombatSystem {
       if (!owner) {
         continue;
       }
+      const superLegsEquipped = owner.statuses.some((status) => status.id === "superLegs");
       for (const target of this.combatants.values()) {
         if (target.id === player.id || target.respawnTimer > 0) {
           continue;
@@ -3451,13 +3767,18 @@ export class CombatSystem {
         if ((player.sliding || player.action === "slide" || player.action === "lowSlide") && intersectsRect(owner, target)) {
           const low = player.lowSliding || player.action === "lowSlide";
           this.applyBodyHit(player.id, target, low ? "low-slide" : "slide", {
-            damage: low ? 11 : 7,
-            knockback: { x: player.facing * (low ? 610 : 390), y: low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce },
-            stun: low ? 0.72 : 0.48,
-            label: low ? "Low Slide Trip" : "Slide Trip",
+            damage: superLegsEquipped ? (low ? 18 : 13) : low ? 11 : 7,
+            knockback: {
+              x: player.facing * (superLegsEquipped ? (low ? 760 : 540) : low ? 610 : 390),
+              y: superLegsEquipped ? (low ? -780 : -560) : low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce,
+            },
+            stun: superLegsEquipped ? (low ? 0.88 : 0.62) : low ? 0.72 : 0.48,
+            label: superLegsEquipped ? (low ? "Super Low Slide Trip" : "Super Slide Trip") : low ? "Low Slide Trip" : "Slide Trip",
             status: "tripped",
             sound: low ? "low-slide" : "player-stunned",
             effect: "trip",
+            weaponId: superLegsEquipped ? "super-legs" : undefined,
+            color: superLegsEquipped ? colorForWeapon("super-legs") : undefined,
           });
         }
 
@@ -3503,16 +3824,21 @@ export class CombatSystem {
         const stompWindow = horizontalOverlap && player.velocityY > 180 && playerBottom >= target.y && playerBottom <= target.y + 28 && owner.y < target.y;
         if (stompWindow) {
           const hit = this.applyBodyHit(player.id, target, "stomp", {
-            damage: COMBAT_TUNING.headStomp.damage,
-            knockback: { x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * 110, y: COMBAT_TUNING.headStomp.targetKnockdownForce },
-            stun: 0.34,
-            label: "Head Stomp",
+            damage: superLegsEquipped ? 20 : COMBAT_TUNING.headStomp.damage,
+            knockback: {
+              x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * (superLegsEquipped ? 340 : 110),
+              y: superLegsEquipped ? -620 : COMBAT_TUNING.headStomp.targetKnockdownForce,
+            },
+            stun: superLegsEquipped ? 0.5 : 0.34,
+            label: superLegsEquipped ? "Super Head Stomp" : "Head Stomp",
             status: "daze",
             sound: "head-stomp",
             effect: "stomp",
+            weaponId: superLegsEquipped ? "super-legs" : undefined,
+            color: superLegsEquipped ? colorForWeapon("super-legs") : undefined,
           });
           if (hit) {
-            player.velocityY = COMBAT_TUNING.headStomp.bounceForce;
+            player.velocityY = superLegsEquipped ? -980 : COMBAT_TUNING.headStomp.bounceForce;
             player.jumpsUsed = 1;
             player.airDiving = false;
             player.airDiveTimer = 0;
@@ -3521,7 +3847,7 @@ export class CombatSystem {
             player.jumpBufferTimer = 0;
             player.coyoteTimer = 0;
             player.grounded = false;
-            owner.velocityY = COMBAT_TUNING.headStomp.bounceForce;
+            owner.velocityY = superLegsEquipped ? -980 : COMBAT_TUNING.headStomp.bounceForce;
           }
         }
 
@@ -3539,28 +3865,41 @@ export class CombatSystem {
 
         if (player.groundSlamming && intersectsRect(owner, target)) {
           this.applyBodyHit(player.id, target, "ground-slam-body", {
-            damage: 15,
-            knockback: { x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * 210, y: -280 },
-            stun: 0.48,
-            label: "Ground Slam",
+            damage: superLegsEquipped ? 24 : 15,
+            knockback: {
+              x: Math.sign((target.x + target.width / 2) - (owner.x + owner.width / 2) || 1) * (superLegsEquipped ? 360 : 210),
+              y: superLegsEquipped ? -560 : -280,
+            },
+            stun: superLegsEquipped ? 0.64 : 0.48,
+            label: superLegsEquipped ? "Super Body Slam" : "Ground Slam",
             status: "daze",
             sound: "ground-slam-impact",
             effect: "slam",
+            weaponId: superLegsEquipped ? "super-legs" : undefined,
+            color: superLegsEquipped ? colorForWeapon("super-legs") : undefined,
           });
         }
 
         if (player.justSlamLanded) {
           const centerX = owner.x + owner.width / 2;
           const targetX = target.x + target.width / 2;
-          if (Math.abs(targetX - centerX) <= COMBAT_TUNING.groundSlam.radius && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 90) {
+          const slamRadius = superLegsEquipped ? 235 : COMBAT_TUNING.groundSlam.radius;
+          const distance = Math.abs(targetX - centerX);
+          if (distance <= slamRadius && Math.abs((target.y + target.height) - DEFAULT_PHYSICS.groundY) <= 90) {
+            const falloff = 1 - distance / slamRadius;
+            const slamDamage = superLegsEquipped ? Math.round(lerp(16, 46, falloff)) : COMBAT_TUNING.groundSlam.damage;
+            const slamKnockback = superLegsEquipped ? lerp(360, 760, falloff) : COMBAT_TUNING.groundSlam.knockback;
+            const slamLift = superLegsEquipped ? -lerp(430, 720, falloff) : -320;
             this.applyBodyHit(player.id, target, "ground-slam-wave", {
-              damage: COMBAT_TUNING.groundSlam.damage,
-              knockback: { x: Math.sign(targetX - centerX || 1) * COMBAT_TUNING.groundSlam.knockback, y: -320 },
-              stun: COMBAT_TUNING.groundSlam.stun,
-              label: "Slam Wave",
+              damage: slamDamage,
+              knockback: { x: Math.sign(targetX - centerX || 1) * slamKnockback, y: slamLift },
+              stun: superLegsEquipped ? lerp(0.5, 0.82, falloff) : COMBAT_TUNING.groundSlam.stun,
+              label: superLegsEquipped ? "SUPER LEG SLAM" : "Slam Wave",
               status: "daze",
               sound: "ground-slam-impact",
               effect: "shockwave",
+              weaponId: superLegsEquipped ? "super-legs" : undefined,
+              color: superLegsEquipped ? colorForWeapon("super-legs") : undefined,
             });
           }
         }
@@ -3688,7 +4027,12 @@ export class CombatSystem {
       || label === "EXPLOSION"
       || label === "FIREBALL"
       || label === "SMOKE CLOUD"
-      || label === "DEBRIS";
+      || label === "DEBRIS"
+      || label === "HOLY EXPLOSION"
+      || label === "HOLY FIREBALL"
+      || label === "HOLY SMOKE"
+      || label === "HOLY BOOM"
+      || label === "HOLY DEBRIS";
     const lingeringAura = label === "DEATH AURA" || label === "FROZEN" || label === "BUFFED";
     this.effects.push({
       id: this.makeId("fx"),
@@ -3880,6 +4224,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#08080c";
     case "rocket":
       return "#ff8f3d";
+    case "holy-bazooka":
+      return "#fff4a8";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -4052,18 +4398,18 @@ function superLegsKickProfile(kind: SuperLegsKickKind): {
 } {
   switch (kind) {
     case "forward":
-      return { label: "Flying Kick", damage: 14, range: 92, knockbackX: 390, knockbackY: -120, stun: 0.26, cooldown: 0.48, status: "daze" };
+      return { label: "Flying Kick", damage: 22, range: 108, knockbackX: 620, knockbackY: -180, stun: 0.34, cooldown: 0.42, status: "daze" };
     case "downward":
-      return { label: "Stomp Kick", damage: 15, range: 58, knockbackX: 160, knockbackY: 520, stun: 0.3, cooldown: 0.52, status: "tripped" };
+      return { label: "Stomp Kick", damage: 24, range: 70, knockbackX: 240, knockbackY: 720, stun: 0.42, cooldown: 0.48, status: "tripped" };
     case "back":
-      return { label: "Back Kick", damage: 11, range: 64, knockbackX: 300, knockbackY: -90, stun: 0.22, cooldown: 0.42 };
+      return { label: "Back Kick", damage: 18, range: 78, knockbackX: 470, knockbackY: -130, stun: 0.28, cooldown: 0.36 };
     case "slam":
-      return { label: "Leg Slam", damage: 19, range: 112, knockbackX: 430, knockbackY: -380, stun: 0.46, cooldown: 0.72, status: "tripped" };
+      return { label: "Leg Slam", damage: 34, range: 138, knockbackX: 720, knockbackY: -640, stun: 0.68, cooldown: 0.62, status: "tripped" };
     case "bounce":
-      return { label: "Bounce Kick", damage: 12, range: 58, knockbackX: 190, knockbackY: 460, stun: 0.24, cooldown: 0.38 };
+      return { label: "Bounce Kick", damage: 18, range: 70, knockbackX: 280, knockbackY: 620, stun: 0.32, cooldown: 0.34 };
     case "neutral":
     default:
-      return { label: "Rising Kick", damage: 12, range: 58, knockbackX: 230, knockbackY: -340, stun: 0.24, cooldown: 0.42 };
+      return { label: "Rising Kick", damage: 18, range: 76, knockbackX: 360, knockbackY: -520, stun: 0.32, cooldown: 0.38 };
   }
 }
 

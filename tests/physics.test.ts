@@ -61,6 +61,29 @@ describe("player physics", () => {
     expect(spent.jumpsUsed).toBe(2);
   });
 
+  it("supports an obvious third jump when Super Legs physics enables triple jump", () => {
+    const superLegsPhysics = {
+      ...DEFAULT_PHYSICS,
+      maxAirJumps: 3,
+      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * 1.75,
+      doubleJumpVelocity: DEFAULT_PHYSICS.jumpVelocity * 1.45,
+      thirdJumpVelocity: DEFAULT_PHYSICS.jumpVelocity * 1.32,
+    };
+    const airborne = {
+      ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 120,
+      grounded: false,
+      coyoteTimer: 0,
+      jumpsUsed: 2,
+      velocityY: 80,
+    };
+
+    const thirdJump = stepPlayer(airborne, { ...neutralInput, jumpPressed: true, jumpHeld: true }, 1 / 60, superLegsPhysics);
+
+    expect(thirdJump.jumpsUsed).toBe(3);
+    expect(thirdJump.velocityY).toBeLessThanOrEqual(DEFAULT_PHYSICS.jumpVelocity * 1.25);
+  });
+
   it("buffers a jump shortly before landing", () => {
     const fallingNearGround = {
       ...createPlayerState("p1", 0, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height - 2),

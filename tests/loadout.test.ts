@@ -57,6 +57,11 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("super-legs", "leftHand")).toBe(false);
     expect(isSlotCompatible("super-legs", "frontStrap")).toBe(false);
     expect(isSlotCompatible("super-legs", "attachment")).toBe(false);
+    expect(isSlotCompatible("holy-bazooka", "rightHand")).toBe(true);
+    expect(isSlotCompatible("holy-bazooka", "leftHand")).toBe(true);
+    expect(isSlotCompatible("holy-bazooka", "attachment")).toBe(false);
+    expect(isSlotCompatible("holy-bazooka", "frontStrap")).toBe(false);
+    expect(isSlotCompatible("holy-bazooka", "legs")).toBe(false);
     expect(isSlotCompatible("rocket", "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");

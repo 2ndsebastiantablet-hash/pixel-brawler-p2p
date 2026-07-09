@@ -20,6 +20,9 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "rocket", "Rocket", "rightHand");
     await expectSlot(page, "rightHand", "Rocket");
 
+    await dragItemToSlot(page, "holy-bazooka", "Holy Bazooka", "rightHand");
+    await expectSlot(page, "rightHand", "Holy Bazooka");
+
     await dragItemToSlot(page, "death-aura", "Death Aura", "frontStrap");
     await expectSlot(page, "frontStrap", "Death Aura");
 
@@ -33,22 +36,26 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "legs", "Super Legs");
 
     await dragItemToSlot(page, "death-aura", "Death Aura", "rightHand");
-    await expectSlot(page, "rightHand", "Rocket");
+    await expectSlot(page, "rightHand", "Holy Bazooka");
     await expect(page.locator("[data-loadout-error]")).toContainText("Death Aura cannot attach");
 
     await dragItemToSlot(page, "wings", "Wings", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Wings cannot attach");
 
+    await dragItemToSlot(page, "holy-bazooka", "Holy Bazooka", "attachment");
+    await expectSlot(page, "attachment", "Virgin Blood");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Holy Bazooka cannot attach");
+
     await dragItemToSlot(page, "super-legs", "Super Legs", "rightHand");
-    await expectSlot(page, "rightHand", "Rocket");
+    await expectSlot(page, "rightHand", "Holy Bazooka");
     await expect(page.locator("[data-loadout-error]")).toContainText("Super Legs cannot attach");
 
     await page.locator("[data-offline]").click();
     await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Death Aura");
     await expect(page.locator(".loadout-strip")).toContainText("E Back Strap: Wings");
-    await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Rocket");
-    await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Rocket");
+    await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Holy Bazooka");
+    await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Holy Bazooka");
     await expect(page.locator(".loadout-strip")).toContainText("F Attachment: Virgin Blood");
     await expect(page.locator(".loadout-strip")).toContainText("Legs: Super Legs");
   });

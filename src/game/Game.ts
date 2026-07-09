@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -789,6 +789,12 @@ export class Game {
     if (result.weaponId === "lightning-rod" && result.label === "Sky Strike") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.28);
     }
+    if (result.weaponId === "holy-bazooka") {
+      this.shakeTimer = Math.max(this.shakeTimer, result.kind === "fired" ? 0.2 : 0.12);
+    }
+    if (result.weaponId === "super-legs" && result.label.includes("Slam")) {
+      this.shakeTimer = Math.max(this.shakeTimer, 0.16);
+    }
     if (result.weaponId === "machete" && kind === "secondary") {
       this.shakeTimer = Math.max(this.shakeTimer, 0.08);
     }
@@ -803,7 +809,8 @@ export class Game {
       case "ground-slam-impact":
       case "laser-overcharge":
       case "rocket-explode":
-        this.shakeTimer = Math.max(this.shakeTimer, 0.22);
+      case "holy-bazooka-explode":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : 0.22);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -965,16 +972,23 @@ export class Game {
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
     const superLegs = loadoutHasWeapon(this.loadout, "super-legs");
-    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy * (superLegs ? 1.1 : 1);
+    const superLegsMoveScale = superLegs ? 1.18 : 1;
+    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy * superLegsMoveScale;
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
-      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale * (superLegs ? 1.08 : 1),
+      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale * (superLegs ? 1.12 : 1),
       airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale * (superLegs ? 1.18 : 1),
       jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.08 : 1),
       doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.1 : 1),
+      thirdJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.04 : 1) * (superLegs ? 0.96 : 1),
+      maxAirJumps: superLegs ? 3 : 2,
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
+      slideDuration: DEFAULT_PHYSICS.slideDuration * (superLegs ? 1.18 : 1),
+      lowSlideDuration: DEFAULT_PHYSICS.lowSlideDuration * (superLegs ? 1.16 : 1),
+      groundSlamVelocity: DEFAULT_PHYSICS.groundSlamVelocity * (superLegs ? 1.28 : 1),
+      slamLandingDuration: DEFAULT_PHYSICS.slamLandingDuration * (superLegs ? 0.72 : 1),
     };
     return weapon.id === "wings" || strappedWings || angelWings ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
   }
@@ -1360,6 +1374,7 @@ export class Game {
       && weaponId !== "axe"
       && weaponId !== "sledgehammer"
       && weaponId !== "rocket"
+      && weaponId !== "holy-bazooka"
       && weaponId !== "lightning-rod"
       && weaponId !== "slingshot"
       && weaponId !== "whip"
@@ -1443,6 +1458,25 @@ export class Game {
       if (active > 0) {
         ctx.fillStyle = "rgba(255, 143, 61, 0.55)";
         this.pixelRect(ctx, -24, -6, 24, 12);
+      }
+    } else if (weaponId === "holy-bazooka") {
+      const glow = active > 0 ? 1 : Math.min(1, heldMs / 900);
+      ctx.fillStyle = "#465063";
+      this.pixelRect(ctx, -2, -10, 58, 20);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, 42, -13, 21, 26);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, 61, -6, 13, 12);
+      ctx.fillStyle = "#2b3542";
+      this.pixelRect(ctx, 10, 9, 13, 16);
+      this.pixelRect(ctx, 28, 8, 8, 14);
+      ctx.fillStyle = "#5ad7ff";
+      this.pixelRect(ctx, 2, -6, 8, 12);
+      if (active > 0 || glow > 0.1) {
+        ctx.fillStyle = "rgba(255, 244, 168, 0.58)";
+        this.pixelRect(ctx, -34, -8, 30 + Math.round(glow * 18), 16);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.42)";
+        this.pixelRect(ctx, 68, -15, 26 + Math.round(glow * 10), 30);
       }
     } else if (weaponId === "lightning-rod") {
       ctx.fillStyle = "#ffd84d";
@@ -1756,22 +1790,39 @@ export class Game {
     const speed = Math.min(1, Math.abs(state.velocityX) / 650);
     const glow = 0.38 + Math.sin(performance.now() * 0.018) * 0.08;
     ctx.save();
-    ctx.globalAlpha = 0.88;
-    ctx.fillStyle = "rgba(124, 255, 107, 0.24)";
-    this.pixelRect(ctx, x + 1, y + 35, 12, 18);
-    this.pixelRect(ctx, x + 19, y + 35, 12, 18);
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "rgba(124, 255, 107, 0.26)";
+    this.pixelRect(ctx, x - 1, y + 30, 14, 25);
+    this.pixelRect(ctx, x + 19, y + 30, 14, 25);
+    ctx.fillStyle = "#2b3542";
+    this.pixelRect(ctx, x + 4, y + 31, 5, 18);
+    this.pixelRect(ctx, x + 23, y + 31, 5, 18);
     ctx.fillStyle = "#7cff6b";
-    this.pixelRect(ctx, x, y + 46, 15, 7);
-    this.pixelRect(ctx, x + 17, y + 46, 15, 7);
+    this.pixelRect(ctx, x + 1, y + 33, 10, 19);
+    this.pixelRect(ctx, x + 21, y + 33, 10, 19);
+    this.pixelRect(ctx, x - 3, y + 47, 18, 8);
+    this.pixelRect(ctx, x + 17, y + 47, 18, 8);
     ctx.fillStyle = "#ffffff";
-    this.pixelRect(ctx, x + 3, y + 43, 8, 3);
-    this.pixelRect(ctx, x + 20, y + 43, 8, 3);
+    this.pixelRect(ctx, x + 3, y + 36, 6, 4);
+    this.pixelRect(ctx, x + 23, y + 36, 6, 4);
+    this.pixelRect(ctx, x + 1, y + 50, 10, 3);
+    this.pixelRect(ctx, x + 21, y + 50, 10, 3);
+    ctx.fillStyle = "#5ad7ff";
+    this.pixelRect(ctx, x + 11, y + 39, 4, 8);
+    this.pixelRect(ctx, x + 17, y + 39, 4, 8);
     if (speed > 0.15 || !state.grounded) {
       ctx.globalAlpha = Math.max(0.24, glow * (0.7 + speed));
       ctx.fillStyle = "#7cff6b";
       const direction = Math.sign(state.velocityX || state.facing || 1);
-      this.pixelRect(ctx, x - direction * 20, y + 51, direction * 18, 4);
-      this.pixelRect(ctx, x - direction * 34, y + 44, direction * 24, 3);
+      this.pixelRect(ctx, x - direction * 24, y + 52, direction * 22, 5);
+      this.pixelRect(ctx, x - direction * 40, y + 43, direction * 30, 4);
+      this.pixelRect(ctx, x - direction * 54, y + 35, direction * 34, 3);
+    }
+    if (state.justSlamLanded || state.groundSlamming) {
+      ctx.globalAlpha = 0.42;
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x - 44, y + 54, 120, 7);
+      this.pixelRect(ctx, x - 28, y + 63, 86, 5);
     }
     ctx.restore();
   }
@@ -1782,6 +1833,9 @@ export class Game {
       if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id)) {
         this.drawCombatant(ctx, combatant);
       }
+    }
+    for (const pickup of snapshot.ammoPickups) {
+      this.drawAmmoPickup(ctx, pickup);
     }
     for (const dropped of snapshot.droppedWeapons) {
       this.drawDroppedWeapon(ctx, dropped);
@@ -1809,6 +1863,27 @@ export class Game {
       ctx.fillStyle = number.color;
       ctx.fillText(text, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
     }
+  }
+
+  private drawAmmoPickup(ctx: CanvasRenderingContext2D, pickup: AmmoPickup): void {
+    const x = Math.round(pickup.x - this.camera.x);
+    const y = Math.round(pickup.y - this.camera.y);
+    const pulse = 1 + Math.sin(performance.now() * 0.012 + pickup.age * 4) * 0.16;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "rgba(255, 244, 168, 0.3)";
+    ctx.fillRect(x - Math.round(20 * pulse), y - Math.round(13 * pulse), Math.round(40 * pulse), Math.round(26 * pulse));
+    ctx.fillStyle = "#fff4a8";
+    ctx.fillRect(x - 12, y - 8, 24, 16);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(x - 7, y - 5, 14, 10);
+    ctx.fillStyle = "#5ad7ff";
+    ctx.fillRect(x - 3, y - 2, 6, 4);
+    ctx.fillStyle = "#fff4a8";
+    ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("+1", x, y - 18);
+    ctx.restore();
   }
 
   private drawCombatant(ctx: CanvasRenderingContext2D, combatant: Combatant): void {
@@ -1895,6 +1970,24 @@ export class Game {
         ctx.fillStyle = "rgba(43, 43, 50, 0.55)";
         ctx.fillRect(facing > 0 ? -50 : 34, -4, 18, 8);
       }
+      ctx.restore();
+      return;
+    }
+    if (projectile.weaponId === "holy-bazooka") {
+      const angle = Math.atan2(projectile.vy, projectile.vx || 1);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(255, 244, 168, 0.36)";
+      ctx.fillRect(-48, -11, 54, 22);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(-16, -8, 31, 16);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(8, -5, 15, 10);
+      ctx.fillStyle = "#5ad7ff";
+      ctx.fillRect(-10, -4, 8, 8);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.68)";
+      ctx.fillRect(-56, -5, 38, 10);
       ctx.restore();
       return;
     }
@@ -1989,6 +2082,15 @@ export class Game {
     if (dropped.weaponId === "sledgehammer") {
       ctx.fillRect(x - 16, y - 3, 28, 6);
       ctx.fillRect(x + 8, y - 12, 14, 20);
+    } else if (dropped.weaponId === "holy-bazooka") {
+      ctx.fillStyle = "#465063";
+      ctx.fillRect(x - 28, y - 8, 54, 16);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(x + 15, y - 11, 18, 22);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x + 30, y - 4, 10, 8);
+      ctx.fillStyle = "#2b3542";
+      ctx.fillRect(x - 8, y + 6, 12, 14);
     } else if (dropped.weaponId === "whip") {
       for (let index = 0; index < 6; index += 1) {
         ctx.fillRect(x - 18 + index * 7, y + Math.sin(index) * 4, 6, 5);
@@ -2069,19 +2171,21 @@ export class Game {
     const ty = Math.round(effect.ty - this.camera.y);
     if (effect.kind === "shockwave") {
       const targetRadius = Math.max(46, Math.hypot(tx - x, ty - y));
-      const radius = effect.label === "BOOM" ? Math.round(18 + progress * targetRadius) : Math.round(14 + progress * 46);
-      ctx.strokeRect(x - radius, y - (effect.label === "BOOM" ? Math.round(radius * 0.22) : 5), radius * 2, effect.label === "BOOM" ? Math.round(radius * 0.44) : 10);
+      const bigBoom = effect.label === "BOOM" || effect.label === "HOLY BOOM";
+      const radius = bigBoom ? Math.round((effect.label === "HOLY BOOM" ? 28 : 18) + progress * targetRadius) : Math.round(14 + progress * 46);
+      ctx.strokeRect(x - radius, y - (bigBoom ? Math.round(radius * 0.22) : 5), radius * 2, bigBoom ? Math.round(radius * 0.44) : 10);
     } else if (effect.kind === "explosion") {
+      const holy = effect.label?.startsWith("HOLY") ?? false;
       const targetRadius = Math.max(42, Math.hypot(tx - x, ty - y));
-      const radius = Math.round((effect.label === "FIREBALL" ? 22 : 34) + progress * targetRadius);
+      const radius = Math.round((effect.label === "FIREBALL" || effect.label === "HOLY FIREBALL" ? 22 : holy ? 46 : 34) + progress * targetRadius);
       const core = Math.max(10, Math.round(radius * (1 - progress * 0.55)));
-      ctx.fillStyle = effect.label === "FIREBALL" ? "#fff4a8" : "#ff8f3d";
+      ctx.fillStyle = holy ? "#ffffff" : effect.label === "FIREBALL" ? "#fff4a8" : "#ff8f3d";
       ctx.fillRect(x - core, y - core, core * 2, core * 2);
-      ctx.fillStyle = "rgba(255, 111, 80, 0.58)";
+      ctx.fillStyle = holy ? "rgba(255, 244, 168, 0.58)" : "rgba(255, 111, 80, 0.58)";
       ctx.fillRect(x - radius, y - Math.round(radius * 0.62), radius * 2, Math.round(radius * 1.24));
-      ctx.fillStyle = "rgba(255, 207, 90, 0.72)";
+      ctx.fillStyle = holy ? "rgba(255, 255, 255, 0.72)" : "rgba(255, 207, 90, 0.72)";
       ctx.fillRect(x - Math.round(radius * 0.62), y - Math.round(radius * 0.42), Math.round(radius * 1.24), Math.round(radius * 0.84));
-      ctx.fillStyle = "rgba(43, 43, 50, 0.42)";
+      ctx.fillStyle = holy ? "rgba(90, 215, 255, 0.28)" : "rgba(43, 43, 50, 0.42)";
       ctx.fillRect(x - Math.round(radius * 0.82), y - Math.round(radius * 0.78), Math.round(radius * 1.64), Math.round(radius * 0.38));
     } else if (effect.kind === "slam") {
       const radius = Math.round(18 + progress * 72);
@@ -2108,7 +2212,7 @@ export class Game {
     } else if (effect.kind === "aura") {
       const targetRadius = Math.max(18, Math.hypot(tx - x, ty - y));
       const deathAura = effect.label === "DEATH AURA" || effect.label === "DEATH RELEASE" || effect.label === "DEATH RECALL";
-      const smokeCloud = effect.label === "SMOKE CLOUD";
+      const smokeCloud = effect.label === "SMOKE CLOUD" || effect.label === "HOLY SMOKE";
       const radius = deathAura
         ? Math.round(effect.label === "DEATH RECALL"
           ? 12 + targetRadius * (1 - progress)
@@ -2405,6 +2509,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#08080c";
     case "rocket":
       return "#ff8f3d";
+    case "holy-bazooka":
+      return "#fff4a8";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -2484,6 +2590,8 @@ function weaponHudDetail(
       return runtime.deathAuraActive ? "Aura active - missing HP strengthens" : "Click pulse aura";
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
+    case "holy-bazooka":
+      return `Ammo pickups - Cooldown ${runtime.chamber.toFixed(1)}s - max HP steals`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -2535,6 +2643,8 @@ function weaponHelper(id: WeaponId): string {
       return "Dark aura freezes and drains - stronger when hurt";
     case "rocket":
       return "Left place - Right light - stand on it to ride";
+    case "holy-bazooka":
+      return "Left fires homing missile - ammo pickups every 10s - huge holy splash";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

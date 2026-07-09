@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(19);
+    expect(fighter.weaponInventory).toHaveLength(20);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -1421,6 +1421,110 @@ describe("combat system", () => {
     expect(target.hp).toBe(hpAfterKick);
   });
 
+  it("makes Super Legs slides and slam waves hit much harder with larger visuals", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState, id: "local", sliding: true, lowSliding: true, action: "lowSlide" as const, facing: 1 as const };
+    combat.syncLocalPlayer(player, "Tester", "#18dff5");
+    combat.setEquipmentStatus("local", "superLegs", true);
+    const slideDummy = combat.spawnTrainingDummy({ x: player.x + 18, y: player.y });
+
+    combat.update(1 / 60, [player]);
+
+    const slideTarget = combat.getCombatant(slideDummy.id)!;
+    expect(slideTarget.hp).toBeLessThanOrEqual(82);
+    expect(slideTarget.velocityX).toBeGreaterThan(1050);
+    expect(slideTarget.velocityY).toBeLessThan(-700);
+
+    const centerDummy = combat.syncRemotePlayer({
+      id: "center-dummy",
+      name: "Center Dummy",
+      color: "#ff6f91",
+      x: player.x + 40,
+      y: player.y,
+      width: player.width,
+      height: player.height,
+      velocityX: 0,
+      velocityY: 0,
+      hp: 100,
+      statuses: [],
+    });
+    const edgeDummy = combat.syncRemotePlayer({
+      id: "edge-dummy",
+      name: "Edge Dummy",
+      color: "#ff6f91",
+      x: player.x + 205,
+      y: player.y,
+      width: player.width,
+      height: player.height,
+      velocityX: 0,
+      velocityY: 0,
+      hp: 100,
+      statuses: [],
+    });
+    for (const id of [centerDummy.id, edgeDummy.id]) {
+      const target = combat.getCombatant(id)!;
+      target.hp = 100;
+      target.invulnerable = 0;
+      target.velocityX = 0;
+      target.velocityY = 0;
+    }
+    const slammer = {
+      ...playerState,
+      id: "local",
+      x: player.x,
+      y: player.y,
+      velocityY: 1380,
+      justSlamLanded: true,
+      action: "slamLanding" as const,
+    };
+    combat.syncLocalPlayer(slammer, "Tester", "#18dff5");
+    combat.setEquipmentStatus("local", "superLegs", true);
+
+    combat.update(1 / 60, [slammer]);
+
+    const center = combat.getCombatant(centerDummy.id)!;
+    const edge = combat.getCombatant(edgeDummy.id)!;
+    expect(center.hp).toBeLessThan(edge.hp);
+    expect(center.hp).toBeLessThanOrEqual(65);
+    expect(edge.hp).toBeLessThan(100);
+    expect(Math.hypot(center.velocityX, center.velocityY)).toBeGreaterThan(1200);
+    expect(Math.hypot(edge.velocityX, edge.velocityY)).toBeGreaterThan(600);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "shockwave" && effect.label === "SUPER LEG SLAM")).toBe(true);
+  });
+
+  it("removes thrown physical weapons from inventory until the ground pickup is collected", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("pistol");
+    const player = { ...playerState, id: "local" };
+
+    const thrown = combat.useSecondary({
+      ownerId: "local",
+      player,
+      aim: { x: 1, y: -0.1 },
+      now: 100,
+      heldMs: 0,
+      isNewPress: true,
+    });
+
+    expect(thrown).toMatchObject({ kind: "fired", weaponId: "pistol", label: "Throw" });
+    expect(combat.getPlayerInventory().weaponInventory).not.toContain("pistol");
+    expect(combat.getPlayerInventory().equippedWeapon).not.toBe("pistol");
+    const dropped = combat.getSnapshot().droppedWeapons.find((item) => item.weaponId === "pistol")!;
+    expect(dropped).toBeDefined();
+    dropped.x = player.x + player.width / 2;
+    dropped.y = player.y + player.height / 2;
+    dropped.vx = 0;
+    dropped.vy = 0;
+    dropped.pickupable = true;
+
+    expect(combat.pickUpNearest(player)).toBe("pistol");
+    expect(combat.getPlayerInventory().weaponInventory).toContain("pistol");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
+    expect(combat.getSnapshot().droppedWeapons.some((item) => item.weaponId === "pistol")).toBe(false);
+  });
+
   it("reduces leg-hit damage and leg slow while Super Legs are equipped", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
@@ -1783,6 +1887,65 @@ describe("combat system", () => {
       expect.objectContaining({ action: "hit", weaponId: "rocket", targetId: "peer-a", label: "Rocket Explosion" }),
     ]));
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["rocket-light", "rocket-explode"]));
+  });
+
+  it("fires Holy Bazooka only with pickup ammo, homes, explodes hardest, and steals health capacity", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("holy-bazooka");
+    const owner = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Host", "#18dff5");
+    const ownerCombatant = combat.getCombatant("peer-a")!;
+    ownerCombatant.hp = 70;
+    ownerCombatant.maxHp = 100;
+    const targetInfo = combat.spawnTrainingDummy({ x: 285, y: playerState.y });
+    const target = combat.getCombatant(targetInfo.id)!;
+    target.hp = 140;
+    target.maxHp = 140;
+    target.invulnerable = 0;
+
+    const empty = combat.usePrimary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(empty.kind).toBe("dry-fire");
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "holy-bazooka")).toBe(false);
+
+    combat.update(10.1, [owner]);
+    const pickup = combat.getSnapshot().ammoPickups.find((item) => item.weaponId === "holy-bazooka");
+    expect(pickup).toBeDefined();
+    pickup!.x = owner.x + owner.width / 2;
+    pickup!.y = owner.y + owner.height / 2;
+    combat.update(1 / 60, [owner]);
+    expect(combat.getPlayerInventory().ammo["holy-bazooka"]?.magazine).toBe(1);
+
+    const fired = combat.usePrimary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 10_500, heldMs: 0, isNewPress: true });
+    expect(fired).toMatchObject({ kind: "fired", weaponId: "holy-bazooka", label: "Holy Bazooka" });
+    expect(combat.getPlayerInventory().ammo["holy-bazooka"]?.magazine).toBe(0);
+    expect(combat.getPlayerInventory().cooldowns["holy-bazooka"]).toBeGreaterThanOrEqual(6.9);
+    expect(owner.velocityX).toBeLessThan(-900);
+
+    const missile = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "holy-bazooka")!;
+    expect(missile).toBeDefined();
+    const initialVy = missile.vy;
+    combat.update(0.4, [owner]);
+    expect(Math.abs(missile.vy)).toBeGreaterThan(Math.abs(initialVy));
+
+    missile.x = target.x + target.width / 2;
+    missile.y = target.y + target.height / 2;
+    missile.vx = 0;
+    missile.vy = 0;
+    target.invulnerable = 0;
+    combat.update(1 / 60, [owner]);
+
+    expect(target.hp).toBeLessThanOrEqual(25);
+    expect(ownerCombatant.maxHp).toBeGreaterThan(100);
+    expect(ownerCombatant.maxHp).toBeLessThanOrEqual(260);
+    expect(ownerCombatant.hp).toBeGreaterThan(70);
+    const explosion = combat.getSnapshot().effects.find((effect) => effect.label === "HOLY EXPLOSION")!;
+    expect(explosion).toMatchObject({ kind: "explosion" });
+    expect(explosion.tx - explosion.x).toBeGreaterThanOrEqual(420);
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "holy-bazooka", targetId: targetInfo.id, label: "Holy Bazooka Explosion" }),
+    ]));
+    expect(combat.consumeSounds()).toContain("holy-bazooka-explode");
   });
 
   it("places and launches Rockets in the aimed facing direction before chaos", () => {

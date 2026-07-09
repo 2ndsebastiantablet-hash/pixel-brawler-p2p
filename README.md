@@ -14,12 +14,12 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, directional melee hitboxes, status effects, weapon cooldowns, reloads, equipment slots, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
-- Nineteen enabled polished weapons/items for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, wings, virgin blood, death aura, rocket, hands, and super legs.
+- Twenty enabled polished weapons/items for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, wings, virgin blood, death aura, rocket, hands, super legs, and holy bazooka.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
-- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, sniper shots, wing flaps, wind, bursts, gust pushback, holy blessing, revive, death aura pulses, rockets, and crawling hands. Volume constants are fed from the central combat tuning file.
-- Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, mouse-directed melee hits, slide trips, stomps, dives, and ground-slam interactions. Remote state also includes active weapon/item, loadout slot visuals, held item silhouettes, visual-only bullets/throws/rockets/hands from combat events, charge aim/charge time, active Death Aura, rocket placed/lit state, and major buff/status visuals.
+- Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, sniper shots, wing flaps, wind, bursts, gust pushback, holy blessing, revive, death aura pulses, rockets, Holy Bazooka shots/explosions/pickups, and crawling hands. Volume constants are fed from the central combat tuning file.
+- Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, mouse-directed melee hits, slide trips, stomps, dives, and ground-slam interactions. Remote state also includes active weapon/item, loadout slot visuals, held item silhouettes, visual-only bullets/throws/rockets/hands/Holy Bazooka missiles from combat events, charge aim/charge time, active Death Aura, rocket placed/lit state, and major buff/status visuals.
 - The arena platform is finite: walking or falling past the stage edge drops into the void, kills the combatant through the normal respawn flow, returns them to spawn, and grants a two-second blue invulnerability glow that ignores damage/knockback locally and online.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
@@ -30,7 +30,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - `A` / `D`: Move.
 - `Space`: Jump, then double jump.
 - With Wings equipped, hold `Space` to launch/flap, release to glide, press `S` in air to dive, and press airborne `Shift` for a movement-only air burst.
-- With Super Legs equipped, `Space` still jumps/double-jumps and also triggers cooldown-gated kick combos based on movement direction: forward flying kick, back kick, downward stomp, or leg slam.
+- With Super Legs equipped, `Space` still jumps/triple-jumps and also triggers cooldown-gated kick combos based on movement direction: forward flying kick, back kick, downward stomp, or leg slam.
 - `Shift` on ground: Dash / slide.
 - `Shift` in air: Air dive.
 - `S` on ground: Duck.
@@ -40,12 +40,12 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - `Escape`: Server info / leave menu, including Edit Character during a match.
 - Mouse move: Aim crosshair.
 - Left mouse: Use the held item primary action.
-- Right mouse: Use the held item alternate/secondary action, such as Knife throw, Axe throw/recall, Rocket light, or Virgin Blood consume.
+- Right mouse: Use the held item alternate/secondary action, such as Knife throw, Axe throw/recall, Rocket light, or Virgin Blood consume. Holy Bazooka uses left mouse only.
 - `Q`: Activate the front strap slot only.
 - `E`: Activate the back strap slot only.
 - `F`: Swap the attachment string item with the current hand item only, or pick up nearby compatible gear first.
 - `R`: Reload weapons that use ammo.
-- `G`: Drop / throw the current active item.
+- `G`: Drop / throw the current active item. Physical non-knife throws leave the inventory until the dropped item is picked up; Axe still uses recall.
 
 ## Enabled Weapons
 
@@ -66,9 +66,10 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Wings: Light mobility item after Axe. Wings have no left-click or right-click attacks, no thrown form, and no dive damage. Hold `Space` to launch and flap upward, release to glide, use `A`/`D` for air control, hold `S` to dive faster, and press airborne `Shift` for a cooldown-gated movement burst. Rapid flapping near a dummy, enemy, or online player creates a visible close gust radius that repeatedly pushes targets away with 0 damage and tiny hitstun until they leave the radius.
 - Virgin Blood: Light holy utility item after Wings. Left or right click consumes it to fully heal, gain a holy buff, and arm one revive once it is held. `F` swaps it between the attachment string and the current hand item instead of consuming it. If killed while the revive is ready, the player revives once with restored HP, invulnerability, renewed holy buff, and 30 seconds of angel wings flight using the Wings movement model. The blessing has a long cooldown and cannot chain infinite revives.
 - Death Aura: Dark utility item after Virgin Blood. Left or right click releases a 60-second dark aura, then starts a 40-second cooldown. Stored suffering from damage taken persists through cooldown and combines with missing health to make the radius larger, damage ticks stronger, freezes longer, and smoke darker. Activation particles expand outward, ending particles pull inward, and frozen targets are shown inside an ice block with heavy gravity until the freeze expires.
-- Rocket: Deployable ridable explosive after Death Aura. As a two-handed loadout item, left mouse places one rocket facing the aimed direction, right mouse lights it when nearby or standing on it, and standing on it attaches the rider. Lit rockets launch straight in their facing direction briefly, then veer into chaotic fire-trail flight; `Space` jumps off before the explosion and destabilizes the path. Rocket explosions are giant true-radius splash attacks with very heavy center damage, lighter edge damage, the biggest knockback in the current game, owner/rider splash damage, and matching fireball/smoke/shockwave/debris visuals.
+- Rocket: Deployable ridable explosive after Death Aura. As a two-handed loadout item, left mouse places one rocket facing the aimed direction, right mouse lights it when nearby or standing on it, and standing on it attaches the rider. Lit rockets launch straight in their facing direction briefly, then veer into chaotic fire-trail flight; `Space` jumps off before the explosion and destabilizes the path. Rocket explosions are giant true-radius splash attacks with very heavy center damage, lighter edge damage, huge knockback, owner/rider splash damage, and matching fireball/smoke/shockwave/debris visuals.
 - Hands: Summoner item after Rocket. Left or right click summons five crawling mini-hands, then the summoner loses their own hands for about 40 seconds and cannot use weapons/items. The mini-hands chase non-owner targets, attach to faces, deal tiny damage over time, and scramble movement until the target spams movement/jump inputs to flick them off.
-- Super Legs: Leg equipment after Hands. Super Legs can only equip in the front leg slot, not the hand, strap, or attachment slots. They increase run speed, acceleration, jump height, double-jump control, and air control; show glowing boots and speed streaks; reduce leg-hit damage and resist leg-shot slow/stagger; and add Space-based kick combos including rising kicks, forward flying kicks, back kicks, downward stomps, stronger leg slams, and bounce-style recovery without replacing normal jump behavior.
+- Super Legs: Leg equipment after Hands. Super Legs can only equip in the front leg slot, not the hand, strap, or attachment slots. They massively increase run speed, acceleration, jump height, triple-jump control, slide speed, slam force, and air control; show visible powered pixel legs, glowing boots, and speed streaks; reduce leg-hit damage; resist leg-shot slow/stagger; and add Space-based kick combos including rising kicks, forward flying kicks, back kicks, downward stomps, stronger leg slams, and bounce-style recovery without replacing normal jump behavior.
+- Holy Bazooka: Very heavy two-handed, hand-only launcher after Super Legs. It starts empty, receives visible +1 holy ammo pickups every 10 seconds, and fires with left mouse only when ammo is loaded and the 7-second cooldown is ready. The shot is a homing missile with giant recoil; on impact it creates a huge white-gold holy explosion larger than Rocket splash, using true radius falloff damage/knockback, owner splash if close, the strongest blast shove in the game, and health/max-health steal from damaged targets.
 
 ## Movement Combat
 
@@ -79,7 +80,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a tuned shockwave.
 - Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
 - Wings Flight: Wings replace normal air dive and ground slam with lift, glide, dive, and air-burst movement. Wings also soften falling by slowing descent while gliding.
-- Super Legs Movement: Super Legs are always-on leg equipment. They stack mobility buffs with the currently held weapon, give leg armor, and use Space kick hitboxes through the normal combat event path so online targets receive damage/knockback.
+- Super Legs Movement: Super Legs are always-on leg equipment. They stack large mobility buffs with the currently held weapon, give leg armor, enable a third jump, boost slide/stomp/slam contact, and use Space kick hitboxes through the normal combat event path so online targets receive damage/knockback.
 - Scrambled Movement: Face-attached hands swap/mix movement inputs briefly. Repeated movement, jump, dash, or duck input shakes the hands off.
 
 ## Projectile And Status Rules
@@ -90,12 +91,14 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Teleporting Ball: The marker bounces/sticks above the floor and remains usable for the delayed teleport instead of falling into the void.
 - Lightning Aura: Shocked targets glow with a yellow/gray aura and electric pixel sparks while the shock status remains active.
 - Knife Throw: Thrown knives hit online/offline combatants, bleed on impact, show a brief stick/spark, then clean up automatically because Knife has infinite throws.
+- Physical Weapon Throws: Non-knife, non-recall physical throws create a world pickup and remove that weapon from the player's weapon inventory until the pickup is collected again.
 - Axe Throw And Recall: Thrown axes hit online/offline combatants, bleed on impact, hit harder and knock farther than Knife throws, and clean up automatically. While the thrown Axe exists, the owner no longer shows or swings a duplicate held Axe. A second right click recalls the existing thrown axe as a stronger piercing return projectile with a blue trail, hit packets, and a catch cleanup near the owner.
 - Wings Gust: Wing flap gust packets use the same combat event path as other knockback so online players receive the shove without turning Wings into a normal damage weapon.
 - Virgin Blood Revive: The blessing, holy buff, one-shot revive, angel wings status, and revive hit packets stay in the same combat/status flow as other player-owned effects so local and online clients receive the state without special networking paths.
 - Green Buff Visuals: Empowered, holy, blessed, angel wings, and other major positive buffs show a visible green aura/outline so local and online players can read buffed targets quickly.
 - Death Aura Field: Death Aura uses per-target tick cooldowns to avoid permanent stun-locking while still freezing and draining targets inside the current radius. Targets that leave the aura thaw normally once the synced frozen status expires.
 - Rocket Projectiles: Rockets are tracked as owner projectiles, support one active rocket per owner, preserve placement facing, attach riders locally, show fire from the back of the rocket, and use reusable giant explosion radius/falloff damage events for online targets, dummies, riders, and nearby owners.
+- Holy Bazooka Projectiles: Holy Bazooka ammo pickups live in the combat snapshot, missiles steer toward nearby valid targets, and the reusable explosion helper applies huge distance-falloff splash damage, upward/outward knockback, hit packets, health steal, gold-white fireball visuals, smoke, shockwave, debris, sound, and screen shake.
 - Hands Attachments: Mini-hands are lightweight owner projectiles. Face attachment applies a synced scrambled status and tiny damage over time; the target can remove attachments by spamming movement inputs.
 - Super Legs Armor: Super Legs mark the equipped player with a short refreshed status, reducing leg-hit damage and blocking leg-shot slow/stagger while leaving normal head/body hits effective.
 - Remote Visual Projectiles: Non-hit remote combat events spawn visual-only bullets, throws, rockets, hands, and kick effects in the local combat snapshot. They render and expire like normal effects but do not apply duplicate damage or physics.
@@ -129,7 +132,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, edit the loadout side panel if desired, then use **Offline Test** for local movement and combat. The character creator uses true drag/drop: drag item cards onto the front hand X, front leg X, front chest strap X, straight glowing attachment-string X, or the single back strap X. The item grid has search only, with no category tabs. The attachment string accepts physical held items such as Knife, Pistol, Revolver, Virgin Blood, Rocket, Machete, Slingshot, Axe, and other held weapons; body/projectable powers such as Hands, Death Aura, and Wings belong on front/back straps; Super Legs belongs only on the leg X. Fresh loadouts start empty unless saved gear exists. Use **Use Default Loadout** to fill the starter preset with Pistol in the left hand, Knife in the right hand, Wings on the front strap, Death Aura on the back strap, and Virgin Blood on the attachment string. Right-click an equipped X to clear it. Offline Test spawns a training dummy and shows the equipped slot HUD.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, edit the loadout side panel if desired, then use **Offline Test** for local movement and combat. The character creator uses true drag/drop: drag item cards onto the front hand X, front leg X, front chest strap X, straight glowing attachment-string X, or the single back strap X. The item grid has search only, with no category tabs. The attachment string accepts physical held items such as Knife, Pistol, Revolver, Virgin Blood, Rocket, Machete, Slingshot, Axe, and other held weapons, but not the hand-only Holy Bazooka; body/projectable powers such as Hands, Death Aura, and Wings belong on front/back straps; Super Legs belongs only on the leg X. Fresh loadouts start empty unless saved gear exists. Use **Use Default Loadout** to fill the starter preset with Pistol in the left hand, Knife in the right hand, Wings on the front strap, Death Aura on the back strap, and Virgin Blood on the attachment string. Right-click an equipped X to clear it. Offline Test spawns a training dummy and shows the equipped slot HUD.
 
 ## Run the signaling Worker locally
 
@@ -231,7 +234,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable nineteen-weapon/item vertical slice, not final balance.
+- Combat is a playable twenty-weapon/item vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
 - The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.

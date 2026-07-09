@@ -17,6 +17,7 @@ export type WeaponId =
   | "virgin-blood"
   | "death-aura"
   | "rocket"
+  | "holy-bazooka"
   | "hands"
   | "super-legs"
   | "teleport-ball"

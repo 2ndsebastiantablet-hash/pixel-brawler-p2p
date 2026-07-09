@@ -458,6 +458,9 @@ export class LobbyUI {
     figure.className = `loadout-view ${view}`;
     figure.dataset.loadoutView = view;
     figure.style.setProperty("--player-color", this.selectedColor);
+    if (normalizeLoadout(this.profile.loadout).legs === "super-legs") {
+      figure.classList.add("has-super-legs");
+    }
 
     const title = document.createElement("div");
     title.className = "loadout-view-title";
@@ -1079,6 +1082,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#08080c";
     case "rocket":
       return "#ff8f3d";
+    case "holy-bazooka":
+      return "#fff4a8";
     case "hands":
       return "#b8ffd0";
     case "super-legs":

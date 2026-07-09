@@ -89,6 +89,9 @@ export type SoundId =
   | "rocket-place"
   | "rocket-light"
   | "rocket-explode"
+  | "holy-bazooka-fire"
+  | "holy-bazooka-explode"
+  | "holy-bazooka-pickup"
   | "hand-spawn"
   | "hand-skitter"
   | "hand-attach"
@@ -191,6 +194,9 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "rocket-place": { category: "weapon", frequency: 180, endFrequency: 110, duration: 0.12, noise: true, minInterval: 0.18 },
   "rocket-light": { category: "heavy", frequency: 260, endFrequency: 820, duration: 0.22, noise: true, minInterval: 0.2 },
   "rocket-explode": { category: "heavy", frequency: 72, endFrequency: 30, duration: 0.42, noise: true, minInterval: 0.34 },
+  "holy-bazooka-fire": { category: "heavy", frequency: 160, endFrequency: 760, duration: 0.34, noise: true, minInterval: 0.2 },
+  "holy-bazooka-explode": { category: "heavy", frequency: 96, endFrequency: 34, duration: 0.56, noise: true, minInterval: 0.34 },
+  "holy-bazooka-pickup": { category: "weapon", frequency: 760, endFrequency: 1040, duration: 0.14, type: "triangle", minInterval: 0.08 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },
   "hand-skitter": { category: "movement", frequency: 320, endFrequency: 260, duration: 0.045, type: "square", minInterval: 0.22 },
   "hand-attach": { category: "combat", frequency: 540, endFrequency: 210, duration: 0.12, noise: true, minInterval: 0.16 },

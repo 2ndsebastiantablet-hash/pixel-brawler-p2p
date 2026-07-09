@@ -29,6 +29,8 @@ export interface Projectile {
   state?: "resting" | "lit" | "chaotic" | "attached";
   riderId?: string;
   chaos?: number;
+  homingStrength?: number;
+  targetId?: string;
   ownerFacing?: number;
   visualOnly?: boolean;
   hits: string[];

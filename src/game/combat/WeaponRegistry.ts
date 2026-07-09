@@ -2,6 +2,7 @@ import type { WeaponDefinition, WeaponId, WeaponInventoryState } from "./Weapon"
 import { axe } from "./weapons/Axe";
 import { deathAura } from "./weapons/DeathAura";
 import { hands } from "./weapons/Hands";
+import { holyBazooka } from "./weapons/HolyBazooka";
 import { knife } from "./weapons/Knife";
 import { laserBlaster } from "./weapons/LaserBlaster";
 import { lightningRod } from "./weapons/LightningRod";
@@ -40,6 +41,7 @@ export const WEAPON_IDS = [
   "rocket",
   "hands",
   "super-legs",
+  "holy-bazooka",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -59,6 +61,7 @@ const ALL_WEAPON_IDS = [
   "rocket",
   "hands",
   "super-legs",
+  "holy-bazooka",
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
@@ -79,6 +82,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   virginBlood,
   deathAura,
   rocket,
+  holyBazooka,
   hands,
   superLegs,
   teleportBall,
@@ -123,7 +127,7 @@ export function createDefaultInventory(): WeaponInventoryState {
     cooldowns[id] = 0;
     if (weapon.ammo) {
       ammo[id] = {
-        magazine: weapon.ammo.magazineSize,
+        magazine: id === "holy-bazooka" ? 0 : weapon.ammo.magazineSize,
         reserve: weapon.ammo.reserve,
         reloadTimer: 0,
         perfectWindow: 0,

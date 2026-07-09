@@ -4,10 +4,10 @@ export const superLegs: WeaponDefinition = {
   id: "super-legs",
   name: "Super Legs",
   kind: "utility",
-  description: "leg equipment that boosts running, jumping, air control, leg armor, and Space kick combos.",
+  description: "leg equipment that massively boosts height, running, triple jumps, slides, slams, kicks, and leg armor.",
   primary: { damage: 0, cooldown: 0.55, range: 0, knockback: 0, stun: 0 },
   secondary: { damage: 0, cooldown: 0.55, range: 0, knockback: 0, stun: 0 },
-  weight: { label: "Light", moveSpeedMultiplier: 1.12, accelerationMultiplier: 1.18, airAccelerationMultiplier: 1.22, jumpMultiplier: 1.12, slideMultiplier: 1.08 },
+  weight: { label: "Light", moveSpeedMultiplier: 1.44, accelerationMultiplier: 1.58, airAccelerationMultiplier: 1.42, jumpMultiplier: 1.64, slideMultiplier: 1.5 },
   throw: { damage: 0, stun: 0, speed: 0, knockback: 0 },
-  mastery: ["Run boost", "Higher jumps", "Double-jump control", "Leg armor", "Space kicks", "Impact rings"],
+  mastery: ["Huge height boost", "Triple jump", "Fast run", "Armor legs", "Power kicks", "Super slam"],
 };

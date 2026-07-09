@@ -56,6 +56,7 @@ const twoHandedWeapons = new Set<WeaponId>([
   "laser-blaster",
   "lightning-rod",
   "minigun",
+  "holy-bazooka",
   "rocket",
   "sledgehammer",
   "sniper",
@@ -84,7 +85,7 @@ const legWeapons = new Set<WeaponId>([
 
 const attachmentWeapons = new Set<WeaponId>([
   ...oneHandedWeapons,
-  ...twoHandedWeapons,
+  ...[...twoHandedWeapons].filter((id) => id !== "holy-bazooka"),
 ]);
 
 export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
@@ -309,7 +310,7 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   if (id === "knife" || id === "machete" || id === "axe" || id === "whip") {
     return "blades";
   }
-  if (id === "sledgehammer" || id === "rocket") {
+  if (id === "sledgehammer" || id === "rocket" || id === "holy-bazooka") {
     return "heavy";
   }
   if (id === "slingshot" || id === "teleport-ball") {
