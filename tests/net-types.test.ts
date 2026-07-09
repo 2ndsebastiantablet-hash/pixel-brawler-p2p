@@ -108,6 +108,7 @@ describe("network player packets", () => {
         frontStrap: "wings",
         backStrap: "death-aura",
         attachment: "virgin-blood",
+        legs: "super-legs",
       },
     };
 
@@ -129,7 +130,37 @@ describe("network player packets", () => {
     expect(packet.fs).toBe("wings");
     expect(packet.bs).toBe("death-aura");
     expect(packet.at).toBe("virgin-blood");
+    expect(packet.lg).toBe("super-legs");
     expect(decodePlayerStatePacket(packet)).toEqual(state);
+  });
+
+  it("does not invent loadout slots when an empty loadout is broadcast", () => {
+    const state: PlayerNetState = {
+      id: "peer-a",
+      clientId: "client-a",
+      name: "Azure",
+      color: "#00d8ff",
+      x: 12,
+      y: 88,
+      velocityX: 0,
+      velocityY: 0,
+      facing: 1,
+      grounded: true,
+      sliding: false,
+      action: "idle",
+      sequence: 44,
+      sentAt: 1020,
+      loadout: {},
+    };
+
+    const packet = encodePlayerStatePacket(state);
+    expect(packet.lh).toBeUndefined();
+    expect(packet.rh).toBeUndefined();
+    expect(packet.fs).toBeUndefined();
+    expect(packet.bs).toBeUndefined();
+    expect(packet.at).toBeUndefined();
+    expect(packet.lg).toBeUndefined();
+    expect(decodePlayerStatePacket(packet).loadout).toBeUndefined();
   });
 
   it("interpolates remote state toward the newest packet", () => {

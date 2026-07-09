@@ -3,6 +3,11 @@ import { resolveMouseWeaponAction } from "../src/game/Game";
 import type { LoadoutState } from "../src/game/loadout/Loadout";
 
 describe("game mouse weapon input mapping", () => {
+  it("does nothing for empty hand slots or leg-only equipment", () => {
+    expect(resolveMouseWeaponAction("primary", {})).toBeNull();
+    expect(resolveMouseWeaponAction("secondary", { legs: "super-legs" })).toBeNull();
+  });
+
   it("routes left mouse to primary and right mouse to alternate/secondary behavior", () => {
     const loadout: LoadoutState = {
       leftHand: "pistol",

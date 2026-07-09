@@ -18,6 +18,7 @@ export type WeaponId =
   | "death-aura"
   | "rocket"
   | "hands"
+  | "super-legs"
   | "teleport-ball"
   | "lightning-rod"
   | "sledgehammer";

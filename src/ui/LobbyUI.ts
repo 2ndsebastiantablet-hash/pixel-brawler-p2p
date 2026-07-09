@@ -10,8 +10,10 @@ import { playSound } from "../audio/SoundSystem";
 import {
   LOADOUT_ITEMS,
   LOADOUT_SLOT_LABELS,
+  STARTER_LOADOUT,
   assignHeldLoadoutItem,
   assignLoadoutItem,
+  clearLoadoutSlot,
   isSlotCompatible,
   loadoutWeaponName,
   normalizeLoadout,
@@ -343,6 +345,7 @@ export class LobbyUI {
           <p class="loadout-error" data-loadout-error aria-live="polite"></p>
           <div class="loadout-filters">
             <input class="text-input" data-loadout-search placeholder="Search items" autocomplete="off" />
+            <button type="button" class="ghost-action" data-loadout-default>Use Default Loadout</button>
           </div>
           <div class="loadout-items" data-loadout-items></div>
         </aside>
@@ -418,6 +421,12 @@ export class LobbyUI {
 
     const search = requireElement<HTMLInputElement>(root, "[data-loadout-search]");
     search.addEventListener("input", () => this.renderLoadoutItems(root));
+    requireElement(root, "[data-loadout-default]").addEventListener("click", () => {
+      const loadout = normalizeLoadout(STARTER_LOADOUT);
+      this.profile = { ...this.profile, loadout };
+      this.selectedLoadoutItem = loadout.leftHand ?? "pistol";
+      this.refreshLoadoutEditor(root);
+    });
   }
 
   private renderLoadoutPreview(root: HTMLElement): void {
@@ -430,6 +439,7 @@ export class LobbyUI {
         { slot: "frontStrap", label: "Front", className: "front-strap" },
         { slot: "rightHand", label: "Hand", className: "hand" },
         { slot: "attachment", label: "F", className: "attachment" },
+        { slot: "legs", label: "Legs", className: "left-leg" },
       ]),
       this.createLoadoutView(root, "back", [
         { slot: "backStrap", label: "Back", className: "back-strap" },
@@ -516,6 +526,21 @@ export class LobbyUI {
         this.assignLoadoutDrop(root, slot, weapon, button);
       }
     });
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (!weaponId) {
+        return;
+      }
+      this.profile = {
+        ...this.profile,
+        loadout: clearLoadoutSlot(this.profile.loadout ?? {}, slot),
+      };
+      const error = root.querySelector("[data-loadout-error]");
+      if (error) {
+        error.textContent = "";
+      }
+      this.refreshLoadoutEditor(root);
+    });
 
     return button;
   }
@@ -559,7 +584,7 @@ export class LobbyUI {
     const container = requireElement(root, "[data-loadout-slots]");
     const loadout = normalizeLoadout(this.profile.loadout);
     container.replaceChildren();
-    for (const slot of ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"] as LoadoutSlotId[]) {
+    for (const slot of ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment", "legs"] as LoadoutSlotId[]) {
       const weaponId = loadout[slot];
       const button = document.createElement("button");
       button.type = "button";
@@ -912,6 +937,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#ff8f3d";
     case "hands":
       return "#b8ffd0";
+    case "super-legs":
+      return "#7cff6b";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":

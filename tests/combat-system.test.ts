@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(18);
+    expect(fighter.weaponInventory).toHaveLength(19);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -1355,6 +1355,94 @@ describe("combat system", () => {
     combat.update(0.16, [player]);
     expect(target.velocityX).toBeGreaterThan(250);
     expect(target.hp).toBeGreaterThanOrEqual(98);
+  });
+
+  it("replays remote projectile weapon events as visual-only projectiles without local damage", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const local = { ...playerState, id: "peer-b", x: 95, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(local, "Guest", "#ff6f91");
+
+    combat.applyRemoteEvent({
+      t: "c",
+      id: "remote-pistol-shot",
+      ownerId: "peer-a",
+      weaponId: "pistol",
+      action: "primary",
+      x: 0,
+      y: local.y + 24,
+      ax: 1,
+      ay: 0,
+      label: "Pistol",
+      ts: 100,
+    });
+
+    const visual = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "pistol");
+    expect(visual).toMatchObject({ ownerId: "peer-a", visualOnly: true });
+
+    combat.update(0.16, [local]);
+    expect(combat.getCombatant("peer-b")?.hp).toBe(100);
+    expect(combat.consumeEvents().some((event) => event.action === "hit")).toBe(false);
+  });
+
+  it("uses Super Legs kicks as leg equipment attacks with cooldown", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 76, y: playerState.y });
+
+    const kick = combat.useSuperLegsKick({
+      ownerId: "peer-a",
+      player,
+      aim: { x: 1, y: 0 },
+      now: 100,
+      heldMs: 0,
+      isNewPress: true,
+    }, "forward");
+    expect(kick).toMatchObject({ kind: "hitbox", weaponId: "super-legs", label: "Flying Kick" });
+    combat.update(1 / 60, [player]);
+    const target = combat.getCombatant(dummy.id)!;
+    const hpAfterKick = target.hp;
+    expect(hpAfterKick).toBeLessThan(100);
+    expect(target.velocityX).toBeGreaterThan(500);
+
+    target.invulnerable = 0;
+    const blocked = combat.useSuperLegsKick({
+      ownerId: "peer-a",
+      player,
+      aim: { x: 1, y: 0 },
+      now: 150,
+      heldMs: 0,
+      isNewPress: true,
+    }, "forward");
+    combat.update(1 / 60, [player]);
+    expect(blocked).toMatchObject({ kind: "blocked", weaponId: "super-legs", label: "Kick cooldown" });
+    expect(target.hp).toBe(hpAfterKick);
+  });
+
+  it("reduces leg-hit damage and leg slow while Super Legs are equipped", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    const dummy = combat.spawnTrainingDummy({ x: 120, y: playerState.y });
+    combat.setEquipmentStatus(dummy.id, "superLegs", true);
+
+    const target = combat.getCombatant(dummy.id)!;
+    const hit = combat.applyDamage({
+      sourceId: "local",
+      targetId: dummy.id,
+      weaponId: "sniper",
+      damage: 40,
+      knockback: { x: 500, y: -120 },
+      stun: 0.24,
+      label: "Sniper",
+      hitY: target.y + target.height * 0.86,
+    });
+
+    expect(hit.applied).toBe(true);
+    expect(target.hp).toBeGreaterThan(80);
+    expect(target.statuses.some((status) => status.id === "legShotSlow" || status.id === "legStagger")).toBe(false);
+    expect(target.statuses.some((status) => status.id === "superLegs")).toBe(true);
   });
 
   it("casts directional lightning strikes and only empowers upward held self-charge", () => {

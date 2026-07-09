@@ -103,6 +103,8 @@ export interface CombatEventPacket {
   hitLocation?: HitLocation;
 }
 
+export type SuperLegsKickKind = "neutral" | "forward" | "downward" | "back" | "slam" | "bounce";
+
 interface CombatOptions {
   mode: "offline" | "network";
 }
@@ -116,6 +118,8 @@ const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
 const wingGustRadius = 130;
 const wingGustCooldown = 0.14;
+const superLegsArmorDamageScale = 0.55;
+const superLegsStatusRefresh = 0.35;
 const axeRushRange = 940;
 const axeRushSpeed = 1320;
 const axeRushMaxTime = 0.72;
@@ -359,6 +363,18 @@ export class CombatSystem {
     return next;
   }
 
+  setEquipmentStatus(id: string, status: Extract<StatusEffectId, "superLegs">, enabled: boolean): void {
+    const target = this.combatants.get(id);
+    if (!target) {
+      return;
+    }
+    if (!enabled) {
+      target.statuses = target.statuses.filter((item) => item.id !== status);
+      return;
+    }
+    target.statuses = upsertStatusEffect(target.statuses, createStatus(status));
+  }
+
   removeCombatant(id: string): void {
     this.combatants.delete(id);
   }
@@ -398,6 +414,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
+    if (this.inventory.equippedWeapon === "super-legs") {
+      return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
+    }
     if (this.inventory.equippedWeapon === "virgin-blood") {
       return this.activateVirginBlood(context.ownerId, context.player, context.now);
     }
@@ -426,6 +445,9 @@ export class CombatSystem {
     }
     if (weapon.id === "wings") {
       return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
+    }
+    if (weapon.id === "super-legs") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Super Legs passive" };
     }
     if (weapon.id === "virgin-blood") {
       return this.activateVirginBlood(context.ownerId, context.player, context.now);
@@ -487,6 +509,50 @@ export class CombatSystem {
     return this.useAttack(context, "secondary");
   }
 
+  useSuperLegsKick(context: WeaponUseContext, kind: SuperLegsKickKind): WeaponUseResult {
+    const weaponId: WeaponId = "super-legs";
+    const cooldown = this.inventory.cooldowns[weaponId] ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Kick cooldown" };
+    }
+
+    const kick = superLegsKickProfile(kind);
+    const aimFacing = facingFromAim(context.aim.x, context.player.facing);
+    const facing = kind === "back" ? -aimFacing : aimFacing;
+    const centerX = context.player.x + context.player.width / 2;
+    const centerY = context.player.y + context.player.height / 2;
+    const box = superLegsKickBox(context.player, kind, facing, kick.range);
+    const hitbox: Hitbox = {
+      id: this.makeId("super-legs"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      damage: kick.damage,
+      knockback: { x: facing * kick.knockbackX, y: kick.knockbackY },
+      stun: kick.stun,
+      age: 0,
+      duration: 0.14,
+      label: kick.label,
+      color: colorForWeapon(weaponId),
+      status: kick.status,
+      heavy: kind === "slam",
+      hits: [],
+    };
+    this.hitboxes.push(hitbox);
+    this.inventory.cooldowns[weaponId] = kick.cooldown;
+    this.addSuperLegsSelfMotion(context.player, kind, facing);
+    this.addEffect(kind === "slam" ? "slam" : "stomp", centerX, centerY + 18, centerX + facing * 36, centerY + 8, colorForWeapon(weaponId), kick.label);
+    if (kind === "downward" || kind === "slam") {
+      this.addEffect("shockwave", centerX, context.player.y + context.player.height, centerX + facing * 42, context.player.y + context.player.height, colorForWeapon(weaponId), "Leg Impact");
+    }
+    this.queueSound(kind === "downward" || kind === "slam" ? "ground-slam-impact" : "dash");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", { x: centerX, y: centerY }, { x: facing, y: kind === "downward" || kind === "slam" ? 1 : 0 }, kick.label, context.now));
+    return { kind: "hitbox", weaponId, label: kick.label };
+  }
+
   reload(ownerId: string, now: number): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
     if (this.hasMissingHands(ownerId)) {
@@ -524,6 +590,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
+    if (this.inventory.equippedWeapon === "super-legs") {
+      return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
+    }
     if (this.inventory.equippedWeapon === "virgin-blood") {
       return { kind: "blocked", weaponId: "virgin-blood", label: "Click to bless" };
     }
@@ -555,7 +624,11 @@ export class CombatSystem {
     const hitLocation = request.hitLocation ?? classifyHitLocation(target, request.hitY);
     const locationModifier = request.skipHitLocationScaling ? neutralLocationModifier : modifierForHitLocation(hitLocation);
     const effectiveStun = request.stun + locationModifier.stunBonus;
-    const finalStatus = statusForHit(request.weaponId, hitLocation, request.status);
+    const superLegsArmor = hitLocation === "leg" && target.statuses.some((status) => status.id === "superLegs");
+    let finalStatus = statusForHit(request.weaponId, hitLocation, request.status);
+    if (superLegsArmor && (finalStatus === "legShotSlow" || finalStatus === "legStagger")) {
+      finalStatus = undefined;
+    }
     const finalLabel = hitLocation ? `${labelForHitLocation(hitLocation)} ${request.label}` : request.label;
     const source = this.combatants.get(request.sourceId);
     const steadyResist = target.statuses.some((status) => status.id === "steady") && request.sourceId !== target.id;
@@ -571,7 +644,8 @@ export class CombatSystem {
     const damageScale = (steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1)
       * (holyResist ? 0.72 : 1)
       * (empoweredAttack ? empoweredDamageScale : 1)
-      * (holyAttack ? 1.2 : 1);
+      * (holyAttack ? 1.2 : 1)
+      * (superLegsArmor ? superLegsArmorDamageScale : 1);
     const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier
       * (steadyResist ? 0.25 : 1)
       * locationModifier.knockbackScale
@@ -908,6 +982,10 @@ export class CombatSystem {
         }
       }
     }
+    if (event.action !== "hit" && !this.appliedRemoteEvents.has(event.id)) {
+      this.appliedRemoteEvents.add(event.id);
+      this.spawnRemoteVisualFromEvent(event);
+    }
     const lightningPrimary = event.weaponId === "lightning-rod" && (event.label === "Sky Strike" || event.label === "Giant Strike");
     this.addEffect(
       event.action === "reload"
@@ -926,6 +1004,153 @@ export class CombatSystem {
       event.weaponId === "machete" ? macheteColor(this.getMacheteState(event.ownerId).redness) : colorForWeapon(event.weaponId),
       event.label,
     );
+  }
+
+  private spawnRemoteVisualFromEvent(event: CombatEventPacket): void {
+    const weapon = weaponRegistry.get(event.weaponId);
+    const aim = normalize({ x: event.ax, y: event.ay });
+    if (event.action === "throw") {
+      const speed = weapon.throw.speed || weapon.secondary.speed || 720;
+      if (speed > 0) {
+        this.projectiles.push(this.createRemoteVisualProjectile(event, aim, speed, weapon.secondary.radius ?? 7, Math.max(0.28, weapon.secondary.range / speed), event.label));
+      }
+      return;
+    }
+
+    if (event.weaponId === "rocket") {
+      this.spawnRemoteRocketVisual(event, aim);
+      return;
+    }
+    if (event.weaponId === "hands" && (event.action === "primary" || event.action === "secondary")) {
+      this.spawnRemoteHandsVisual(event, aim);
+      return;
+    }
+    if (event.weaponId === "super-legs") {
+      this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
+      return;
+    }
+
+    if (event.action !== "primary" && event.action !== "secondary") {
+      return;
+    }
+    const profile = event.action === "secondary" ? weapon.secondary : weapon.primary;
+    const speed = profile.speed ?? (weapon.kind === "projectile" || weapon.kind === "beam" ? 760 : 0);
+    if (speed <= 0 || profile.range <= 0) {
+      return;
+    }
+    this.projectiles.push(this.createRemoteVisualProjectile(event, aim, speed, profile.radius ?? 6, Math.max(0.16, profile.range / speed), event.label));
+  }
+
+  private createRemoteVisualProjectile(
+    event: CombatEventPacket,
+    aim: Vec2,
+    speed: number,
+    radius: number,
+    lifetime: number,
+    label: string,
+  ): Projectile {
+    return {
+      id: `remote-${event.id}`,
+      ownerId: event.ownerId,
+      weaponId: event.weaponId,
+      x: event.x,
+      y: event.y,
+      vx: aim.x * speed,
+      vy: aim.y * speed,
+      radius,
+      damage: 0,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      age: 0,
+      lifetime,
+      gravity: event.weaponId === "slingshot" || event.weaponId === "teleport-ball" ? 760 : event.action === "throw" ? 620 : 0,
+      bounces: 0,
+      pierce: 0,
+      label,
+      color: colorForWeapon(event.weaponId),
+      trailColor: colorForWeapon(event.weaponId),
+      originX: event.x,
+      originY: event.y,
+      ownerFacing: aim.x >= 0 ? 1 : -1,
+      visualOnly: true,
+      hits: [],
+    };
+  }
+
+  private spawnRemoteRocketVisual(event: CombatEventPacket, aim: Vec2): void {
+    const existingId = this.rockets.get(event.ownerId);
+    const existing = existingId ? this.projectiles.find((projectile) => projectile.id === existingId) : undefined;
+    const facing = facingFromAim(aim.x, 1);
+    const rocket = existing ?? {
+      id: `remote-rocket-${event.id}`,
+      ownerId: event.ownerId,
+      weaponId: "rocket" as WeaponId,
+      x: event.x,
+      y: event.y,
+      vx: 0,
+      vy: 0,
+      radius: 15,
+      damage: 0,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      age: 0,
+      lifetime: 4,
+      gravity: 0,
+      bounces: 0,
+      pierce: 0,
+      label: "ROCKET RESTING",
+      color: colorForWeapon("rocket"),
+      trailColor: "#ffcf5a",
+      state: "resting" as const,
+      ownerFacing: facing,
+      visualOnly: true,
+      hits: [],
+    };
+    rocket.x = event.x;
+    rocket.y = event.y;
+    rocket.ownerFacing = facing;
+    if (event.action === "secondary") {
+      rocket.state = "lit";
+      rocket.label = "ROCKET LIT";
+      rocket.vx = facing * rocketLaunchSpeed;
+      rocket.vy = -34;
+      rocket.lifetime = 1.2;
+      rocket.age = 0;
+    }
+    if (!existing) {
+      this.projectiles.push(rocket);
+    }
+    this.rockets.set(event.ownerId, rocket.id);
+  }
+
+  private spawnRemoteHandsVisual(event: CombatEventPacket, aim: Vec2): void {
+    const facing = facingFromAim(aim.x, 1);
+    for (let index = 0; index < 5; index += 1) {
+      this.projectiles.push({
+        id: `remote-hand-${event.id}-${index}`,
+        ownerId: event.ownerId,
+        weaponId: "hands",
+        x: event.x + facing * (12 + index * 7),
+        y: COMBAT_TUNING.projectiles.floorY - 8,
+        vx: facing * (120 + index * 8),
+        vy: 0,
+        radius: 8,
+        damage: 0,
+        knockback: { x: 0, y: 0 },
+        stun: 0,
+        age: 0,
+        lifetime: 1.5,
+        gravity: 0,
+        bounces: 0,
+        pierce: 0,
+        label: "MINI HAND",
+        color: colorForWeapon("hands"),
+        trailColor: colorForWeapon("hands"),
+        ownerFacing: facing,
+        visualOnly: true,
+        hits: [],
+      });
+    }
   }
 
   getSnapshot(): CombatSnapshot {
@@ -1656,6 +1881,33 @@ export class CombatSystem {
     player.velocityY -= Math.max(0.35, aim.y) * vertical * scale;
     if (!player.grounded) {
       player.velocityY -= vertical * 0.65;
+    }
+  }
+
+  private addSuperLegsSelfMotion(player: PlayerPhysicsState, kind: SuperLegsKickKind, facing: number): void {
+    switch (kind) {
+      case "forward":
+        player.velocityX += facing * 250;
+        player.velocityY = Math.min(player.velocityY, -130);
+        break;
+      case "back":
+        player.velocityX -= facing * 170;
+        player.velocityY = Math.min(player.velocityY, -90);
+        break;
+      case "downward":
+        player.velocityY = Math.max(player.velocityY, 760);
+        break;
+      case "slam":
+        player.velocityY = Math.max(player.velocityY, 980);
+        break;
+      case "bounce":
+        player.velocityY = Math.min(player.velocityY, -620);
+        player.jumpsUsed = Math.min(player.jumpsUsed, 1);
+        break;
+      case "neutral":
+      default:
+        player.velocityY = Math.min(player.velocityY, -300);
+        break;
     }
   }
 
@@ -2490,6 +2742,9 @@ export class CombatSystem {
           continue;
         }
       }
+      if (projectile.visualOnly) {
+        continue;
+      }
       for (const target of this.combatants.values()) {
         if (target.id === projectile.ownerId || projectile.hits.includes(target.id)) {
           continue;
@@ -2587,6 +2842,21 @@ export class CombatSystem {
   private updateRocketProjectile(projectile: Projectile, dt: number, players: PlayerPhysicsState[]): void {
     projectile.age += dt;
     const groundY = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+    if (projectile.visualOnly) {
+      if (projectile.state === "resting") {
+        projectile.y = groundY;
+        return;
+      }
+      const facing = Math.sign(projectile.vx || projectile.ownerFacing || 1);
+      projectile.x += projectile.vx * dt;
+      projectile.y += projectile.vy * dt;
+      this.addEffect("tracer", projectile.x, projectile.y, projectile.x - facing * 58, projectile.y + 5, "#ff8f3d", projectile.state === "chaotic" ? "Chaotic" : "Rocket Fire");
+      if (projectile.y >= groundY) {
+        projectile.y = groundY;
+        projectile.age = projectile.lifetime + 1;
+      }
+      return;
+    }
     if (projectile.state === "resting") {
       projectile.y = groundY;
       if (projectile.age > projectile.lifetime) {
@@ -2678,6 +2948,14 @@ export class CombatSystem {
 
   private updateHandProjectile(projectile: Projectile, dt: number): void {
     projectile.age += dt;
+    if (projectile.visualOnly) {
+      projectile.x += projectile.vx * dt;
+      projectile.y = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+      if (projectile.age % 0.5 < dt) {
+        this.addEffect("spark", projectile.x, projectile.y, projectile.x - Math.sign(projectile.vx || 1) * 14, projectile.y, colorForWeapon("hands"), "Skitter");
+      }
+      return;
+    }
     const target = this.findNearestHandTarget(projectile);
     if (!target) {
       projectile.x += projectile.vx * dt;
@@ -2789,6 +3067,7 @@ export class CombatSystem {
           const knifeHit = hitbox.weaponId === "knife";
           const macheteHit = hitbox.weaponId === "machete";
           const axeHit = hitbox.weaponId === "axe";
+          const superLegsHit = hitbox.weaponId === "super-legs";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const macheteTipHit = macheteHit && isWhipTipHit(hitbox, target);
           const axeTipHit = axeHit && hitbox.label !== "Axe Rush" && isWhipTipHit(hitbox, target);
@@ -2857,6 +3136,10 @@ export class CombatSystem {
               this.queueSound("axe-hit");
               this.queueSound("axe-impact");
               this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 30, hitY, colorForWeapon(hitbox.weaponId), axeTipHit ? "Head" : "Chop");
+            }
+            if (superLegsHit) {
+              this.queueSound(hitbox.heavy ? "ground-slam-impact" : "head-stomp");
+              this.addEffect(hitbox.heavy ? "shockwave" : "stomp", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 34, hitY + 10, colorForWeapon(hitbox.weaponId), hitbox.label);
             }
             if (rodHit) {
               this.queueSound("lightning-shock");
@@ -3599,6 +3882,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff8f3d";
     case "hands":
       return "#b8ffd0";
+    case "super-legs":
+      return "#7cff6b";
     default:
       return "#ffffff";
   }
@@ -3750,7 +4035,63 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Scrambled", duration: 7.5, stacks: 1, tickDamage: 1, tickEvery: 1 };
     case "handsMissing":
       return { id, label: "No Hands", duration: handsMissingDuration, stacks: 1 };
+    case "superLegs":
+      return { id, label: "Super Legs", duration: superLegsStatusRefresh, stacks: 1 };
   }
+}
+
+function superLegsKickProfile(kind: SuperLegsKickKind): {
+  label: string;
+  damage: number;
+  range: number;
+  knockbackX: number;
+  knockbackY: number;
+  stun: number;
+  cooldown: number;
+  status?: string;
+} {
+  switch (kind) {
+    case "forward":
+      return { label: "Flying Kick", damage: 14, range: 92, knockbackX: 390, knockbackY: -120, stun: 0.26, cooldown: 0.48, status: "daze" };
+    case "downward":
+      return { label: "Stomp Kick", damage: 15, range: 58, knockbackX: 160, knockbackY: 520, stun: 0.3, cooldown: 0.52, status: "tripped" };
+    case "back":
+      return { label: "Back Kick", damage: 11, range: 64, knockbackX: 300, knockbackY: -90, stun: 0.22, cooldown: 0.42 };
+    case "slam":
+      return { label: "Leg Slam", damage: 19, range: 112, knockbackX: 430, knockbackY: -380, stun: 0.46, cooldown: 0.72, status: "tripped" };
+    case "bounce":
+      return { label: "Bounce Kick", damage: 12, range: 58, knockbackX: 190, knockbackY: 460, stun: 0.24, cooldown: 0.38 };
+    case "neutral":
+    default:
+      return { label: "Rising Kick", damage: 12, range: 58, knockbackX: 230, knockbackY: -340, stun: 0.24, cooldown: 0.42 };
+  }
+}
+
+function superLegsKickBox(player: PlayerPhysicsState, kind: SuperLegsKickKind, facing: number, range: number): { x: number; y: number; width: number; height: number } {
+  const cx = player.x + player.width / 2;
+  if (kind === "downward" || kind === "bounce") {
+    return {
+      x: cx - 29,
+      y: player.y + player.height - 12,
+      width: 58,
+      height: 58,
+    };
+  }
+  if (kind === "slam") {
+    return {
+      x: cx - range / 2,
+      y: player.y + player.height - 30,
+      width: range,
+      height: 54,
+    };
+  }
+  const width = range;
+  return {
+    x: facing > 0 ? cx + 2 : cx - width - 2,
+    y: player.y + (kind === "neutral" ? 8 : 14),
+    width,
+    height: kind === "neutral" ? 42 : 36,
+  };
 }
 
 function removeWhere<T>(items: T[], predicate: (item: T) => boolean): void {

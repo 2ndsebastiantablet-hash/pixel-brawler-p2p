@@ -52,6 +52,7 @@ export const COMBAT_TUNING = {
     "death-aura": { label: "Balanced", moveSpeedMultiplier: 0.96, accelerationMultiplier: 0.96, airAccelerationMultiplier: 0.96, jumpMultiplier: 0.98, slideMultiplier: 0.96 },
     rocket: { label: "Heavy", moveSpeedMultiplier: 0.9, accelerationMultiplier: 0.88, airAccelerationMultiplier: 0.9, jumpMultiplier: 0.96, slideMultiplier: 0.9 },
     hands: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
+    "super-legs": { label: "Light", moveSpeedMultiplier: 1.12, accelerationMultiplier: 1.18, airAccelerationMultiplier: 1.24, jumpMultiplier: 1.14, slideMultiplier: 1.1 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,
   laser: {
     chargeDamageScale: 3.4,

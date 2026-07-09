@@ -1,7 +1,7 @@
 import type { WeaponId } from "../combat/Weapon";
 import { WEAPON_IDS, weaponRegistry } from "../combat/WeaponRegistry";
 
-export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment";
+export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment" | "legs";
 export type LoadoutCategory =
   | "all"
   | "guns"
@@ -20,6 +20,7 @@ export interface LoadoutState {
   leftHand?: WeaponId;
   rightHand?: WeaponId;
   attachment?: WeaponId;
+  legs?: WeaponId;
 }
 
 export interface LoadoutItemDefinition {
@@ -28,10 +29,12 @@ export interface LoadoutItemDefinition {
   summary: string;
   category: LoadoutCategory;
   compatibleSlots: LoadoutSlotId[];
-  handedness: "one-handed" | "two-handed" | "strap" | "attachment";
+  handedness: "one-handed" | "two-handed" | "strap" | "attachment" | "legs";
 }
 
-export const DEFAULT_LOADOUT: LoadoutState = {
+export const DEFAULT_LOADOUT: LoadoutState = {};
+
+export const STARTER_LOADOUT: LoadoutState = {
   leftHand: "pistol",
   rightHand: "knife",
   frontStrap: "wings",
@@ -45,6 +48,7 @@ export const LOADOUT_SLOT_LABELS: Record<LoadoutSlotId, string> = {
   leftHand: "Left Mouse",
   rightHand: "Right Mouse",
   attachment: "F Attachment",
+  legs: "Legs",
 };
 
 const twoHandedWeapons = new Set<WeaponId>([
@@ -74,6 +78,10 @@ const strapWeapons = new Set<WeaponId>([
   "wings",
 ]);
 
+const legWeapons = new Set<WeaponId>([
+  "super-legs",
+]);
+
 const attachmentWeapons = new Set<WeaponId>([
   ...oneHandedWeapons,
   ...twoHandedWeapons,
@@ -91,13 +99,18 @@ export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
   if (attachmentWeapons.has(id)) {
     compatibleSlots.push("attachment");
   }
+  if (legWeapons.has(id)) {
+    compatibleSlots.push("legs");
+  }
   const handedness = twoHandedWeapons.has(id)
     ? "two-handed"
     : oneHandedWeapons.has(id)
       ? "one-handed"
-      : attachmentWeapons.has(id)
-        ? "attachment"
-        : "strap";
+      : legWeapons.has(id)
+        ? "legs"
+        : attachmentWeapons.has(id)
+          ? "attachment"
+          : "strap";
   return {
     id,
     name: weapon.name,
@@ -115,6 +128,7 @@ export function normalizeLoadout(input: Partial<LoadoutState> = {}): LoadoutStat
   normalizeSlot(input, next, "frontStrap");
   normalizeSlot(input, next, "backStrap");
   normalizeSlot(input, next, "attachment");
+  normalizeSlot(input, next, "legs");
 
   return next;
 }
@@ -151,6 +165,23 @@ export function assignHeldLoadoutItem(current: Partial<LoadoutState>, weaponId: 
   next.leftHand = weaponId;
   next.rightHand = weaponId;
   return next;
+}
+
+export function clearLoadoutSlot(current: Partial<LoadoutState>, slot: LoadoutSlotId): LoadoutState {
+  const next = normalizeLoadout(current);
+  if (slot === "leftHand" || slot === "rightHand") {
+    const weapon = next[slot];
+    if (weapon && next.leftHand === weapon && next.rightHand === weapon) {
+      next.leftHand = undefined;
+      next.rightHand = undefined;
+    } else {
+      next[slot] = undefined;
+    }
+    return normalizeLoadout(next);
+  }
+
+  next[slot] = undefined;
+  return normalizeLoadout(next);
 }
 
 export function swapAttachmentWithHand(
@@ -203,6 +234,9 @@ export function isSlotCompatible(weaponId: WeaponId, slot: LoadoutSlotId): boole
   if (slot === "frontStrap" || slot === "backStrap") {
     return strapWeapons.has(weaponId);
   }
+  if (slot === "legs") {
+    return legWeapons.has(weaponId);
+  }
   return attachmentWeapons.has(weaponId);
 }
 
@@ -227,14 +261,13 @@ export function loadoutHasWeapon(loadout: Partial<LoadoutState>, weaponId: Weapo
     || loadout.backStrap === weaponId
     || loadout.leftHand === weaponId
     || loadout.rightHand === weaponId
-    || loadout.attachment === weaponId;
+    || loadout.attachment === weaponId
+    || loadout.legs === weaponId;
 }
 
 function normalizeHandSlots(input: Partial<LoadoutState>, next: LoadoutState): void {
-  const hasLeft = Object.prototype.hasOwnProperty.call(input, "leftHand");
-  const hasRight = Object.prototype.hasOwnProperty.call(input, "rightHand");
-  const left = hasLeft ? sanitizeSlotWeapon(input.leftHand, "leftHand") : DEFAULT_LOADOUT.leftHand;
-  const right = hasRight ? sanitizeSlotWeapon(input.rightHand, "rightHand") : DEFAULT_LOADOUT.rightHand;
+  const left = sanitizeSlotWeapon(input.leftHand, "leftHand");
+  const right = sanitizeSlotWeapon(input.rightHand, "rightHand");
 
   if (left && isTwoHandedWeapon(left)) {
     next.leftHand = left;
@@ -247,20 +280,26 @@ function normalizeHandSlots(input: Partial<LoadoutState>, next: LoadoutState): v
     return;
   }
 
-  next.leftHand = left;
-  next.rightHand = right;
+  if (left) {
+    next.leftHand = left;
+  }
+  if (right) {
+    next.rightHand = right;
+  }
 }
 
 function normalizeSlot(input: Partial<LoadoutState>, next: LoadoutState, slot: Exclude<LoadoutSlotId, "leftHand" | "rightHand">): void {
-  const hasSlot = Object.prototype.hasOwnProperty.call(input, slot);
-  next[slot] = hasSlot ? sanitizeSlotWeapon(input[slot], slot) : DEFAULT_LOADOUT[slot];
+  const value = sanitizeSlotWeapon(input[slot], slot);
+  if (value) {
+    next[slot] = value;
+  }
 }
 
 function sanitizeSlotWeapon(value: unknown, slot: LoadoutSlotId): WeaponId | undefined {
   if (value === undefined || value === null || value === "") {
-    return DEFAULT_LOADOUT[slot];
+    return undefined;
   }
-  return isKnownWeaponId(value) && isSlotCompatible(value, slot) ? value : DEFAULT_LOADOUT[slot];
+  return isKnownWeaponId(value) && isSlotCompatible(value, slot) ? value : undefined;
 }
 
 function categoryForWeapon(id: WeaponId): LoadoutCategory {
@@ -280,6 +319,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
     return "body";
   }
   if (id === "wings") {
+    return "mobility";
+  }
+  if (id === "super-legs") {
     return "mobility";
   }
   if (id === "hands") {

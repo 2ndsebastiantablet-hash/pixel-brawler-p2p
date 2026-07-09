@@ -7,19 +7,19 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Vite + TypeScript front end.
 - Plain canvas side-view game loop with crisp pixel rendering.
 - Main menu flow for Play, player setup, hosting, joining, and Offline Test.
-- Player name/color customization and real equipment loadouts stored in localStorage, with a front/back character creator, one clear front hand target, front/back strap targets, a glowing attachment-string target, item search, and drag/drop equipment placement.
+- Player name/color customization and real equipment loadouts stored in localStorage, with a front/back character creator, one clear front hand target, a front leg target, front/back strap targets, a glowing attachment-string target, item search, right-click slot clearing, an explicit starter-loadout button, and drag/drop equipment placement. Fresh profiles start empty unless saved gear exists.
 - Procedural one-color chunky pixel brawler rendering with idle, run, jump, double jump, slide, low slide, air dive, duck, ground slam, and slam landing poses.
-- Compact in-game HUD for private room codes, public server names, Offline Test, and the active Q/E/mouse/F loadout slots.
+- Compact in-game HUD for private room codes, public server names, Offline Test, and the active Q/E/mouse/F/leg loadout slots.
 - Escape server menu with player list, leave/end server, host kick/ban controls, and an in-game Edit Character button that returns to the live match after saving name/color/loadout edits.
 - Private and public online rooms support up to 10 players, with public room counts shown as `players/10`.
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, directional melee hitboxes, status effects, weapon cooldowns, reloads, equipment slots, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
-- Eighteen enabled polished weapons/items for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, wings, virgin blood, death aura, rocket, and hands.
+- Nineteen enabled polished weapons/items for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, wings, virgin blood, death aura, rocket, hands, and super legs.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
 - Louder procedural Web Audio sound effects for menu actions, movement, impacts, hits, reloads, weapon use, teleporting, lightning, heavy hammer and axe attacks, ricochets, lasers, revolver shots, minigun spin/fire, sniper shots, wing flaps, wind, bursts, gust pushback, holy blessing, revive, death aura pulses, rockets, and crawling hands. Volume constants are fed from the central combat tuning file.
-- Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, mouse-directed melee hits, slide trips, stomps, dives, and ground-slam interactions. Remote state also includes active weapon/item, loadout slot visuals, held item silhouettes, charge aim/charge time, active Death Aura, rocket placed/lit state, and major buff/status visuals.
+- Remote players are real combat targets with hurtboxes, HP, knockback, status effects, KO/respawn state, soft body collision, projectile hits, mouse-directed melee hits, slide trips, stomps, dives, and ground-slam interactions. Remote state also includes active weapon/item, loadout slot visuals, held item silhouettes, visual-only bullets/throws/rockets/hands from combat events, charge aim/charge time, active Death Aura, rocket placed/lit state, and major buff/status visuals.
 - The arena platform is finite: walking or falling past the stage edge drops into the void, kills the combatant through the normal respawn flow, returns them to spawn, and grants a two-second blue invulnerability glow that ignores damage/knockback locally and online.
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
@@ -30,6 +30,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - `A` / `D`: Move.
 - `Space`: Jump, then double jump.
 - With Wings equipped, hold `Space` to launch/flap, release to glide, press `S` in air to dive, and press airborne `Shift` for a movement-only air burst.
+- With Super Legs equipped, `Space` still jumps/double-jumps and also triggers cooldown-gated kick combos based on movement direction: forward flying kick, back kick, downward stomp, or leg slam.
 - `Shift` on ground: Dash / slide.
 - `Shift` in air: Air dive.
 - `S` on ground: Duck.
@@ -67,6 +68,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Death Aura: Dark utility item after Virgin Blood. Left or right click releases a 60-second dark aura, then starts a 40-second cooldown. Stored suffering from damage taken persists through cooldown and combines with missing health to make the radius larger, damage ticks stronger, freezes longer, and smoke darker. Activation particles expand outward, ending particles pull inward, and frozen targets are shown inside an ice block with heavy gravity until the freeze expires.
 - Rocket: Deployable ridable explosive after Death Aura. As a two-handed loadout item, left mouse places one rocket facing the aimed direction, right mouse lights it when nearby or standing on it, and standing on it attaches the rider. Lit rockets launch straight in their facing direction briefly, then veer into chaotic fire-trail flight; `Space` jumps off before the explosion and destabilizes the path. Rocket explosions are giant true-radius splash attacks with very heavy center damage, lighter edge damage, the biggest knockback in the current game, owner/rider splash damage, and matching fireball/smoke/shockwave/debris visuals.
 - Hands: Summoner item after Rocket. Left or right click summons five crawling mini-hands, then the summoner loses their own hands for about 40 seconds and cannot use weapons/items. The mini-hands chase non-owner targets, attach to faces, deal tiny damage over time, and scramble movement until the target spams movement/jump inputs to flick them off.
+- Super Legs: Leg equipment after Hands. Super Legs can only equip in the front leg slot, not the hand, strap, or attachment slots. They increase run speed, acceleration, jump height, double-jump control, and air control; show glowing boots and speed streaks; reduce leg-hit damage and resist leg-shot slow/stagger; and add Space-based kick combos including rising kicks, forward flying kicks, back kicks, downward stomps, stronger leg slams, and bounce-style recovery without replacing normal jump behavior.
 
 ## Movement Combat
 
@@ -77,6 +79,7 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Ground Slam Damage: `S` in air starts a ground slam. Direct body contact damages targets, and floor impact creates a tuned shockwave.
 - Weapon Weight: Light weapons keep movement snappy, balanced weapons stay close to default physics, and heavy/very heavy weapons reduce run speed, acceleration, air control, jump strength, and slide speed.
 - Wings Flight: Wings replace normal air dive and ground slam with lift, glide, dive, and air-burst movement. Wings also soften falling by slowing descent while gliding.
+- Super Legs Movement: Super Legs are always-on leg equipment. They stack mobility buffs with the currently held weapon, give leg armor, and use Space kick hitboxes through the normal combat event path so online targets receive damage/knockback.
 - Scrambled Movement: Face-attached hands swap/mix movement inputs briefly. Repeated movement, jump, dash, or duck input shakes the hands off.
 
 ## Projectile And Status Rules
@@ -94,6 +97,8 @@ The client creates a WebRTC data-channel mesh between all peers for gameplay pac
 - Death Aura Field: Death Aura uses per-target tick cooldowns to avoid permanent stun-locking while still freezing and draining targets inside the current radius. Targets that leave the aura thaw normally once the synced frozen status expires.
 - Rocket Projectiles: Rockets are tracked as owner projectiles, support one active rocket per owner, preserve placement facing, attach riders locally, show fire from the back of the rocket, and use reusable giant explosion radius/falloff damage events for online targets, dummies, riders, and nearby owners.
 - Hands Attachments: Mini-hands are lightweight owner projectiles. Face attachment applies a synced scrambled status and tiny damage over time; the target can remove attachments by spamming movement inputs.
+- Super Legs Armor: Super Legs mark the equipped player with a short refreshed status, reducing leg-hit damage and blocking leg-shot slow/stagger while leaving normal head/body hits effective.
+- Remote Visual Projectiles: Non-hit remote combat events spawn visual-only bullets, throws, rockets, hands, and kick effects in the local combat snapshot. They render and expire like normal effects but do not apply duplicate damage or physics.
 - Machete Growth: Machete hitboxes use the current grown range and damage bonus, and each swing records targets already hit so long blades do not damage the same target multiple times per swing.
 
 ## Loading Screen And Sound
@@ -124,7 +129,7 @@ Start the Vite front end:
 npm run dev
 ```
 
-Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, edit the loadout side panel if desired, then use **Offline Test** for local movement and combat. The character creator uses true drag/drop: drag item cards onto the front hand X, front chest strap X, straight glowing attachment-string X, or the single back strap X. The item grid has search only, with no category tabs. The attachment string accepts physical held items such as Knife, Pistol, Revolver, Virgin Blood, Rocket, Machete, Slingshot, Axe, and other held weapons; body/projectable powers such as Hands, Death Aura, and Wings belong on front/back straps. Offline Test spawns a training dummy and shows the equipped slot HUD. The default loadout starts with Pistol in the left hand, Knife in the right hand, Wings on the front strap, Death Aura on the back strap, and Virgin Blood on the attachment string.
+Open the printed local URL, usually `http://localhost:5173`. The first screen is a controls/loading screen with keyboard keycaps and mouse controls. Continue to the main menu, press **Play**, choose a name/color, edit the loadout side panel if desired, then use **Offline Test** for local movement and combat. The character creator uses true drag/drop: drag item cards onto the front hand X, front leg X, front chest strap X, straight glowing attachment-string X, or the single back strap X. The item grid has search only, with no category tabs. The attachment string accepts physical held items such as Knife, Pistol, Revolver, Virgin Blood, Rocket, Machete, Slingshot, Axe, and other held weapons; body/projectable powers such as Hands, Death Aura, and Wings belong on front/back straps; Super Legs belongs only on the leg X. Fresh loadouts start empty unless saved gear exists. Use **Use Default Loadout** to fill the starter preset with Pistol in the left hand, Knife in the right hand, Wings on the front strap, Death Aura on the back strap, and Virgin Blood on the attachment string. Right-click an equipped X to clear it. Offline Test spawns a training dummy and shows the equipped slot HUD.
 
 ## Run the signaling Worker locally
 
@@ -226,7 +231,7 @@ npm run worker:deploy
 
 ## Current limitations
 
-- Combat is a playable eighteen-weapon/item vertical slice, not final balance.
+- Combat is a playable nineteen-weapon/item vertical slice, not final balance.
 - Multiplayer combat uses client-predicted hit detection. The attacking client detects hits against synced remote combatants, broadcasts hit packets with target/damage/knockback/status details, and each target/observer applies the result locally. This is playable prototype sync, not rollback netcode or authoritative anti-cheat validation.
 - The WebRTC mesh and targeted Worker relay fallback support rooms up to 10 players. They are intentionally simple and may need TURN, rate limiting, host validation, or server authority before serious competitive play.
 - AFK enforcement is Worker-side and based on room activity messages. Normal open clients send frequent state updates, so the timeout primarily catches disconnected, stalled, or inactive sockets.

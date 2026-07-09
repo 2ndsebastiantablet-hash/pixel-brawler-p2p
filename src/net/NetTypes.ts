@@ -73,6 +73,7 @@ export interface PlayerStatePacket {
   fs?: WeaponId;
   bs?: WeaponId;
   at?: WeaponId;
+  lg?: WeaponId;
   act?: number;
 }
 
@@ -163,6 +164,7 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(state.loadout?.frontStrap ? { fs: state.loadout.frontStrap } : {}),
     ...(state.loadout?.backStrap ? { bs: state.loadout.backStrap } : {}),
     ...(state.loadout?.attachment ? { at: state.loadout.attachment } : {}),
+    ...(state.loadout?.legs ? { lg: state.loadout.legs } : {}),
     ...(typeof state.lastActivityAt === "number" ? { act: Math.round(state.lastActivityAt) } : {}),
   };
 }
@@ -200,13 +202,14 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.dp === "number" ? { deathAuraPower: packet.dp } : {}),
     ...(packet.ra !== undefined ? { rocketActive: packet.ra === 1 } : {}),
     ...(packet.rl !== undefined ? { rocketLit: packet.rl === 1 } : {}),
-    ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at ? {
+    ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at || packet.lg ? {
       loadout: {
         ...(packet.lh ? { leftHand: packet.lh } : {}),
         ...(packet.rh ? { rightHand: packet.rh } : {}),
         ...(packet.fs ? { frontStrap: packet.fs } : {}),
         ...(packet.bs ? { backStrap: packet.bs } : {}),
         ...(packet.at ? { attachment: packet.at } : {}),
+        ...(packet.lg ? { legs: packet.lg } : {}),
       },
     } : {}),
     ...(typeof packet.act === "number" ? { lastActivityAt: packet.act } : {}),
@@ -252,6 +255,7 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.fs === undefined || typeof value.fs === "string") &&
     (value.bs === undefined || typeof value.bs === "string") &&
     (value.at === undefined || typeof value.at === "string") &&
+    (value.lg === undefined || typeof value.lg === "string") &&
     (value.act === undefined || typeof value.act === "number")
   );
 }

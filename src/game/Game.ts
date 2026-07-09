@@ -2,7 +2,7 @@ import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
-import { CombatSystem, type CombatEventPacket } from "./combat/CombatSystem";
+import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
 import type { Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
@@ -325,6 +325,8 @@ export class Game {
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.updateAttachmentVisual(dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
+    this.combat.setEquipmentStatus(this.localPlayer.state.id, "superLegs", loadoutHasWeapon(this.loadout, "super-legs"));
+    this.handleSuperLegsKick(movementInput, lockedOut, time);
     this.handleCombatInput(combatInput, dt, time);
     if (this.combat.getCombatant(this.localPlayer.state.id)?.statuses.some((status) => status.id === "steady")) {
       this.localPlayer.state.velocityX = 0;
@@ -358,6 +360,7 @@ export class Game {
     }
     this.resolveRemotePlayerCollisions();
     for (const remote of this.remotes.values()) {
+      const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
       this.combat.syncRemotePlayer({
         id: remote.player.state.id,
         name: remote.player.name,
@@ -373,6 +376,7 @@ export class Game {
         respawnTimer: remote.current.respawnTimer,
         invulnerable: remote.current.invulnerable,
       });
+      this.combat.setEquipmentStatus(remote.player.state.id, "superLegs", loadoutHasWeapon(remoteLoadout, "super-legs"));
     }
 
     this.combat.update(dt, [this.localPlayer.state]);
@@ -457,6 +461,9 @@ export class Game {
         const mode = remote.current.weaponId === "wings" && !remote.player.state.grounded && remote.player.state.velocityY < -120 ? "flap" : remote.player.state.grounded ? "idle" : "glide";
         this.drawWings(ctx, remote.player.state, remote.player.color, mode);
       }
+      if (loadoutHasWeapon(remoteLoadout, "super-legs") || remote.current.statuses?.includes("superLegs")) {
+        this.drawSuperLegs(ctx, remote.player.state);
+      }
       this.drawRemoteWeapon(ctx, remote);
       this.drawRemoteHealth(ctx, remote);
     }
@@ -472,6 +479,9 @@ export class Game {
       if (loadoutHasWeapon(this.loadout, "wings") || localCombatant?.statuses.some((status) => status.id === "angelWings")) {
         const mode = this.localPlayer.state.wingFlapping ? "flap" : this.localPlayer.state.wingDiving ? "dive" : this.localPlayer.state.grounded ? "idle" : "glide";
         this.drawWings(ctx, this.localPlayer.state, this.localPlayer.color, mode);
+      }
+      if (loadoutHasWeapon(this.loadout, "super-legs") || localCombatant?.statuses.some((status) => status.id === "superLegs")) {
+        this.drawSuperLegs(ctx, this.localPlayer.state);
       }
       this.drawLocalWeapon(ctx);
     }
@@ -550,6 +560,33 @@ export class Game {
     }
   }
 
+  private handleSuperLegsKick(input: InputFrame, lockedOut: boolean, time: number): void {
+    if (lockedOut || !input.jumpPressed || !loadoutHasWeapon(this.loadout, "super-legs")) {
+      return;
+    }
+    const state = this.localPlayer.state;
+    const horizontal = Number(input.right) - Number(input.left);
+    let kind: SuperLegsKickKind = "neutral";
+    if (input.down && !state.grounded) {
+      kind = "downward";
+    } else if (input.down && state.grounded) {
+      kind = "slam";
+    } else if (!state.grounded && state.velocityY > 180) {
+      kind = "bounce";
+    } else if (horizontal !== 0) {
+      const aimedFacing = Math.sign(this.lastAim.x || state.facing) || state.facing;
+      kind = horizontal === aimedFacing ? "forward" : "back";
+    }
+    this.recordAttack(this.combat.useSuperLegsKick({
+      ownerId: state.id,
+      player: state,
+      aim: this.lastAim,
+      now: time,
+      heldMs: 0,
+      isNewPress: true,
+    }, kind), "primary");
+  }
+
   private useLoadoutSlot(slot: LoadoutSlotId, action: "primary" | "secondary", time: number): void {
     const weaponId = this.loadout[slot];
     if (!weaponId) {
@@ -596,7 +633,9 @@ export class Game {
         ? "rightHand"
         : isSlotCompatible(weaponId, "frontStrap")
           ? "frontStrap"
-          : null;
+          : isSlotCompatible(weaponId, "legs")
+            ? "legs"
+            : null;
     if (!slot) {
       return;
     }
@@ -925,14 +964,15 @@ export class Game {
     const holy = local?.statuses.some((status) => status.id === "holyBuff") ? 1.16 : 1;
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
-    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy;
+    const superLegs = loadoutHasWeapon(this.loadout, "super-legs");
+    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy * (superLegs ? 1.1 : 1);
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
-      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale,
-      airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale,
-      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1),
-      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1),
+      acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale * (superLegs ? 1.08 : 1),
+      airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale * (superLegs ? 1.18 : 1),
+      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.08 : 1),
+      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.1 : 1),
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
     };
@@ -998,6 +1038,9 @@ export class Game {
     if (loadout.leftHand && loadout.leftHand === loadout.rightHand && isTwoHandedWeapon(loadout.leftHand)) {
       this.drawTinyLoadoutItem(ctx, loadout.leftHand, cx + facing * 25, y + 27, 10);
     }
+    if (loadout.legs) {
+      this.drawTinyLoadoutItem(ctx, loadout.legs, cx, y + 49, 9);
+    }
     ctx.restore();
   }
 
@@ -1048,6 +1091,10 @@ export class Game {
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
     const weaponId = this.combat.getPlayerInventory().equippedWeapon;
+    if (weaponId === "super-legs") {
+      this.drawSuperLegs(ctx, this.localPlayer.state);
+      return;
+    }
     const state = this.localPlayer.state;
     const aim = this.lastAim;
     const centerX = state.x + state.width / 2 - this.camera.x;
@@ -1528,7 +1575,7 @@ export class Game {
 
   private drawRemoteWeapon(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
     const weaponId = remote.current.weaponId;
-    if (!weaponId || weaponId === "wings") {
+    if (!weaponId || weaponId === "wings" || weaponId === "super-legs") {
       return;
     }
     const state = remote.player.state;
@@ -1699,6 +1746,32 @@ export class Game {
       ctx.globalAlpha = 0.4;
       ctx.fillStyle = "#d9f7ff";
       this.pixelRect(ctx, cx - state.facing * 86, cy + 4, state.facing * 74, 10);
+    }
+    ctx.restore();
+  }
+
+  private drawSuperLegs(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState): void {
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const speed = Math.min(1, Math.abs(state.velocityX) / 650);
+    const glow = 0.38 + Math.sin(performance.now() * 0.018) * 0.08;
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = "rgba(124, 255, 107, 0.24)";
+    this.pixelRect(ctx, x + 1, y + 35, 12, 18);
+    this.pixelRect(ctx, x + 19, y + 35, 12, 18);
+    ctx.fillStyle = "#7cff6b";
+    this.pixelRect(ctx, x, y + 46, 15, 7);
+    this.pixelRect(ctx, x + 17, y + 46, 15, 7);
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, x + 3, y + 43, 8, 3);
+    this.pixelRect(ctx, x + 20, y + 43, 8, 3);
+    if (speed > 0.15 || !state.grounded) {
+      ctx.globalAlpha = Math.max(0.24, glow * (0.7 + speed));
+      ctx.fillStyle = "#7cff6b";
+      const direction = Math.sign(state.velocityX || state.facing || 1);
+      this.pixelRect(ctx, x - direction * 20, y + 51, direction * 18, 4);
+      this.pixelRect(ctx, x - direction * 34, y + 44, direction * 24, 3);
     }
     ctx.restore();
   }
@@ -2161,7 +2234,7 @@ export class Game {
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
     const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
-    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment", "legs"];
     const slotHud = loadoutSlots.map((slot) => {
       const slotWeapon = this.loadout[slot];
       const cooldown = slotWeapon ? this.combat.getPlayerInventory().cooldowns[slotWeapon] ?? 0 : 0;
@@ -2334,6 +2407,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff8f3d";
     case "hands":
       return "#b8ffd0";
+    case "super-legs":
+      return "#7cff6b";
     case "teleport-ball":
       return "#b096ff";
     case "lightning-rod":
@@ -2401,6 +2476,8 @@ function weaponHudDetail(
           : `Rush swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
     case "wings":
       return "Hold Space flap - release glide - S dive - Shift burst";
+    case "super-legs":
+      return "Run/jump boost - Space kicks - leg armor";
     case "virgin-blood":
       return `Click bless/heal - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "death-aura":
@@ -2450,6 +2527,8 @@ function weaponHelper(id: WeaponId): string {
       return "Left rushes target - Right throw/recall";
     case "wings":
       return "No attacks - Space fly/glide - flap gust pushes nearby";
+    case "super-legs":
+      return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":
       return "Left/right: full heal + holy buff - death revives with angel wings";
     case "death-aura":

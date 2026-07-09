@@ -45,25 +45,26 @@ describe("player preferences", () => {
     });
   });
 
-  it("loads and saves the real equipment loadout with defaults", () => {
+  it("loads and saves real equipment loadouts without auto-filling empty slots", () => {
     const profile = loadPlayerProfile();
     expect(profile.loadout).toEqual(DEFAULT_LOADOUT);
 
     const saved = savePlayerProfile({
       ...profile,
       loadout: {
-        ...DEFAULT_LOADOUT,
         leftHand: "machete",
         rightHand: undefined,
+        frontStrap: undefined,
         backStrap: "hands",
+        attachment: undefined,
+        legs: "super-legs",
       },
     });
 
-    expect(saved.loadout).toMatchObject({
+    expect(saved.loadout).toEqual({
       leftHand: "machete",
-      frontStrap: "wings",
       backStrap: "hands",
-      attachment: "virgin-blood",
+      legs: "super-legs",
     });
     expect(loadPlayerProfile()).toEqual(saved);
   });

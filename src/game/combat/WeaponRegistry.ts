@@ -13,6 +13,7 @@ import { rocket } from "./weapons/Rocket";
 import { sledgeHammer } from "./weapons/SledgeHammer";
 import { slingshot } from "./weapons/Slingshot";
 import { sniper } from "./weapons/Sniper";
+import { superLegs } from "./weapons/SuperLegs";
 import { teleportBall } from "./weapons/TeleportBall";
 import { virginBlood } from "./weapons/VirginBlood";
 import { whip } from "./weapons/Whip";
@@ -38,6 +39,7 @@ export const WEAPON_IDS = [
   "death-aura",
   "rocket",
   "hands",
+  "super-legs",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -56,6 +58,7 @@ const ALL_WEAPON_IDS = [
   "death-aura",
   "rocket",
   "hands",
+  "super-legs",
   "teleport-ball",
   "lightning-rod",
   "sledgehammer",
@@ -77,6 +80,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   deathAura,
   rocket,
   hands,
+  superLegs,
   teleportBall,
   lightningRod,
   sledgeHammer,

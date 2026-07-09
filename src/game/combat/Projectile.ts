@@ -30,6 +30,7 @@ export interface Projectile {
   riderId?: string;
   chaos?: number;
   ownerFacing?: number;
+  visualOnly?: boolean;
   hits: string[];
 }
 
