@@ -82,6 +82,15 @@ describe("player physics", () => {
 
     expect(thirdJump.jumpsUsed).toBe(3);
     expect(thirdJump.velocityY).toBeLessThanOrEqual(DEFAULT_PHYSICS.jumpVelocity * 1.25);
+
+    const spent = stepPlayer(
+      { ...thirdJump, jumpBufferTimer: 0, velocityY: 95 },
+      { ...neutralInput, jumpPressed: true, jumpHeld: true },
+      1 / 60,
+      superLegsPhysics,
+    );
+    expect(spent.jumpsUsed).toBe(3);
+    expect(spent.velocityY).toBeGreaterThan(superLegsPhysics.thirdJumpVelocity);
   });
 
   it("buffers a jump shortly before landing", () => {

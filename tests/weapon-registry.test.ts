@@ -23,6 +23,7 @@ const enabledWeapons = [
   "super-legs",
   "holy-bazooka",
   "grappling-hook",
+  "chainsaw",
 ] as const;
 
 describe("weapon registry", () => {
@@ -49,6 +50,7 @@ describe("weapon registry", () => {
       "super-legs",
       "holy-bazooka",
       "grappling-hook",
+      "chainsaw",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -92,6 +94,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo["holy-bazooka"]?.magazine).toBe(0);
     expect(inventory.ammo["holy-bazooka"]?.reserve).toBe(0);
     expect(inventory.ammo["grappling-hook"]).toBeUndefined();
+    expect(inventory.ammo.chainsaw).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -109,5 +112,7 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("super-legs").description).toContain("leg equipment");
     expect(weaponRegistry.get("grappling-hook").description).toContain("physical rope hook");
     expect(weaponRegistry.get("grappling-hook").weight.label).toBe("Light");
+    expect(weaponRegistry.get("chainsaw").description).toContain("Rev for 2 seconds");
+    expect(weaponRegistry.get("chainsaw").weight.label).toBe("Heavy");
   });
 });

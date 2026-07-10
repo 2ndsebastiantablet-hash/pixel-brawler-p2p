@@ -13,6 +13,7 @@ export type StatusEffectId =
   | "blessed"
   | "angelWings"
   | "deathFrozen"
+  | "poison"
   | "scrambled"
   | "handsMissing"
   | "superLegs";

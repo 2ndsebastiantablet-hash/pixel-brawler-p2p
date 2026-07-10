@@ -71,7 +71,23 @@ export interface GrappleState {
   anchorY: number;
   maxRange: number;
   points: GrappleRopePoint[];
+  pulling?: boolean;
+  pullTimer?: number;
   visualOnly?: boolean;
+}
+
+export interface ZombieState {
+  id: string;
+  ownerId: string;
+  strength: number;
+  biteDamage: number;
+  speed: number;
+  age: number;
+  biteTimer: number;
+  biteAnim: number;
+  wanderTimer: number;
+  wanderDirection: -1 | 1;
+  targetId?: string;
 }
 
 export interface CombatEffect {
@@ -113,6 +129,7 @@ export interface CombatSnapshot {
   droppedWeapons: DroppedWeapon[];
   ammoPickups: AmmoPickup[];
   grapples: GrappleState[];
+  zombies: ZombieState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
 }
@@ -197,14 +214,27 @@ const holyBazookaExplosionCenterStun = 0.96;
 const holyBazookaExplosionEdgeStun = 0.52;
 const holyBazookaMaxHpCap = 260;
 const grappleHookSpeed = 980;
-const grappleHookRange = 780;
+const grappleHookRange = 1350;
 const grappleHookRadius = 8;
 const grappleHookAttachDamage = 6;
 const grappleHookAttachStun = 0.08;
 const grappleHookPullForce = 1450;
 const grappleHookMaxPullSpeed = 1040;
-const grappleHookSnapDistance = 1240;
+const grappleHookSnapDistance = 1600;
+const grappleHookMaxRopeLength = 1450;
 const grappleHookRopePoints = 9;
+const chainsawRevSeconds = 2;
+const chainsawOverheatSeconds = 15;
+const chainsawCooldownSeconds = 5.5;
+const chainsawTickInterval = 0.25;
+const chainsawBaseDps = 8;
+const chainsawMaxDps = 26;
+const chainsawDamagePerDps = 50;
+const chainsawRange = 66;
+const chainsawThickness = 46;
+const zombieDetectRange = 560;
+const zombieBiteRange = 48;
+const zombieBiteCooldown = 0.72;
 const handsMissingDuration = 40;
 const handSummonCount = 5;
 const macheteHitGrowth = 12;
@@ -260,6 +290,18 @@ interface HandAttachmentState {
   resist: number;
 }
 
+type ChainsawMode = "idle" | "revving" | "running" | "overheated";
+
+interface ChainsawState {
+  mode: ChainsawMode;
+  revTimer: number;
+  activeTimer: number;
+  cooldownTimer: number;
+  tickTimer: number;
+  damageTotal: number;
+  aim: Vec2;
+}
+
 export interface WeaponRuntimeState {
   charge: number;
   heat: number;
@@ -279,6 +321,14 @@ export interface WeaponRuntimeState {
   rocketRiding: boolean;
   grappleActive: boolean;
   grappleAttached: boolean;
+  grapplePulling: boolean;
+  grappleRopeLength: number;
+  chainsawMode: ChainsawMode;
+  chainsawHeat: number;
+  chainsawRev: number;
+  chainsawDps: number;
+  chainsawDamageTotal: number;
+  zombieCount: number;
   attachedHands: number;
 }
 
@@ -307,7 +357,11 @@ export class CombatSystem {
   private readonly virginBlood = new Map<string, VirginBloodState>();
   private readonly deathAuras = new Map<string, DeathAuraState>();
   private readonly rockets = new Map<string, string>();
+  private readonly rocketGuidance = new Map<string, Vec2>();
   private readonly handAttachments = new Map<string, HandAttachmentState>();
+  private readonly chainsaws = new Map<string, ChainsawState>();
+  private readonly chainsawVictimDamage = new Map<string, number>();
+  private readonly zombies = new Map<string, ZombieState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -337,7 +391,11 @@ export class CombatSystem {
     this.virginBlood.clear();
     this.deathAuras.clear();
     this.rockets.clear();
+    this.rocketGuidance.clear();
     this.handAttachments.clear();
+    this.chainsaws.clear();
+    this.chainsawVictimDamage.clear();
+    this.zombies.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -502,6 +560,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "grappling-hook") {
       return this.fireGrapplingHook(context);
     }
+    if (this.inventory.equippedWeapon === "chainsaw") {
+      return this.useChainsawPrimary(context);
+    }
     if (this.inventory.equippedWeapon === "hands") {
       return this.spawnHands(context);
     }
@@ -538,7 +599,10 @@ export class CombatSystem {
       return this.callHolyBazookaAmmo(context);
     }
     if (weapon.id === "grappling-hook") {
-      return this.releaseGrapplingHook(context.ownerId, context.now);
+      return this.pullGrapplingHook(context);
+    }
+    if (weapon.id === "chainsaw") {
+      return this.stopChainsaw(context.ownerId, context.now);
     }
     if (weapon.id === "hands") {
       return this.spawnHands(context);
@@ -743,6 +807,10 @@ export class CombatSystem {
     const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
     this.recordDeathAuraSuffering(target.id, damage);
+    const chainsawDeathSource = request.weaponId === "chainsaw" && request.label !== "Zombie Bite" && !request.sourceId.startsWith("zombie-");
+    if (chainsawDeathSource && request.sourceId !== target.id) {
+      this.recordChainsawDamage(request.sourceId, target.id, damage);
+    }
     target.velocityX += request.knockback.x * knockbackScale;
     target.velocityY += request.knockback.y * knockbackScale * locationModifier.verticalScale + verticalLift * locationModifier.verticalScale;
     target.hitstun = Math.max(target.hitstun, effectiveStun * (request.label === "DOT" ? 1 : 1.08));
@@ -761,6 +829,10 @@ export class CombatSystem {
     }
     if (finalStatus === "shock") {
       this.queueSound("lightning-shock");
+    }
+    if (finalStatus === "poison") {
+      this.addEffect("aura", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y - 38, "#164f24", "POISON");
+      this.addEffect("spark", target.x + 8, target.y + 10, target.x - 20, target.y - 10, "#7cff6b", "Poison");
     }
     if (hitLocation === "head" || hitLocation === "leg" || finalStatus === "bleed") {
       const bloodY = typeof request.hitY === "number" ? request.hitY : target.y + target.height / 2;
@@ -803,6 +875,12 @@ export class CombatSystem {
       if (this.consumeVirginBloodRevive(target)) {
         return { applied: true, remainingHp: target.hp, hitLocation };
       }
+      if (chainsawDeathSource) {
+        this.spawnZombieFromChainsaw(request.sourceId, target, this.getChainsawContribution(request.sourceId, target.id), {
+          x: target.x,
+          y: target.y,
+        });
+      }
       this.startRespawn(target, "KO");
     }
 
@@ -833,6 +911,8 @@ export class CombatSystem {
     this.updateInventory(dt);
     this.updateHolyBazookaAmmo(dt, players);
     this.updateGrapples(dt, players);
+    this.updateChainsaws(dt);
+    this.updateZombies(dt);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
@@ -916,6 +996,10 @@ export class CombatSystem {
     };
   }
 
+  setRocketGuidance(ownerId: string, aim: Vec2): void {
+    this.rocketGuidance.set(ownerId, normalize(aim));
+  }
+
   getHandsState(id: string): { attached: number; missing: number; active: number } {
     const attached = this.handAttachments.get(id)?.attached ?? 0;
     const missing = this.combatants.get(id)?.statuses.find((status) => status.id === "handsMissing")?.duration ?? 0;
@@ -962,6 +1046,8 @@ export class CombatSystem {
     const axeProjectile = axeProjectileId ? this.projectiles.find((projectile) => projectile.id === axeProjectileId) : undefined;
     const rocket = this.activeRocket(ownerId);
     const grapple = this.activeGrapple(ownerId);
+    const chainsaw = this.chainsaws.get(ownerId);
+    const chainsawMode = chainsaw?.mode ?? "idle";
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -981,6 +1067,18 @@ export class CombatSystem {
       rocketRiding: rocket?.riderId === ownerId,
       grappleActive: Boolean(grapple),
       grappleAttached: grapple?.state === "attached",
+      grapplePulling: grapple?.pulling ?? false,
+      grappleRopeLength: grapple?.ropeLength ?? 0,
+      chainsawMode,
+      chainsawHeat: chainsawMode === "overheated"
+        ? 1
+        : chainsawMode === "running"
+          ? clamp((chainsaw?.activeTimer ?? 0) / chainsawOverheatSeconds, 0, 1)
+          : 0,
+      chainsawRev: chainsawMode === "revving" ? clamp((chainsaw?.revTimer ?? 0) / chainsawRevSeconds, 0, 1) : chainsawMode === "running" ? 1 : 0,
+      chainsawDps: this.chainsawDps(ownerId),
+      chainsawDamageTotal: chainsaw?.damageTotal ?? 0,
+      zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
   }
@@ -1175,9 +1273,18 @@ export class CombatSystem {
   }
 
   private spawnRemoteGrappleVisual(event: CombatEventPacket, aim: Vec2): void {
-    if (event.action === "secondary") {
+    if (event.label === "Grapple Release") {
       removeWhere(this.grapples, (grapple) => grapple.ownerId === event.ownerId);
       this.addEffect("spark", event.x, event.y, event.x, event.y - 24, colorForWeapon("grappling-hook"), "Release");
+      return;
+    }
+    if (event.action === "secondary") {
+      const grapple = this.grapples.find((item) => item.ownerId === event.ownerId);
+      if (grapple) {
+        grapple.pulling = true;
+        grapple.pullTimer = 0.18;
+      }
+      this.addEffect("tracer", event.x, event.y, event.x + aim.x * 80, event.y + aim.y * 80, colorForWeapon("grappling-hook"), "Grapple Pull");
       return;
     }
     if (event.action !== "primary") {
@@ -1291,6 +1398,7 @@ export class CombatSystem {
       droppedWeapons: this.droppedWeapons,
       ammoPickups: this.ammoPickups,
       grapples: this.grapples,
+      zombies: [...this.zombies.values()],
       damageNumbers: this.damageNumbers,
       effects: this.effects,
     };
@@ -1621,7 +1729,7 @@ export class CombatSystem {
   private fireGrapplingHook(context: WeaponUseContext): WeaponUseResult {
     const weaponId: WeaponId = "grappling-hook";
     if (this.activeGrapple(context.ownerId)) {
-      return { kind: "blocked", weaponId, label: "Already attached" };
+      return this.releaseGrapplingHook(context.ownerId, context.now, "primary");
     }
     if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
       return { kind: "blocked", weaponId, label: "Cooldown" };
@@ -1655,7 +1763,26 @@ export class CombatSystem {
     return { kind: "fired", weaponId, label: "Grapple Fire" };
   }
 
-  private releaseGrapplingHook(ownerId: string, now: number): WeaponUseResult {
+  private pullGrapplingHook(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "grappling-hook";
+    const grapple = this.activeGrapple(context.ownerId);
+    if (!grapple) {
+      return { kind: "blocked", weaponId, label: "No grapple" };
+    }
+    if (grapple.state !== "attached") {
+      return { kind: "blocked", weaponId, label: "Hook flying" };
+    }
+    grapple.pulling = true;
+    grapple.pullTimer = 0.18;
+    grapple.ropeLength = Math.max(82, grapple.ropeLength - 18);
+    const ownerAnchor = this.ownerRopeAnchor(context.ownerId, [context.player]) ?? this.muzzle(context.player);
+    this.addEffect("tracer", ownerAnchor.x, ownerAnchor.y, grapple.anchorX, grapple.anchorY, colorForWeapon(weaponId), "Grapple Pull");
+    this.queueSound("grapple-attach");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", ownerAnchor, normalize({ x: grapple.anchorX - ownerAnchor.x, y: grapple.anchorY - ownerAnchor.y }), "Grapple Pull", context.now));
+    return { kind: "utility", weaponId, label: "Grapple Pull" };
+  }
+
+  private releaseGrapplingHook(ownerId: string, now: number, action: "primary" | "secondary" = "primary"): WeaponUseResult {
     const weaponId: WeaponId = "grappling-hook";
     const grapple = this.activeGrapple(ownerId);
     if (!grapple) {
@@ -1666,8 +1793,61 @@ export class CombatSystem {
     this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, weaponRegistry.get(weaponId).secondary.cooldown);
     this.addEffect("spark", point.x, point.y, point.x, point.y - 28, colorForWeapon(weaponId), "Release");
     this.queueSound("grapple-release");
-    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", point, { x: 0, y: -1 }, "Grapple Release", now));
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, action, point, { x: 0, y: -1 }, "Grapple Release", now));
     return { kind: "utility", weaponId, label: "Grapple Release" };
+  }
+
+  private useChainsawPrimary(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "chainsaw";
+    const state = this.getOrCreateChainsaw(context.ownerId);
+    state.aim = normalize(context.aim);
+    if (state.mode === "overheated") {
+      if (state.cooldownTimer > 0) {
+        return { kind: "blocked", weaponId, label: "Overheated" };
+      }
+      state.mode = "idle";
+      state.activeTimer = 0;
+      state.revTimer = 0;
+      state.tickTimer = 0;
+    }
+    if (state.mode === "idle") {
+      state.mode = "revving";
+      state.revTimer = 0;
+      state.activeTimer = 0;
+      state.tickTimer = chainsawTickInterval;
+      this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, 0.08);
+      this.addEffect("aura", context.player.x + context.player.width / 2, context.player.y + 22, context.player.x + context.player.width / 2 + state.aim.x * 46, context.player.y + 22 + state.aim.y * 18, colorForWeapon(weaponId), "REV");
+      this.queueSound("chainsaw-rev");
+      this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", this.muzzle(context.player), state.aim, "Chainsaw Rev", context.now));
+      return { kind: "utility", weaponId, label: "Revving" };
+    }
+    if (state.mode === "revving") {
+      this.queueSound("chainsaw-rev");
+      return { kind: "utility", weaponId, label: "Revving" };
+    }
+    this.queueSound("chainsaw-run");
+    return { kind: "utility", weaponId, label: "Running" };
+  }
+
+  private stopChainsaw(ownerId: string, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "chainsaw";
+    const state = this.chainsaws.get(ownerId);
+    if (!state || state.mode === "idle") {
+      return { kind: "blocked", weaponId, label: "Chainsaw idle" };
+    }
+    if (state.mode === "overheated" && state.cooldownTimer > 0) {
+      return { kind: "blocked", weaponId, label: "Overheated" };
+    }
+    state.mode = "idle";
+    state.revTimer = 0;
+    state.activeTimer = 0;
+    state.tickTimer = 0;
+    this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, weaponRegistry.get(weaponId).secondary.cooldown);
+    const owner = this.combatants.get(ownerId);
+    const center = owner ? { x: owner.x + owner.width / 2, y: owner.y + 22 } : { x: 0, y: 0 };
+    this.addEffect("spark", center.x, center.y, center.x, center.y - 20, colorForWeapon(weaponId), "Stop");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", center, { x: 0, y: -1 }, "Chainsaw Stop", now));
+    return { kind: "utility", weaponId, label: "Chainsaw Stop" };
   }
 
   private spawnHands(context: WeaponUseContext): WeaponUseResult {
@@ -2934,6 +3114,8 @@ export class CombatSystem {
         continue;
       }
       grapple.age += dt;
+      grapple.pullTimer = Math.max(0, (grapple.pullTimer ?? 0) - dt);
+      grapple.pulling = (grapple.pullTimer ?? 0) > 0;
 
       if (grapple.state === "flying") {
         const previousX = grapple.x;
@@ -2972,7 +3154,9 @@ export class CombatSystem {
           grapple.x = grapple.anchorX;
           grapple.y = grapple.anchorY;
         }
-        grapple.ropeLength = Math.max(82, grapple.ropeLength - dt * 130);
+        if (grapple.pulling) {
+          grapple.ropeLength = Math.max(82, grapple.ropeLength - dt * 440);
+        }
         if (!grapple.visualOnly) {
           this.applyGrapplePull(grapple, players, dt);
         }
@@ -2986,6 +3170,280 @@ export class CombatSystem {
 
       this.syncGrappleRope(grapple, ownerAnchor, { x: grapple.anchorX, y: grapple.anchorY }, dt);
     }
+  }
+
+  private updateChainsaws(dt: number): void {
+    for (const [ownerId, state] of this.chainsaws.entries()) {
+      const owner = this.combatants.get(ownerId);
+      if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+        state.mode = "idle";
+        continue;
+      }
+      if (state.mode === "idle") {
+        continue;
+      }
+      if (state.mode === "overheated") {
+        state.cooldownTimer = Math.max(0, state.cooldownTimer - dt);
+        this.inventory.cooldowns["chainsaw"] = state.cooldownTimer;
+        if (state.cooldownTimer === 0) {
+          state.mode = "idle";
+          state.activeTimer = 0;
+          state.revTimer = 0;
+        }
+        continue;
+      }
+      let activeDt = dt;
+      if (state.mode === "revving") {
+        state.revTimer += dt;
+        if (state.revTimer >= chainsawRevSeconds) {
+          activeDt = Math.max(0, state.revTimer - chainsawRevSeconds);
+          state.mode = "running";
+          state.activeTimer = 0;
+          state.tickTimer = 0;
+          this.addEffect("muzzle", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2 + state.aim.x * 48, owner.y + 22 + state.aim.y * 18, colorForWeapon("chainsaw"), "RUNNING");
+          this.queueSound("chainsaw-run");
+        } else if (state.revTimer % 0.45 < dt) {
+          this.addEffect("spark", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2 + state.aim.x * 32, owner.y + 22 + state.aim.y * 12, colorForWeapon("chainsaw"), "Rev");
+          this.queueSound("chainsaw-rev");
+          continue;
+        } else {
+          continue;
+        }
+      }
+
+      state.activeTimer += activeDt;
+      state.tickTimer -= activeDt;
+      if (state.activeTimer >= chainsawOverheatSeconds) {
+        state.mode = "overheated";
+        state.cooldownTimer = chainsawCooldownSeconds;
+        state.tickTimer = 0;
+        this.inventory.cooldowns["chainsaw"] = chainsawCooldownSeconds;
+        this.addEffect("shockwave", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2, owner.y - 24, colorForWeapon("chainsaw"), "OVERHEAT");
+        this.queueSound("chainsaw-overheat");
+        continue;
+      }
+      if (state.activeTimer % 0.42 < activeDt) {
+        this.addEffect("tracer", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2 + state.aim.x * 58, owner.y + 22 + state.aim.y * 22, colorForWeapon("chainsaw"), "Saw");
+        this.queueSound("chainsaw-run");
+      }
+      while (state.tickTimer <= 0) {
+        state.tickTimer += chainsawTickInterval;
+        this.applyChainsawTick(ownerId, owner, state);
+      }
+    }
+  }
+
+  private applyChainsawTick(ownerId: string, owner: Combatant, state: ChainsawState): void {
+    const dps = this.chainsawDps(ownerId);
+    const damage = dps * chainsawTickInterval;
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.48 };
+    const sawTip = { x: origin.x + state.aim.x * chainsawRange, y: origin.y + state.aim.y * chainsawRange };
+    let hitAny = false;
+    for (const target of this.combatants.values()) {
+      if (target.id === ownerId || target.respawnTimer > 0 || target.hp <= 0 || target.id.startsWith("zombie-")) {
+        continue;
+      }
+      if (!isTargetInChainsawArc(target, origin, state.aim)) {
+        continue;
+      }
+      const previousInvulnerable = target.invulnerable;
+      const hpBefore = target.hp;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: ownerId,
+        targetId: target.id,
+        weaponId: "chainsaw",
+        damage,
+        knockback: { x: 0, y: 0 },
+        stun: 0.04,
+        label: "Chainsaw",
+        status: "bleed",
+        skipHitLocationScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+        continue;
+      }
+      hitAny = true;
+      state.damageTotal += Math.max(0, hpBefore - target.hp);
+      this.addEffect("spark", target.x + target.width / 2, target.y + target.height / 2, sawTip.x, sawTip.y, colorForWeapon("chainsaw"), "SAW HIT");
+    }
+    if (hitAny) {
+      this.queueSound("chainsaw-hit");
+    }
+  }
+
+  private updateZombies(dt: number): void {
+    for (const [id, zombie] of [...this.zombies.entries()]) {
+      const body = this.combatants.get(id);
+      if (!body || body.respawnTimer > 0 || body.hp <= 0) {
+        this.zombies.delete(id);
+        continue;
+      }
+      zombie.age += dt;
+      zombie.biteTimer = Math.max(0, zombie.biteTimer - dt);
+      zombie.biteAnim = Math.max(0, zombie.biteAnim - dt);
+      zombie.wanderTimer = Math.max(0, zombie.wanderTimer - dt);
+      const target = this.findZombieTarget(zombie, body);
+      if (target) {
+        zombie.targetId = target.id;
+        const bodyCenter = { x: body.x + body.width / 2, y: body.y + body.height / 2 };
+        const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+        const dx = targetCenter.x - bodyCenter.x;
+        const distance = Math.hypot(dx, targetCenter.y - bodyCenter.y);
+        const direction = dx >= 0 ? 1 : -1;
+        zombie.wanderDirection = direction;
+        body.velocityX = direction * zombie.speed * (distance < 96 ? 1.2 : 1);
+        if (distance <= zombieBiteRange && zombie.biteTimer === 0) {
+          this.applyZombieBite(zombie, body, target, direction);
+        } else if (zombie.age % 0.36 < dt) {
+          this.addEffect("spark", body.x + body.width / 2, body.y + body.height - 8, body.x + body.width / 2 - direction * 30, body.y + body.height - 4, "#164f24", "Zombie Run");
+        }
+      } else {
+        zombie.targetId = undefined;
+        if (zombie.wanderTimer === 0) {
+          zombie.wanderTimer = 0.7 + (Math.sin(zombie.age * 2.7 + id.length) + 1) * 0.65;
+          zombie.wanderDirection = Math.sin(zombie.age * 3.1 + id.length) >= 0 ? 1 : -1;
+        }
+        body.velocityX = zombie.wanderDirection * Math.max(48, zombie.speed * 0.24);
+      }
+    }
+  }
+
+  private applyZombieBite(zombie: ZombieState, body: Combatant, target: Combatant, direction: -1 | 1): void {
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: zombie.id,
+      targetId: target.id,
+      weaponId: "chainsaw",
+      damage: zombie.biteDamage,
+      knockback: { x: direction * 180, y: -90 },
+      stun: 0.24,
+      label: "Zombie Bite",
+      status: "poison",
+      skipHitLocationScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+      return;
+    }
+    zombie.biteTimer = zombieBiteCooldown;
+    zombie.biteAnim = 0.28;
+    body.velocityX = direction * zombie.speed * 1.45;
+    body.velocityY = Math.min(body.velocityY, -180);
+    this.addEffect("stomp", target.x + target.width / 2, target.y + 18, target.x + target.width / 2 + direction * 28, target.y + 12, "#7cff6b", "Zombie Bite");
+    this.queueSound("zombie-bite");
+  }
+
+  private getOrCreateChainsaw(ownerId: string): ChainsawState {
+    const existing = this.chainsaws.get(ownerId);
+    if (existing) {
+      return existing;
+    }
+    const state: ChainsawState = {
+      mode: "idle",
+      revTimer: 0,
+      activeTimer: 0,
+      cooldownTimer: 0,
+      tickTimer: 0,
+      damageTotal: 0,
+      aim: { x: 1, y: 0 },
+    };
+    this.chainsaws.set(ownerId, state);
+    return state;
+  }
+
+  private chainsawDps(ownerId: string): number {
+    const total = this.chainsaws.get(ownerId)?.damageTotal ?? 0;
+    return clamp(chainsawBaseDps + Math.floor(total / chainsawDamagePerDps), chainsawBaseDps, chainsawMaxDps);
+  }
+
+  private recordChainsawDamage(ownerId: string, victimId: string, damage: number): void {
+    const key = `${ownerId}:${victimId}`;
+    this.chainsawVictimDamage.set(key, (this.chainsawVictimDamage.get(key) ?? 0) + damage);
+  }
+
+  private getChainsawContribution(ownerId: string, victimId: string): number {
+    return this.chainsawVictimDamage.get(`${ownerId}:${victimId}`) ?? 0;
+  }
+
+  private clearChainsawVictimRecords(victimId: string): void {
+    for (const key of [...this.chainsawVictimDamage.keys()]) {
+      if (key.endsWith(`:${victimId}`)) {
+        this.chainsawVictimDamage.delete(key);
+      }
+    }
+  }
+
+  private spawnZombieFromChainsaw(ownerId: string, victim: Combatant, contribution: number, deathSpot: Vec2): void {
+    const key = `${ownerId}:${victim.id}`;
+    this.chainsawVictimDamage.delete(key);
+    const health = clamp(Math.round(contribution), 5, 150);
+    const strength = clamp((health - 5) / 145, 0, 1);
+    const biteDamage = contribution >= 95 ? 30 : contribution >= 40 ? 15 : 6;
+    const speed = lerp(260, 620, strength);
+    const id = this.makeId("zombie");
+    const zombieBody: Combatant = {
+      id,
+      name: "Chainsaw Zombie",
+      x: deathSpot.x,
+      y: Math.min(deathSpot.y, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      spawnX: deathSpot.x,
+      spawnY: Math.min(deathSpot.y, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      hp: health,
+      maxHp: health,
+      velocityX: 0,
+      velocityY: -120,
+      hitstun: 0,
+      invulnerable: 0,
+      respawnTimer: 0,
+      color: "#164f24",
+      statuses: [],
+    };
+    this.combatants.set(id, zombieBody);
+    this.zombies.set(id, {
+      id,
+      ownerId,
+      strength,
+      biteDamage,
+      speed,
+      age: 0,
+      biteTimer: 0,
+      biteAnim: 0,
+      wanderTimer: 0,
+      wanderDirection: victim.velocityX < 0 ? -1 : 1,
+    });
+    this.addEffect("aura", deathSpot.x + victim.width / 2, deathSpot.y + victim.height / 2, deathSpot.x + victim.width / 2, deathSpot.y - 74, "#164f24", "ZOMBIE");
+    this.addEffect("spark", deathSpot.x + victim.width / 2, deathSpot.y + victim.height - 4, deathSpot.x + victim.width / 2 + 28, deathSpot.y + victim.height - 18, "#7cff6b", "RISE");
+    this.queueSound("zombie-spawn");
+  }
+
+  private findZombieTarget(zombie: ZombieState, body: Combatant): Combatant | undefined {
+    let fallback: { target: Combatant; distance: number } | undefined;
+    let preferred: { target: Combatant; distance: number } | undefined;
+    const bx = body.x + body.width / 2;
+    const by = body.y + body.height / 2;
+    for (const target of this.combatants.values()) {
+      if (target.id === zombie.id || target.id.startsWith("zombie-") || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      const distance = Math.hypot(target.x + target.width / 2 - bx, target.y + target.height / 2 - by);
+      if (distance > zombieDetectRange) {
+        continue;
+      }
+      const candidate = { target, distance };
+      if (target.id === zombie.ownerId) {
+        if (!fallback || distance < fallback.distance) {
+          fallback = candidate;
+        }
+      } else if (!preferred || distance < preferred.distance) {
+        preferred = candidate;
+      }
+    }
+    return preferred?.target ?? fallback?.target;
   }
 
   private ownerRopeAnchor(ownerId: string, players: PlayerPhysicsState[]): Vec2 | undefined {
@@ -3019,7 +3477,7 @@ export class CombatSystem {
     grapple.x = grapple.anchorX;
     grapple.y = grapple.anchorY;
     const distance = ownerAnchor ? Math.hypot(grapple.anchorX - ownerAnchor.x, grapple.anchorY - ownerAnchor.y) : 260;
-    grapple.ropeLength = clamp(distance * 0.62, 90, 420);
+    grapple.ropeLength = clamp(distance, 110, grappleHookMaxRopeLength);
     const direction = ownerAnchor ? normalize({ x: grapple.anchorX - ownerAnchor.x, y: grapple.anchorY - ownerAnchor.y }) : { x: 1, y: -0.2 };
     const previousInvulnerable = target.invulnerable;
     target.invulnerable = 0;
@@ -3051,7 +3509,7 @@ export class CombatSystem {
     grapple.x = x;
     grapple.y = y;
     const distance = ownerAnchor ? Math.hypot(x - ownerAnchor.x, y - ownerAnchor.y) : 260;
-    grapple.ropeLength = clamp(distance * 0.68, 95, 460);
+    grapple.ropeLength = clamp(distance, 110, grappleHookMaxRopeLength);
     this.addEffect("spark", x, y, x, y - 28, colorForWeapon("grappling-hook"), "Attached");
     this.queueSound("grapple-attach");
   }
@@ -3071,14 +3529,16 @@ export class CombatSystem {
     if (distance <= 1) {
       return;
     }
-    const tension = Math.max(0, distance - grapple.ropeLength) / Math.max(distance, 1);
-    if (tension <= 0) {
+    const activePull = grapple.pulling ? 1 : 0;
+    const slack = activePull > 0 ? 0 : 90;
+    const tension = Math.max(0, distance - grapple.ropeLength - slack) / Math.max(distance, 1);
+    if (tension <= 0 && activePull <= 0) {
       return;
     }
     const direction = { x: dx / distance, y: dy / distance };
-    const force = grappleHookPullForce * (0.35 + tension);
+    const force = grappleHookPullForce * (activePull > 0 ? 1.05 : 0.35 + tension);
     source.velocityX += direction.x * force * dt;
-    source.velocityY += direction.y * force * dt - 22 * tension;
+    source.velocityY += direction.y * force * dt - 22 * Math.max(tension, activePull * 0.35);
     const speed = Math.hypot(source.velocityX, source.velocityY);
     if (speed > grappleHookMaxPullSpeed) {
       const scale = grappleHookMaxPullSpeed / speed;
@@ -3247,6 +3707,10 @@ export class CombatSystem {
   }
 
   private startRespawn(target: Combatant, label: string): void {
+    this.clearChainsawVictimRecords(target.id);
+    if (target.id.startsWith("zombie-")) {
+      this.zombies.delete(target.id);
+    }
     target.hp = 0;
     target.respawnTimer = respawnDelay;
     target.hitstun = 0;
@@ -3584,6 +4048,22 @@ export class CombatSystem {
       this.addEffect("tracer", projectile.x, projectile.y, projectile.x - facing * 70, projectile.y + Math.sin(projectile.age * 14) * 30, "#ffcf5a", "Chaotic");
     } else {
       this.addEffect("tracer", projectile.x, projectile.y, projectile.x - Math.sign(projectile.vx || 1) * 58, projectile.y + 5, "#ff8f3d", "Rocket Fire");
+    }
+
+    const guidance = this.rocketGuidance.get(projectile.ownerId);
+    if (guidance) {
+      const current = normalize({ x: projectile.vx, y: projectile.vy });
+      const chaos = projectile.state === "chaotic" ? projectile.chaos ?? 0 : 0;
+      const influence = projectile.state === "chaotic"
+        ? clamp(0.22 / (1 + chaos * 0.42), 0.055, 0.22)
+        : clamp(dt * 0.55, 0, 0.32);
+      const guided = normalize({
+        x: lerp(current.x, guidance.x, influence),
+        y: lerp(current.y, guidance.y, influence),
+      });
+      const speed = Math.max(rocketLaunchSpeed, Math.hypot(projectile.vx, projectile.vy));
+      projectile.vx = guided.x * speed;
+      projectile.vy = guided.y * speed;
     }
 
     projectile.x += projectile.vx * dt;
@@ -4159,12 +4639,12 @@ export class CombatSystem {
         if ((player.sliding || player.action === "slide" || player.action === "lowSlide") && intersectsRect(owner, target)) {
           const low = player.lowSliding || player.action === "lowSlide";
           this.applyBodyHit(player.id, target, low ? "low-slide" : "slide", {
-            damage: superLegsEquipped ? (low ? 18 : 13) : low ? 11 : 7,
+            damage: superLegsEquipped ? (low ? 24 : 16) : low ? 11 : 7,
             knockback: {
-              x: player.facing * (superLegsEquipped ? (low ? 760 : 540) : low ? 610 : 390),
-              y: superLegsEquipped ? (low ? -780 : -560) : low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce,
+              x: player.facing * (superLegsEquipped ? (low ? 900 : 680) : low ? 610 : 390),
+              y: superLegsEquipped ? (low ? -920 : -680) : low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce,
             },
-            stun: superLegsEquipped ? (low ? 0.88 : 0.62) : low ? 0.72 : 0.48,
+            stun: superLegsEquipped ? (low ? 0.92 : 0.68) : low ? 0.72 : 0.48,
             label: superLegsEquipped ? (low ? "Super Low Slide Trip" : "Super Slide Trip") : low ? "Low Slide Trip" : "Slide Trip",
             status: "tripped",
             sound: low ? "low-slide" : "player-stunned",
@@ -4514,6 +4994,18 @@ function knifeContactRect(owner: Combatant, facing: number): { x: number; y: num
   };
 }
 
+function isTargetInChainsawArc(target: Combatant, origin: Vec2, aim: Vec2): boolean {
+  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  const dx = targetCenter.x - origin.x;
+  const dy = targetCenter.y - origin.y;
+  const forward = dx * aim.x + dy * aim.y;
+  if (forward < -12 || forward > chainsawRange + target.width * 0.4) {
+    return false;
+  }
+  const side = Math.abs(dx * -aim.y + dy * aim.x);
+  return side <= chainsawThickness / 2 + Math.max(target.width, target.height) * 0.24;
+}
+
 const neutralLocationModifier = {
   damageScale: 1,
   knockbackScale: 1,
@@ -4618,6 +5110,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff8f3d";
     case "holy-bazooka":
       return "#fff4a8";
+    case "chainsaw":
+      return "#b8bfd7";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -4769,6 +5263,8 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Angel Wings", duration: virginBloodReviveWingDuration, stacks: 1 };
     case "deathFrozen":
       return { id, label: "Frozen", duration: 0.55, stacks: 1 };
+    case "poison":
+      return { id, label: "Poison", duration: 18, stacks: 1, tickDamage: 2, tickEvery: 1, tickTimer: 1 };
     case "scrambled":
       return { id, label: "Scrambled", duration: 7.5, stacks: 1, tickDamage: 1, tickEvery: 1 };
     case "handsMissing":

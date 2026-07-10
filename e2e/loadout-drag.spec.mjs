@@ -29,6 +29,12 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "grappling-hook", "Grappling Hook", "attachment");
     await expectSlot(page, "attachment", "Grappling Hook");
 
+    await dragItemToSlot(page, "holy-bazooka", "Holy Bazooka", "attachment");
+    await expectSlot(page, "attachment", "Holy Bazooka");
+
+    await dragItemToSlot(page, "chainsaw", "Chainsaw", "attachment");
+    await expectSlot(page, "attachment", "Chainsaw");
+
     await dragItemToSlot(page, "holy-bazooka", "Holy Bazooka", "rightHand");
     await expectSlot(page, "rightHand", "Holy Bazooka");
 
@@ -45,23 +51,22 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "virgin-blood", "Virgin Blood", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
 
+    await dragItemToSlot(page, "chainsaw", "Chainsaw", "rightHand");
+    await expectSlot(page, "rightHand", "Chainsaw");
+
     await dragItemToSlot(page, "super-legs", "Super Legs", "legs");
     await expectSlot(page, "legs", "Super Legs");
 
     await dragItemToSlot(page, "death-aura", "Death Aura", "rightHand");
-    await expectSlot(page, "rightHand", "Holy Bazooka");
+    await expectSlot(page, "rightHand", "Chainsaw");
     await expect(page.locator("[data-loadout-error]")).toContainText("Death Aura cannot attach");
 
     await dragItemToSlot(page, "wings", "Wings", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Wings cannot attach");
 
-    await dragItemToSlot(page, "holy-bazooka", "Holy Bazooka", "attachment");
-    await expectSlot(page, "attachment", "Virgin Blood");
-    await expect(page.locator("[data-loadout-error]")).toContainText("Holy Bazooka cannot attach");
-
     await dragItemToSlot(page, "super-legs", "Super Legs", "rightHand");
-    await expectSlot(page, "rightHand", "Holy Bazooka");
+    await expectSlot(page, "rightHand", "Chainsaw");
     await expect(page.locator("[data-loadout-error]")).toContainText("Super Legs cannot attach");
 
     await dragItemToSlot(page, "grappling-hook", "Grappling Hook", "legs");
@@ -71,8 +76,8 @@ test.describe("character creator loadout drag and drop", () => {
     await page.locator("[data-offline]").click();
     await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Death Aura");
     await expect(page.locator(".loadout-strip")).toContainText("E Back Strap: Wings");
-    await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Holy Bazooka");
-    await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Holy Bazooka");
+    await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Chainsaw");
+    await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Chainsaw");
     await expect(page.locator(".loadout-strip")).toContainText("F Attachment: Virgin Blood");
     await expect(page.locator(".loadout-strip")).toContainText("Legs: Super Legs");
   });

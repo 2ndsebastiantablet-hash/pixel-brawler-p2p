@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(21);
+    expect(fighter.weaponInventory).toHaveLength(22);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -1424,13 +1424,13 @@ describe("combat system", () => {
     expect(grapple.points.length).toBeGreaterThanOrEqual(6);
     expect(target.hp).toBeGreaterThanOrEqual(92);
     expect(target.hp).toBeLessThan(100);
-    expect(player.velocityX).toBeGreaterThan(180);
+    expect(player.velocityX).toBeLessThan(80);
     expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
       expect.objectContaining({ action: "hit", weaponId: "grappling-hook", targetId: dummy.id, label: "Grapple Hook" }),
     ]));
     expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["grapple-fire", "grapple-attach"]));
 
-    const blocked = combat.usePrimary({
+    const pulling = combat.useSecondary({
       ownerId: "peer-a",
       player,
       aim: { x: 1, y: 0 },
@@ -1438,9 +1438,18 @@ describe("combat system", () => {
       heldMs: 0,
       isNewPress: true,
     });
-    expect(blocked).toMatchObject({ kind: "blocked", weaponId: "grappling-hook", label: "Already attached" });
+    expect(pulling).toMatchObject({ kind: "utility", weaponId: "grappling-hook", label: "Grapple Pull" });
+    expect(combat.getSnapshot().grapples).toHaveLength(1);
+    combat.update(0.12, [player]);
+    expect(player.velocityX).toBeGreaterThan(120);
 
-    const released = combat.useSecondary({
+    player.x = -1180;
+    player.velocityX = 0;
+    combat.update(0.16, [player]);
+    expect(combat.getSnapshot().grapples).toHaveLength(1);
+    expect(player.velocityX).toBeGreaterThan(0);
+
+    const released = combat.usePrimary({
       ownerId: "peer-a",
       player,
       aim: { x: 1, y: 0 },
@@ -1911,9 +1920,12 @@ describe("combat system", () => {
     expect(lit).toMatchObject({ kind: "utility", label: "Rocket Lit" });
     expect(combat.getRocketState("peer-a")).toMatchObject({ active: true, lit: true, riding: true });
 
+    combat.setRocketGuidance("peer-a", { x: 0.15, y: -1 });
     combat.update(0.24, [player]);
     expect(player.x).toBeGreaterThan(50);
-    expect(combat.getSnapshot().projectiles[0]).toMatchObject({ weaponId: "rocket", label: "ROCKET LIT" });
+    const guidedRocket = combat.getSnapshot().projectiles[0];
+    expect(guidedRocket).toMatchObject({ weaponId: "rocket", label: "ROCKET LIT" });
+    expect(guidedRocket.vy).toBeLessThan(-50);
 
     expect(combat.jumpOffRocket("peer-a", player)).toBe(true);
     expect(combat.getRocketState("peer-a").riding).toBe(false);
@@ -2099,6 +2111,84 @@ describe("combat system", () => {
 
     combat.update(0.315, [player]);
     expect(combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")?.state).toBe("chaotic");
+  });
+
+  it("revs Chainsaw into low DPS, overheats, spawns contribution zombies, and applies poison bites", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("chainsaw");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    const victim = combat.spawnTrainingDummy({ x: 46, y: playerState.y });
+
+    const rev = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(rev).toMatchObject({ kind: "utility", weaponId: "chainsaw", label: "Revving" });
+    expect(combat.getWeaponRuntimeState("chainsaw", "peer-a").chainsawMode).toBe("revving");
+    combat.update(1.9, [player]);
+    expect(combat.getCombatant(victim.id)!.hp).toBe(100);
+
+    combat.update(0.25, [player]);
+    const running = combat.getWeaponRuntimeState("chainsaw", "peer-a");
+    expect(running.chainsawMode).toBe("running");
+    expect(running.chainsawDps).toBeGreaterThanOrEqual(8);
+    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(100);
+
+    for (let index = 0; index < 12; index += 1) {
+      combat.getCombatant(victim.id)!.invulnerable = 0;
+      combat.update(0.25, [player]);
+    }
+    const contributionBeforeKill = combat.getWeaponRuntimeState("chainsaw", "peer-a").chainsawDamageTotal;
+    expect(contributionBeforeKill).toBeGreaterThan(20);
+
+    const target = combat.getCombatant(victim.id)!;
+    target.hp = 2;
+    target.invulnerable = 0;
+    combat.update(0.25, [player]);
+
+    const zombie = combat.getSnapshot().zombies[0];
+    expect(zombie).toBeDefined();
+    expect(zombie.ownerId).toBe("peer-a");
+    const zombieBody = combat.getCombatant(zombie.id)!;
+    expect(zombieBody.hp).toBeGreaterThan(5);
+    expect(zombieBody.hp).toBeLessThanOrEqual(150);
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["chainsaw-rev", "chainsaw-hit", "zombie-spawn"]));
+
+    const prey = combat.syncRemotePlayer({
+      id: "peer-b",
+      name: "Prey",
+      color: "#ff6f91",
+      x: zombieBody.x + 26,
+      y: zombieBody.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+      hp: 100,
+      statuses: [],
+    });
+    for (let index = 0; index < 8; index += 1) {
+      prey.invulnerable = 0;
+      combat.update(0.12, [player]);
+    }
+    expect(combat.getCombatant("peer-b")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "poison" })]));
+    const poisonedHp = combat.getCombatant("peer-b")!.hp;
+    combat.getCombatant("peer-b")!.invulnerable = 0;
+    combat.update(1.05, [player]);
+    expect(combat.getCombatant("peer-b")!.hp).toBeLessThan(poisonedHp);
+
+    const overheatCombat = new CombatSystem({ mode: "offline" });
+    overheatCombat.start(createDefaultInventory());
+    overheatCombat.equip("chainsaw");
+    const overheatPlayer = { ...playerState, id: "local", x: 0, velocityX: 0, velocityY: 0 };
+    overheatCombat.syncLocalPlayer(overheatPlayer, "Tester", "#18dff5");
+    overheatCombat.usePrimary({ ownerId: "local", player: overheatPlayer, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    overheatCombat.update(17.4, [overheatPlayer]);
+    expect(overheatCombat.getWeaponRuntimeState("chainsaw", "local").chainsawMode).toBe("overheated");
+    expect(overheatCombat.usePrimary({ ownerId: "local", player: overheatPlayer, aim: { x: 1, y: 0 }, now: 18_000, heldMs: 0, isNewPress: true })).toMatchObject({
+      kind: "blocked",
+      weaponId: "chainsaw",
+      label: "Overheated",
+    });
   });
 
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {

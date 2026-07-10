@@ -19,6 +19,7 @@ export type WeaponId =
   | "rocket"
   | "holy-bazooka"
   | "grappling-hook"
+  | "chainsaw"
   | "hands"
   | "super-legs"
   | "teleport-ball"

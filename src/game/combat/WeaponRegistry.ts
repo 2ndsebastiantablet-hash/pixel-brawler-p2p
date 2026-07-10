@@ -1,5 +1,6 @@
 import type { WeaponDefinition, WeaponId, WeaponInventoryState } from "./Weapon";
 import { axe } from "./weapons/Axe";
+import { chainsaw } from "./weapons/Chainsaw";
 import { deathAura } from "./weapons/DeathAura";
 import { grapplingHook } from "./weapons/GrapplingHook";
 import { hands } from "./weapons/Hands";
@@ -44,6 +45,7 @@ export const WEAPON_IDS = [
   "super-legs",
   "holy-bazooka",
   "grappling-hook",
+  "chainsaw",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -68,6 +70,7 @@ const ALL_WEAPON_IDS = [
   "lightning-rod",
   "sledgehammer",
   "grappling-hook",
+  "chainsaw",
 ] as const satisfies readonly WeaponId[];
 
 const weaponDefinitions: WeaponDefinition[] = [
@@ -87,6 +90,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   rocket,
   holyBazooka,
   grapplingHook,
+  chainsaw,
   hands,
   superLegs,
   teleportBall,

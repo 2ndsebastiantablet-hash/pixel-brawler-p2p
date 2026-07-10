@@ -89,10 +89,10 @@ describe("network player packets", () => {
       action: "idle",
       sequence: 43,
       sentAt: 1010,
-      weaponId: "sniper",
+      weaponId: "chainsaw",
       hp: 64,
       maxHp: 180,
-      statuses: ["marked", "legShotSlow"],
+      statuses: ["marked", "legShotSlow", "poison"],
       respawnTimer: 0,
       invulnerable: 1.95,
       chargeWeaponId: "lightning-rod",
@@ -108,16 +108,16 @@ describe("network player packets", () => {
         rightHand: "knife",
         frontStrap: "wings",
         backStrap: "death-aura",
-        attachment: "virgin-blood",
+        attachment: "chainsaw",
         legs: "super-legs",
       },
     };
 
     const packet = encodePlayerStatePacket(state);
-    expect(packet.w).toBe("sniper");
+    expect(packet.w).toBe("chainsaw");
     expect(packet.hp).toBe(64);
     expect(packet.mh).toBe(180);
-    expect(packet.st).toEqual(["marked", "legShotSlow"]);
+    expect(packet.st).toEqual(["marked", "legShotSlow", "poison"]);
     expect(packet.iv).toBe(1.95);
     expect(packet.cw).toBe("lightning-rod");
     expect(packet.ch).toBe(1850);
@@ -131,7 +131,7 @@ describe("network player packets", () => {
     expect(packet.rh).toBe("knife");
     expect(packet.fs).toBe("wings");
     expect(packet.bs).toBe("death-aura");
-    expect(packet.at).toBe("virgin-blood");
+    expect(packet.at).toBe("chainsaw");
     expect(packet.lg).toBe("super-legs");
     expect(decodePlayerStatePacket(packet)).toEqual(state);
   });

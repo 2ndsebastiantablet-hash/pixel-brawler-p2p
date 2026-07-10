@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -384,6 +384,7 @@ export class Game {
       this.combat.setEquipmentStatus(remote.player.state.id, "superLegs", loadoutHasWeapon(remoteLoadout, "super-legs"));
     }
 
+    this.combat.setRocketGuidance(this.localPlayer.state.id, this.lastAim);
     this.combat.update(dt, [this.localPlayer.state]);
     this.applyLocalRespawnState();
     for (const event of this.combat.consumeEvents()) {
@@ -723,6 +724,29 @@ export class Game {
       return;
     }
 
+    if (weaponId === "chainsaw") {
+      if (input.held || input.pressed) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim: input.aim,
+          now: input.now,
+          heldMs: input.heldMs,
+          isNewPress: input.pressed,
+        }), "primary");
+      } else if (input.released) {
+        this.recordAttack(this.combat.useSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim: input.aim,
+          now: input.now,
+          heldMs: input.heldMs,
+          isNewPress: true,
+        }), "secondary");
+      }
+      return;
+    }
+
     if (weaponId === "sniper") {
       if (input.pressed) {
         this.recordAttack(this.combat.usePrimary({
@@ -750,7 +774,7 @@ export class Game {
   }
 
   private handleWeaponSecondaryAction(weaponId: WeaponId, input: WeaponActionInput): void {
-    if ((weaponId === "minigun" || weaponId === "sniper") && (input.held || input.pressed)) {
+    if ((weaponId === "minigun" || weaponId === "sniper" || weaponId === "grappling-hook") && (input.held || input.pressed)) {
       this.recordAttack(this.combat.useSecondary({
         ownerId: this.localPlayer.state.id,
         player: this.localPlayer.state,
@@ -824,6 +848,8 @@ export class Game {
         break;
       case "revolver-last":
       case "minigun-overheat":
+      case "chainsaw-overheat":
+      case "zombie-spawn":
         this.shakeTimer = Math.max(this.shakeTimer, 0.1);
         break;
       case "machete-chop":
@@ -967,6 +993,7 @@ export class Game {
     const legSlow = local?.statuses.some((status) => status.id === "legShotSlow") ? COMBAT_TUNING.sniper.legShotMoveMultiplier : 1;
     const legStagger = local?.statuses.some((status) => status.id === "legStagger") ? 0.72 : 1;
     const suppressed = local?.statuses.some((status) => status.id === "suppressed") ? 0.82 : 1;
+    const poison = local?.statuses.some((status) => status.id === "poison") ? 0.78 : 1;
     const steadyLock = local?.statuses.some((status) => status.id === "steady") ? 0 : 1;
     const minigunSlow = weapon.id === "minigun" && runtime.heat > 0.02
       ? COMBAT_TUNING.minigun.firingSlowMultiplier
@@ -979,7 +1006,7 @@ export class Game {
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
     const superLegs = loadoutHasWeapon(this.loadout, "super-legs");
     const superLegsMoveScale = superLegs ? 1.18 : 1;
-    const movementScale = legSlow * legStagger * suppressed * steadyLock * minigunSlow * empowered * holy * superLegsMoveScale;
+    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * superLegsMoveScale;
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
@@ -989,10 +1016,10 @@ export class Game {
       doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.1 : 1),
       thirdJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.04 : 1) * (superLegs ? 0.96 : 1),
       maxAirJumps: superLegs ? 3 : 2,
-      slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale,
-      lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale,
-      slideDuration: DEFAULT_PHYSICS.slideDuration * (superLegs ? 1.18 : 1),
-      lowSlideDuration: DEFAULT_PHYSICS.lowSlideDuration * (superLegs ? 1.16 : 1),
+      slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.16 : 1),
+      lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.2 : 1),
+      slideDuration: DEFAULT_PHYSICS.slideDuration * (superLegs ? 1.24 : 1),
+      lowSlideDuration: DEFAULT_PHYSICS.lowSlideDuration * (superLegs ? 1.22 : 1),
       groundSlamVelocity: DEFAULT_PHYSICS.groundSlamVelocity * (superLegs ? 1.28 : 1),
       slamLandingDuration: DEFAULT_PHYSICS.slamLandingDuration * (superLegs ? 0.72 : 1),
     };
@@ -1382,6 +1409,7 @@ export class Game {
       && weaponId !== "rocket"
       && weaponId !== "holy-bazooka"
       && weaponId !== "grappling-hook"
+      && weaponId !== "chainsaw"
       && weaponId !== "lightning-rod"
       && weaponId !== "slingshot"
       && weaponId !== "whip"
@@ -1503,6 +1531,26 @@ export class Game {
         ctx.fillStyle = "rgba(90, 215, 255, 0.35)";
         this.pixelRect(ctx, 2, -16, 54, 32);
       }
+    } else if (weaponId === "chainsaw") {
+      const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
+      const rev = runtime?.chainsawRev ?? 0;
+      const heat = runtime?.chainsawHeat ?? 0;
+      const running = runtime?.chainsawMode === "running";
+      const shake = running ? Math.round(Math.sin(performance.now() * 0.07) * 3) : 0;
+      ctx.fillStyle = "#2b3542";
+      this.pixelRect(ctx, -2, 4, 28, 8);
+      ctx.fillStyle = heat > 0.82 ? "#ff6f91" : "#b8bfd7";
+      this.pixelRect(ctx, 18 + shake, -9, 48, 18);
+      ctx.fillStyle = "#56606f";
+      this.pixelRect(ctx, 22 + shake, -5, 38, 10);
+      ctx.fillStyle = running ? "#fff4a8" : "#d6f2ff";
+      for (let index = 0; index < 6; index += 1) {
+        this.pixelRect(ctx, 24 + index * 6 + shake, -11 + (index % 2) * 18, 4, 5);
+      }
+      if (running || rev > 0) {
+        ctx.fillStyle = running ? "rgba(255, 244, 168, 0.45)" : "rgba(184, 191, 215, 0.34)";
+        this.pixelRect(ctx, 58 + shake, -14, Math.round(18 + rev * 20), 28);
+      }
     } else if (weaponId === "lightning-rod") {
       ctx.fillStyle = "#ffd84d";
       this.pixelRect(ctx, 0, -4, 58, 8);
@@ -1616,6 +1664,13 @@ export class Game {
       ctx.fillStyle = "#d6f2ff";
       ctx.fillRect(x + 2, y - 4, 8, 4);
       ctx.fillRect(x + state.width - 10, y + state.height + 1, 7, 4);
+    }
+    if (statuses.includes("poison")) {
+      ctx.fillStyle = "rgba(22, 79, 36, 0.34)";
+      ctx.fillRect(x - 5, y - 6, state.width + 10, state.height + 12);
+      ctx.fillStyle = "#7cff6b";
+      ctx.fillRect(x + 4, y - 10, 5, 5);
+      ctx.fillRect(x + state.width - 7, y + 8, 4, 4);
     }
     if (statuses.includes("scrambled")) {
       ctx.fillStyle = "#b8ffd0";
@@ -1856,7 +1911,12 @@ export class Game {
     const snapshot = this.combat.getSnapshot();
     for (const combatant of snapshot.combatants) {
       if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id)) {
-        this.drawCombatant(ctx, combatant);
+        const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
+        if (zombie) {
+          this.drawZombieCombatant(ctx, combatant, zombie);
+        } else {
+          this.drawCombatant(ctx, combatant);
+        }
       }
     }
     for (const pickup of snapshot.ammoPickups) {
@@ -1986,6 +2046,13 @@ export class Game {
       ctx.fillStyle = "#d6f2ff";
       ctx.fillRect(x + 2, y - 3, 8, 4);
       ctx.fillRect(x + 25, y + 50, 7, 4);
+    }
+    if (combatant.statuses.some((status) => status.id === "poison")) {
+      ctx.fillStyle = "rgba(22, 79, 36, 0.34)";
+      ctx.fillRect(x - 5, y - 6, 42, 60);
+      ctx.fillStyle = "#7cff6b";
+      ctx.fillRect(x + 4, y - 10, 5, 5);
+      ctx.fillRect(x + 24, y + 8, 4, 4);
     }
     if (combatant.statuses.some((status) => status.id === "scrambled")) {
       ctx.fillStyle = "#b8ffd0";
@@ -2167,6 +2234,16 @@ export class Game {
       ctx.fillRect(x + 8, y - 8, 14, 16);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(x + 18, y - 2, 9, 4);
+    } else if (dropped.weaponId === "chainsaw") {
+      ctx.fillStyle = "#2b3542";
+      ctx.fillRect(x - 19, y + 1, 22, 7);
+      ctx.fillStyle = colorForWeapon("chainsaw");
+      ctx.fillRect(x - 1, y - 8, 38, 16);
+      ctx.fillStyle = "#56606f";
+      ctx.fillRect(x + 4, y - 4, 27, 8);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(x + 31, y - 10, 4, 5);
+      ctx.fillRect(x + 18, y + 6, 4, 5);
     } else if (dropped.weaponId === "whip") {
       for (let index = 0; index < 6; index += 1) {
         ctx.fillRect(x - 18 + index * 7, y + Math.sin(index) * 4, 6, 5);
@@ -2232,6 +2309,42 @@ export class Game {
       ctx.textAlign = "center";
       ctx.fillText("F", x, y - 12);
     }
+  }
+
+  private drawZombieCombatant(ctx: CanvasRenderingContext2D, combatant: Combatant, zombie: ZombieState): void {
+    const x = Math.round(combatant.x - this.camera.x);
+    const y = Math.round(combatant.y - this.camera.y);
+    const facing = combatant.velocityX < -4 ? -1 : combatant.velocityX > 4 ? 1 : zombie.wanderDirection;
+    const lunge = zombie.biteAnim > 0 ? Math.round(7 * (zombie.biteAnim / 0.28)) : 0;
+    const wobble = Math.round(Math.sin(zombie.age * 18) * 2);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = combatant.respawnTimer > 0 ? 0.25 : 1;
+    ctx.fillStyle = "rgba(22, 79, 36, 0.28)";
+    ctx.fillRect(x - 6, y - 8, combatant.width + 12, combatant.height + 14);
+    ctx.fillStyle = combatant.invulnerable > 0 ? "#ffffff" : "#164f24";
+    ctx.fillRect(x + 7 + facing * lunge, y + 5 + wobble, 17, 10);
+    ctx.fillRect(x + 4 + facing * lunge, y + 15, 25, 25);
+    ctx.fillStyle = "#7cff6b";
+    ctx.fillRect(x + (facing > 0 ? 19 : 9) + facing * lunge, y + 8 + wobble, 4, 4);
+    ctx.fillStyle = "#0b2612";
+    ctx.fillRect(x + 8 + facing * lunge, y + 25, 6, 18);
+    ctx.fillRect(x + 22 + facing * lunge, y + 24, 6, 19);
+    ctx.fillStyle = "#2f7a3e";
+    ctx.fillRect(x + (facing > 0 ? 27 : -4) + facing * lunge, y + 20, 9, 18);
+    ctx.fillRect(x + (facing > 0 ? -4 : 27) + facing * lunge, y + 24, 8, 16);
+    if (zombie.biteAnim > 0) {
+      ctx.fillStyle = "#7cff6b";
+      ctx.fillRect(x + (facing > 0 ? 30 : -8) + facing * lunge, y + 12, 12, 6);
+      ctx.fillStyle = "rgba(124, 255, 107, 0.42)";
+      ctx.fillRect(x + (facing > 0 ? 38 : -28) + facing * lunge, y + 10, 22, 10);
+    }
+    this.drawHealthBar(ctx, x - 7, y - 12, 46, combatant.hp, combatant.maxHp);
+    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#7cff6b";
+    ctx.fillText("Zombie", x + 16, y - 16);
+    ctx.restore();
   }
 
   private drawEffect(ctx: CanvasRenderingContext2D, effect: CombatEffect): void {
@@ -2415,13 +2528,18 @@ export class Game {
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
-    const status = local?.statuses.map((item) => item.label).join(", ") || "No status";
+    const status = local?.statuses.map((item) => item.duration > 0 ? `${item.label} ${item.duration.toFixed(item.duration >= 10 ? 0 : 1)}s` : item.label).join(", ") || "No status";
     const chargeText = weaponHudDetail(weapon.id, runtime, charge?.maxCharge ?? 0, this.primaryHeldMs, status);
+    const hasSuperLegs = loadoutHasWeapon(this.loadout, "super-legs") || (local?.statuses.some((item) => item.id === "superLegs") ?? false);
+    const superLegsText = hasSuperLegs
+      ? `Super Legs jumps ${Math.min(this.localPlayer.state.jumpsUsed, 3)}/3${this.localPlayer.state.grounded ? " - reset" : ""}`
+      : "";
     const special = [
       teleport.pending ? `Teleport ${teleport.timer.toFixed(1)}s - right cancel` : "",
       lightning.charging ? `Lightning in ${lightning.chargeTimer.toFixed(1)}s` : "",
       lightning.empoweredTimer > 0 ? `Empowered ${lightning.empoweredTimer.toFixed(1)}s` : "",
       lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
+      superLegsText,
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
     const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
@@ -2600,6 +2718,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#fff4a8";
     case "grappling-hook":
       return "#5ad7ff";
+    case "chainsaw":
+      return "#b8bfd7";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -2682,7 +2802,13 @@ function weaponHudDetail(
     case "holy-bazooka":
       return `Right calls ammo - Fire cooldown ${runtime.chamber.toFixed(1)}s - max HP steals`;
     case "grappling-hook":
-      return runtime.grappleAttached ? "Attached - right click releases" : runtime.grappleActive ? "Hook flying - wait or release" : `Left fire rope - Right release - ${runtime.chamber.toFixed(1)}s`;
+      return runtime.grappleAttached
+        ? `Attached - hold right pull${runtime.grapplePulling ? " - PULLING" : ""} - left release`
+        : runtime.grappleActive
+          ? "Hook flying - left release"
+          : `Left fire rope - right pull once attached - ${runtime.chamber.toFixed(1)}s`;
+    case "chainsaw":
+      return `${runtime.chainsawMode.toUpperCase()} - Rev ${Math.round(runtime.chainsawRev * 100)}% - Heat ${Math.round(runtime.chainsawHeat * 100)}% - DPS ${runtime.chainsawDps} - Zombies ${runtime.zombieCount}`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -2737,7 +2863,9 @@ function weaponHelper(id: WeaponId): string {
     case "holy-bazooka":
       return "Right calls one map ammo pickup - Left fires homing missile";
     case "grappling-hook":
-      return "Left fires rope hook - attaches to floors, walls, and players - Right releases";
+      return "Left fires/releases rope hook - hold right to pull while attached";
+    case "chainsaw":
+      return "Hold left to rev/run - close DPS overheats - chainsaw KOs make poison zombies";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

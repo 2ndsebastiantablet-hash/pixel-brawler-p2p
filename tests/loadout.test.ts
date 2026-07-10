@@ -59,7 +59,7 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("super-legs", "attachment")).toBe(false);
     expect(isSlotCompatible("holy-bazooka", "rightHand")).toBe(true);
     expect(isSlotCompatible("holy-bazooka", "leftHand")).toBe(true);
-    expect(isSlotCompatible("holy-bazooka", "attachment")).toBe(false);
+    expect(isSlotCompatible("holy-bazooka", "attachment")).toBe(true);
     expect(isSlotCompatible("holy-bazooka", "frontStrap")).toBe(false);
     expect(isSlotCompatible("holy-bazooka", "legs")).toBe(false);
     expect(isSlotCompatible("rocket", "legs")).toBe(false);
@@ -69,6 +69,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("grappling-hook", "frontStrap")).toBe(false);
     expect(isSlotCompatible("grappling-hook", "backStrap")).toBe(false);
     expect(isSlotCompatible("grappling-hook", "legs")).toBe(false);
+    expect(isSlotCompatible("chainsaw", "rightHand")).toBe(true);
+    expect(isSlotCompatible("chainsaw", "leftHand")).toBe(true);
+    expect(isSlotCompatible("chainsaw", "attachment")).toBe(true);
+    expect(isSlotCompatible("chainsaw", "frontStrap")).toBe(false);
+    expect(isSlotCompatible("chainsaw", "backStrap")).toBe(false);
+    expect(isSlotCompatible("chainsaw", "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -171,11 +177,22 @@ describe("loadout equipment slots", () => {
       attachment: "rocket",
     });
 
-    const incompatibleHandToAttachment = swapAttachmentWithHand({
+    const holyToEmptyAttachment = swapAttachmentWithHand({
       leftHand: "holy-bazooka",
       rightHand: "holy-bazooka",
     }, "rightHand");
-    expect(incompatibleHandToAttachment.swapped).toBe(false);
-    expect(incompatibleHandToAttachment.reason).toContain("Holy Bazooka cannot attach");
+    expect(holyToEmptyAttachment.swapped).toBe(true);
+    expect(holyToEmptyAttachment.loadout.attachment).toBe("holy-bazooka");
+    expect(holyToEmptyAttachment.loadout.leftHand).toBeUndefined();
+    expect(holyToEmptyAttachment.loadout.rightHand).toBeUndefined();
+
+    const chainsawSwap = swapAttachmentWithHand({
+      rightHand: "chainsaw",
+      attachment: "holy-bazooka",
+    }, "rightHand");
+    expect(chainsawSwap.swapped).toBe(true);
+    expect(chainsawSwap.loadout.leftHand).toBe("holy-bazooka");
+    expect(chainsawSwap.loadout.rightHand).toBe("holy-bazooka");
+    expect(chainsawSwap.loadout.attachment).toBe("chainsaw");
   });
 });

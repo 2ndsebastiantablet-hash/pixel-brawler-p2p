@@ -64,6 +64,7 @@ const twoHandedWeapons = new Set<WeaponId>([
 ]);
 
 const oneHandedWeapons = new Set<WeaponId>([
+  "chainsaw",
   "knife",
   "machete",
   "pistol",
@@ -86,7 +87,7 @@ const legWeapons = new Set<WeaponId>([
 
 const attachmentWeapons = new Set<WeaponId>([
   ...oneHandedWeapons,
-  ...[...twoHandedWeapons].filter((id) => id !== "holy-bazooka"),
+  ...twoHandedWeapons,
 ]);
 
 export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
@@ -222,6 +223,8 @@ export function swapAttachmentWithHand(
   const handsMatch = next.leftHand !== undefined && next.leftHand === next.rightHand;
   const attachmentNeedsBothHands = isTwoHandedWeapon(attachment);
   const heldUsesBothHands = isTwoHandedWeapon(held) || handsMatch;
+  const otherSlot = handSlot === "rightHand" ? "leftHand" : "rightHand";
+  const otherHeld = next[otherSlot];
   if (!attachment) {
     if (heldUsesBothHands) {
       next.leftHand = undefined;
@@ -233,7 +236,7 @@ export function swapAttachmentWithHand(
     return { loadout: normalizeLoadout(next), swapped: true };
   }
 
-  if (attachmentNeedsBothHands && !heldUsesBothHands) {
+  if (attachmentNeedsBothHands && !heldUsesBothHands && otherHeld) {
     return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} needs both hands` };
   }
 
@@ -329,7 +332,7 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   if (id === "pistol" || id === "revolver" || id === "laser-blaster" || id === "minigun" || id === "sniper") {
     return "guns";
   }
-  if (id === "knife" || id === "machete" || id === "axe" || id === "whip") {
+  if (id === "knife" || id === "machete" || id === "axe" || id === "whip" || id === "chainsaw") {
     return "blades";
   }
   if (id === "sledgehammer" || id === "rocket" || id === "holy-bazooka") {
