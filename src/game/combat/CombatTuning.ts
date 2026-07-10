@@ -54,6 +54,7 @@ export const COMBAT_TUNING = {
     "holy-bazooka": { label: "Very Heavy", moveSpeedMultiplier: 0.62, accelerationMultiplier: 0.52, airAccelerationMultiplier: 0.54, jumpMultiplier: 0.78, slideMultiplier: 0.62 },
     "grappling-hook": { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.12, jumpMultiplier: 1.02, slideMultiplier: 1.02 },
     chainsaw: { label: "Heavy", moveSpeedMultiplier: 0.9, accelerationMultiplier: 0.86, airAccelerationMultiplier: 0.86, jumpMultiplier: 0.94, slideMultiplier: 0.88 },
+    spikes: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
     hands: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
     "super-legs": { label: "Light", moveSpeedMultiplier: 1.44, accelerationMultiplier: 1.58, airAccelerationMultiplier: 1.42, jumpMultiplier: 1.64, slideMultiplier: 1.5 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,

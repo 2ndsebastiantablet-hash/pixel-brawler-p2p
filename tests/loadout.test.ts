@@ -38,6 +38,14 @@ describe("loadout equipment slots", () => {
       backStrap: "death-aura",
       attachment: "axe",
     });
+    expect(normalizeLoadout({
+      frontStrap: "spikes",
+      rightHand: "spikes",
+      attachment: "spikes",
+      legs: "spikes",
+    })).toEqual({
+      frontStrap: "spikes",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -75,6 +83,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("chainsaw", "frontStrap")).toBe(false);
     expect(isSlotCompatible("chainsaw", "backStrap")).toBe(false);
     expect(isSlotCompatible("chainsaw", "legs")).toBe(false);
+    expect(isSlotCompatible("spikes", "frontStrap")).toBe(true);
+    expect(isSlotCompatible("spikes", "backStrap")).toBe(true);
+    expect(isSlotCompatible("spikes", "leftHand")).toBe(false);
+    expect(isSlotCompatible("spikes", "rightHand")).toBe(false);
+    expect(isSlotCompatible("spikes", "attachment")).toBe(false);
+    expect(isSlotCompatible("spikes", "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -90,6 +104,10 @@ describe("loadout equipment slots", () => {
     const withLegs = assignLoadoutItem(DEFAULT_LOADOUT, "legs", "super-legs");
     expect(withLegs.legs).toBe("super-legs");
     expect(loadoutHasWeapon(withLegs, "super-legs")).toBe(true);
+
+    const withSpikes = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "spikes");
+    expect(withSpikes.frontStrap).toBe("spikes");
+    expect(loadoutHasWeapon(withSpikes, "spikes")).toBe(true);
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {

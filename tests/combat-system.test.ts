@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(22);
+    expect(fighter.weaponInventory).toHaveLength(23);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -2113,7 +2113,7 @@ describe("combat system", () => {
     expect(combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "rocket")?.state).toBe("chaotic");
   });
 
-  it("revs Chainsaw into low DPS, overheats, spawns contribution zombies, and applies poison bites", () => {
+  it("starts Chainsaw damage immediately, overheats, spawns rising contribution zombies, and applies poison bites", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     combat.equip("chainsaw");
@@ -2121,16 +2121,13 @@ describe("combat system", () => {
     combat.syncLocalPlayer(player, "Host", "#18dff5");
     const victim = combat.spawnTrainingDummy({ x: 46, y: playerState.y });
 
-    const rev = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
-    expect(rev).toMatchObject({ kind: "utility", weaponId: "chainsaw", label: "Revving" });
-    expect(combat.getWeaponRuntimeState("chainsaw", "peer-a").chainsawMode).toBe("revving");
-    combat.update(1.9, [player]);
-    expect(combat.getCombatant(victim.id)!.hp).toBe(100);
-
-    combat.update(0.25, [player]);
+    const started = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(started).toMatchObject({ kind: "utility", weaponId: "chainsaw", label: "Running" });
     const running = combat.getWeaponRuntimeState("chainsaw", "peer-a");
     expect(running.chainsawMode).toBe("running");
+    expect(running.chainsawRev).toBe(0);
     expect(running.chainsawDps).toBeGreaterThanOrEqual(8);
+    combat.update(0.25, [player]);
     expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(100);
 
     for (let index = 0; index < 12; index += 1) {
@@ -2151,7 +2148,12 @@ describe("combat system", () => {
     const zombieBody = combat.getCombatant(zombie.id)!;
     expect(zombieBody.hp).toBeGreaterThan(5);
     expect(zombieBody.hp).toBeLessThanOrEqual(150);
-    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["chainsaw-rev", "chainsaw-hit", "zombie-spawn"]));
+    expect(zombie.riseTimer).toBeGreaterThan(0);
+    expect(zombie.riseDuration).toBeGreaterThanOrEqual(0.8);
+    expect(zombieBody.invulnerable).toBeGreaterThan(0.5);
+    const sounds = combat.consumeSounds();
+    expect(sounds).toEqual(expect.arrayContaining(["chainsaw-run", "chainsaw-hit", "zombie-spawn"]));
+    expect(sounds).not.toContain("chainsaw-rev");
 
     const prey = combat.syncRemotePlayer({
       id: "peer-b",
@@ -2166,6 +2168,11 @@ describe("combat system", () => {
       hp: 100,
       statuses: [],
     });
+    for (let index = 0; index < 4; index += 1) {
+      prey.invulnerable = 0;
+      combat.update(0.12, [player]);
+    }
+    expect(combat.getCombatant("peer-b")!.statuses.some((status) => status.id === "poison")).toBe(false);
     for (let index = 0; index < 8; index += 1) {
       prey.invulnerable = 0;
       combat.update(0.12, [player]);
@@ -2189,6 +2196,57 @@ describe("combat system", () => {
       weaponId: "chainsaw",
       label: "Overheated",
     });
+  });
+
+  it("activates Spikes mode, places impaling poison spikes on click, then disintegrates them on mode end", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("spikes");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 122, y: playerState.y });
+
+    const activated = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(activated).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Mode" });
+    expect(combat.getWeaponRuntimeState("spikes", "peer-a")).toMatchObject({
+      spikeModeActive: true,
+      spikeModeTimer: expect.closeTo(30, 0.1),
+      spikeCooldown: 0,
+    });
+
+    const spawnPoint = {
+      x: dummy.x + dummy.width / 2,
+      y: DEFAULT_PHYSICS.groundY - 2,
+    };
+    const placed = combat.placeSpikeAt("peer-a", player, spawnPoint, 120);
+    expect(placed).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Spawn" });
+    const spike = combat.getSnapshot().spikes[0];
+    expect(spike).toMatchObject({ ownerId: "peer-a", disintegrating: false });
+    expect(spike.height).toBeGreaterThan(80);
+
+    const target = combat.getCombatant(dummy.id)!;
+    expect(target.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "spikePoison" })]));
+    expect(combat.isMovementLocked(dummy.id)).toBe(true);
+    const lockedX = target.x;
+    target.velocityX = 900;
+    target.invulnerable = 0;
+    const hpAfterImpale = target.hp;
+    combat.update(1.05, [player]);
+    expect(target.x).toBeCloseTo(lockedX, 0);
+    expect(target.velocityX).toBe(0);
+    expect(target.hp).toBeLessThan(hpAfterImpale);
+
+    const second = combat.placeSpikeAt("peer-a", player, { x: spawnPoint.x + 50, y: spawnPoint.y }, 180);
+    expect(second).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Spawn" });
+    expect(combat.getSnapshot().spikes.filter((item) => !item.disintegrating)).toHaveLength(2);
+
+    combat.update(30.2, [player]);
+    expect(combat.getWeaponRuntimeState("spikes", "peer-a")).toMatchObject({
+      spikeModeActive: false,
+      spikeCooldown: expect.closeTo(60, 0.5),
+    });
+    expect(combat.getSnapshot().spikes.every((item) => item.disintegrating)).toBe(true);
+    expect(combat.isMovementLocked(dummy.id)).toBe(false);
   });
 
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {

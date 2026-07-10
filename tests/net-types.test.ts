@@ -92,7 +92,7 @@ describe("network player packets", () => {
       weaponId: "chainsaw",
       hp: 64,
       maxHp: 180,
-      statuses: ["marked", "legShotSlow", "poison"],
+      statuses: ["marked", "legShotSlow", "poison", "spikePoison", "spikeMode"],
       respawnTimer: 0,
       invulnerable: 1.95,
       chargeWeaponId: "lightning-rod",
@@ -106,7 +106,7 @@ describe("network player packets", () => {
       loadout: {
         leftHand: "pistol",
         rightHand: "knife",
-        frontStrap: "wings",
+        frontStrap: "spikes",
         backStrap: "death-aura",
         attachment: "chainsaw",
         legs: "super-legs",
@@ -117,7 +117,7 @@ describe("network player packets", () => {
     expect(packet.w).toBe("chainsaw");
     expect(packet.hp).toBe(64);
     expect(packet.mh).toBe(180);
-    expect(packet.st).toEqual(["marked", "legShotSlow", "poison"]);
+    expect(packet.st).toEqual(["marked", "legShotSlow", "poison", "spikePoison", "spikeMode"]);
     expect(packet.iv).toBe(1.95);
     expect(packet.cw).toBe("lightning-rod");
     expect(packet.ch).toBe(1850);
@@ -129,7 +129,7 @@ describe("network player packets", () => {
     expect(packet.rl).toBe(0);
     expect(packet.lh).toBe("pistol");
     expect(packet.rh).toBe("knife");
-    expect(packet.fs).toBe("wings");
+    expect(packet.fs).toBe("spikes");
     expect(packet.bs).toBe("death-aura");
     expect(packet.at).toBe("chainsaw");
     expect(packet.lg).toBe("super-legs");

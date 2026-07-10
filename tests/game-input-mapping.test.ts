@@ -21,6 +21,22 @@ describe("game mouse weapon input mapping", () => {
     expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "knife", action: "secondary" });
   });
 
+  it("keeps right mouse routed to an attached Grappling Hook even when another weapon is in the right hand", () => {
+    const loadout: LoadoutState = {
+      leftHand: "grappling-hook",
+      rightHand: "knife",
+      frontStrap: "wings",
+      backStrap: "death-aura",
+      attachment: "chainsaw",
+    };
+
+    expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "knife", action: "secondary" });
+    expect(resolveMouseWeaponAction("secondary", loadout, { preferGrapplePull: true })).toEqual({
+      weaponId: "grappling-hook",
+      action: "secondary",
+    });
+  });
+
   it("keeps two-handed held items on left primary and right secondary controls", () => {
     const loadout: LoadoutState = {
       leftHand: "axe",

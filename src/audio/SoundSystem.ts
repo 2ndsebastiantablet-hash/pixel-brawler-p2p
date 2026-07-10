@@ -95,10 +95,13 @@ export type SoundId =
   | "grapple-fire"
   | "grapple-attach"
   | "grapple-release"
-  | "chainsaw-rev"
   | "chainsaw-run"
   | "chainsaw-hit"
   | "chainsaw-overheat"
+  | "spike-mode"
+  | "spike-grow"
+  | "spike-impale"
+  | "spike-crumble"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -209,10 +212,13 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "grapple-fire": { category: "weapon", frequency: 420, endFrequency: 720, duration: 0.12, noise: true, minInterval: 0.12 },
   "grapple-attach": { category: "weapon", frequency: 180, endFrequency: 430, duration: 0.13, type: "square", minInterval: 0.12 },
   "grapple-release": { category: "weapon", frequency: 360, endFrequency: 140, duration: 0.09, noise: true, minInterval: 0.1 },
-  "chainsaw-rev": { category: "weapon", frequency: 90, endFrequency: 260, duration: 0.22, noise: true, minInterval: 0.2 },
   "chainsaw-run": { category: "weapon", frequency: 150, endFrequency: 130, duration: 0.18, noise: true, minInterval: 0.24 },
   "chainsaw-hit": { category: "combat", frequency: 220, endFrequency: 80, duration: 0.08, noise: true, minInterval: 0.08 },
   "chainsaw-overheat": { category: "heavy", frequency: 260, endFrequency: 55, duration: 0.36, noise: true, minInterval: 0.45 },
+  "spike-mode": { category: "weapon", frequency: 120, endFrequency: 520, duration: 0.26, noise: true, minInterval: 0.22 },
+  "spike-grow": { category: "weapon", frequency: 180, endFrequency: 70, duration: 0.13, noise: true, minInterval: 0.035 },
+  "spike-impale": { category: "combat", frequency: 420, endFrequency: 90, duration: 0.12, noise: true, minInterval: 0.08 },
+  "spike-crumble": { category: "combat", frequency: 160, endFrequency: 44, duration: 0.18, noise: true, minInterval: 0.1 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

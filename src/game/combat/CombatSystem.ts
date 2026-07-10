@@ -83,11 +83,40 @@ export interface ZombieState {
   biteDamage: number;
   speed: number;
   age: number;
+  riseTimer: number;
+  riseDuration: number;
   biteTimer: number;
   biteAnim: number;
   wanderTimer: number;
   wanderDirection: -1 | 1;
   targetId?: string;
+}
+
+export interface SpikeState {
+  id: string;
+  ownerId: string;
+  x: number;
+  baseY: number;
+  height: number;
+  width: number;
+  age: number;
+  growDuration: number;
+  disintegrating: boolean;
+  disintegrateAge: number;
+  impaledTargetIds: string[];
+  visualOnly?: boolean;
+}
+
+export interface SpikeParticleState {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  age: number;
+  lifetime: number;
+  color: string;
 }
 
 export interface CombatEffect {
@@ -130,6 +159,8 @@ export interface CombatSnapshot {
   ammoPickups: AmmoPickup[];
   grapples: GrappleState[];
   zombies: ZombieState[];
+  spikes: SpikeState[];
+  spikeParticles: SpikeParticleState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
 }
@@ -223,7 +254,6 @@ const grappleHookMaxPullSpeed = 1040;
 const grappleHookSnapDistance = 1600;
 const grappleHookMaxRopeLength = 1450;
 const grappleHookRopePoints = 9;
-const chainsawRevSeconds = 2;
 const chainsawOverheatSeconds = 15;
 const chainsawCooldownSeconds = 5.5;
 const chainsawTickInterval = 0.25;
@@ -232,6 +262,17 @@ const chainsawMaxDps = 26;
 const chainsawDamagePerDps = 50;
 const chainsawRange = 66;
 const chainsawThickness = 46;
+const spikeModeDuration = 30;
+const spikeModeCooldown = 60;
+const spikeMaxActive = 60;
+const spikeGrowDuration = 0.14;
+const spikeDisintegrateDuration = 0.72;
+const spikeHeight = 118;
+const spikeWidth = 30;
+const spikeImpaleDamage = 3;
+const spikeImpaleStun = 0.18;
+const spikeBoundsPadding = 26;
+const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
 const zombieBiteCooldown = 0.72;
@@ -290,16 +331,27 @@ interface HandAttachmentState {
   resist: number;
 }
 
-type ChainsawMode = "idle" | "revving" | "running" | "overheated";
+type ChainsawMode = "idle" | "running" | "overheated";
 
 interface ChainsawState {
   mode: ChainsawMode;
-  revTimer: number;
   activeTimer: number;
   cooldownTimer: number;
   tickTimer: number;
   damageTotal: number;
   aim: Vec2;
+}
+
+interface SpikeModeState {
+  activeTimer: number;
+  cooldownTimer: number;
+  particleTimer: number;
+}
+
+interface SpikeImpaleState {
+  spikeId: string;
+  x: number;
+  y: number;
 }
 
 export interface WeaponRuntimeState {
@@ -328,6 +380,10 @@ export interface WeaponRuntimeState {
   chainsawRev: number;
   chainsawDps: number;
   chainsawDamageTotal: number;
+  spikeModeActive: boolean;
+  spikeModeTimer: number;
+  spikeCooldown: number;
+  spikeCount: number;
   zombieCount: number;
   attachedHands: number;
 }
@@ -362,6 +418,10 @@ export class CombatSystem {
   private readonly chainsaws = new Map<string, ChainsawState>();
   private readonly chainsawVictimDamage = new Map<string, number>();
   private readonly zombies = new Map<string, ZombieState>();
+  private readonly spikeModes = new Map<string, SpikeModeState>();
+  private readonly spikes: SpikeState[] = [];
+  private readonly spikeParticles: SpikeParticleState[] = [];
+  private readonly spikeImpales = new Map<string, SpikeImpaleState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -396,6 +456,10 @@ export class CombatSystem {
     this.chainsaws.clear();
     this.chainsawVictimDamage.clear();
     this.zombies.clear();
+    this.spikeModes.clear();
+    this.spikes.length = 0;
+    this.spikeParticles.length = 0;
+    this.spikeImpales.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -504,6 +568,11 @@ export class CombatSystem {
   }
 
   removeCombatant(id: string): void {
+    this.releaseSpikeImpale(id);
+    if (this.spikeModes.has(id)) {
+      this.endSpikeMode(id, false);
+      this.spikeModes.delete(id);
+    }
     this.combatants.delete(id);
   }
 
@@ -551,6 +620,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "death-aura") {
       return this.useDeathAura(context);
     }
+    if (this.inventory.equippedWeapon === "spikes") {
+      return this.activateSpikes(context);
+    }
     if (this.inventory.equippedWeapon === "rocket") {
       return this.placeRocket(context);
     }
@@ -591,6 +663,9 @@ export class CombatSystem {
     }
     if (weapon.id === "death-aura") {
       return this.useDeathAura(context);
+    }
+    if (weapon.id === "spikes") {
+      return this.activateSpikes(context);
     }
     if (weapon.id === "rocket") {
       return this.lightRocket(context);
@@ -830,7 +905,7 @@ export class CombatSystem {
     if (finalStatus === "shock") {
       this.queueSound("lightning-shock");
     }
-    if (finalStatus === "poison") {
+    if (finalStatus === "poison" || finalStatus === "spikePoison") {
       this.addEffect("aura", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y - 38, "#164f24", "POISON");
       this.addEffect("spark", target.x + 8, target.y + 10, target.x - 20, target.y - 10, "#7cff6b", "Poison");
     }
@@ -913,6 +988,7 @@ export class CombatSystem {
     this.updateGrapples(dt, players);
     this.updateChainsaws(dt);
     this.updateZombies(dt);
+    this.updateSpikes(dt, players);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
@@ -963,7 +1039,7 @@ export class CombatSystem {
   }
 
   isMovementLocked(ownerId: string): boolean {
-    return this.axeRushes.has(ownerId);
+    return this.axeRushes.has(ownerId) || this.spikeImpales.has(ownerId);
   }
 
   getVirginBloodState(ownerId: string): { reviveAvailable: boolean; cooldown: number } {
@@ -1024,6 +1100,39 @@ export class CombatSystem {
     return true;
   }
 
+  placeSpikeAt(ownerId: string, player: PlayerPhysicsState, point: Vec2, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "spikes";
+    const mode = this.spikeModes.get(ownerId);
+    if (!mode || mode.activeTimer <= 0) {
+      return { kind: "blocked", weaponId, label: "Spike mode inactive" };
+    }
+    const owner = this.combatants.get(ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No owner" };
+    }
+    const clamped = clampSpikePoint(point);
+    const spike: SpikeState = {
+      id: this.makeId("spike"),
+      ownerId,
+      x: clamped.x,
+      baseY: clamped.y,
+      height: spikeHeight,
+      width: spikeWidth,
+      age: 0,
+      growDuration: spikeGrowDuration,
+      disintegrating: false,
+      disintegrateAge: 0,
+      impaledTargetIds: [],
+    };
+    this.spikes.push(spike);
+    this.trimOwnerSpikes(ownerId);
+    this.spawnSpikeGrowParticles(spike);
+    this.queueSound("spike-grow");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "primary", { x: spike.x, y: spike.baseY }, normalize({ x: point.x - (player.x + player.width / 2), y: point.y - (player.y + player.height / 2) }), "Spike Spawn", now));
+    this.applySpikeContacts(spike);
+    return { kind: "utility", weaponId, label: "Spike Spawn" };
+  }
+
   jumpOffRocket(ownerId: string, player: PlayerPhysicsState): boolean {
     const rocket = this.activeRocket(ownerId);
     if (!rocket || rocket.riderId !== ownerId) {
@@ -1048,6 +1157,7 @@ export class CombatSystem {
     const grapple = this.activeGrapple(ownerId);
     const chainsaw = this.chainsaws.get(ownerId);
     const chainsawMode = chainsaw?.mode ?? "idle";
+    const spikeMode = this.spikeModes.get(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1075,9 +1185,13 @@ export class CombatSystem {
         : chainsawMode === "running"
           ? clamp((chainsaw?.activeTimer ?? 0) / chainsawOverheatSeconds, 0, 1)
           : 0,
-      chainsawRev: chainsawMode === "revving" ? clamp((chainsaw?.revTimer ?? 0) / chainsawRevSeconds, 0, 1) : chainsawMode === "running" ? 1 : 0,
+      chainsawRev: 0,
       chainsawDps: this.chainsawDps(ownerId),
       chainsawDamageTotal: chainsaw?.damageTotal ?? 0,
+      spikeModeActive: Boolean(spikeMode && spikeMode.activeTimer > 0),
+      spikeModeTimer: spikeMode?.activeTimer ?? 0,
+      spikeCooldown: spikeMode?.cooldownTimer ?? this.inventory.cooldowns.spikes ?? 0,
+      spikeCount: this.spikes.filter((spike) => spike.ownerId === ownerId && !spike.disintegrating).length,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -1170,6 +1284,8 @@ export class CombatSystem {
           target.invulnerable = previousInvulnerable;
         } else if (event.weaponId === "machete") {
           this.growMachete(event.ownerId, hit.remainingHp <= 0);
+        } else if (event.weaponId === "spikes" && event.label === "Spike Impale") {
+          this.impaleTargetWithSpike(this.getOrCreateRemoteSpikeVisual(event), target, false);
         }
       }
     }
@@ -1218,6 +1334,10 @@ export class CombatSystem {
     }
     if (event.weaponId === "hands" && (event.action === "primary" || event.action === "secondary")) {
       this.spawnRemoteHandsVisual(event, aim);
+      return;
+    }
+    if (event.weaponId === "spikes" && (event.action === "primary" || event.action === "secondary")) {
+      this.spawnRemoteSpikesVisual(event);
       return;
     }
     if (event.weaponId === "super-legs") {
@@ -1390,6 +1510,47 @@ export class CombatSystem {
     }
   }
 
+  private spawnRemoteSpikesVisual(event: CombatEventPacket): void {
+    if (event.label === "Spike Mode") {
+      const owner = this.combatants.get(event.ownerId);
+      if (owner) {
+        owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spikeMode"));
+        this.spawnSpikeModeParticles(owner, 8);
+      }
+      this.addEffect("aura", event.x, event.y, event.x, event.y - 62, colorForWeapon("spikes"), "SPIKE MODE");
+      return;
+    }
+    if (event.label !== "Spike Spawn") {
+      return;
+    }
+    this.getOrCreateRemoteSpikeVisual(event);
+  }
+
+  private getOrCreateRemoteSpikeVisual(event: CombatEventPacket): SpikeState {
+    const existing = this.spikes.find((spike) => spike.ownerId === event.ownerId && spike.visualOnly && Math.hypot(spike.x - event.x, spike.baseY - event.y) < 36);
+    if (existing) {
+      return existing;
+    }
+    const point = clampSpikePoint({ x: event.x, y: event.y });
+    const spike: SpikeState = {
+      id: `remote-spike-${event.id}`,
+      ownerId: event.ownerId,
+      x: point.x,
+      baseY: point.y,
+      height: spikeHeight,
+      width: spikeWidth,
+      age: 0,
+      growDuration: spikeGrowDuration,
+      disintegrating: false,
+      disintegrateAge: 0,
+      impaledTargetIds: [],
+      visualOnly: true,
+    };
+    this.spikes.push(spike);
+    this.spawnSpikeGrowParticles(spike);
+    return spike;
+  }
+
   getSnapshot(): CombatSnapshot {
     return {
       projectiles: this.projectiles,
@@ -1399,6 +1560,8 @@ export class CombatSystem {
       ammoPickups: this.ammoPickups,
       grapples: this.grapples,
       zombies: [...this.zombies.values()],
+      spikes: this.spikes,
+      spikeParticles: this.spikeParticles,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
     };
@@ -1726,6 +1889,29 @@ export class CombatSystem {
     return { kind: "utility", weaponId, label: "Holy Ammo" };
   }
 
+  private activateSpikes(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "spikes";
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No owner" };
+    }
+    const state = this.getOrCreateSpikeMode(context.ownerId);
+    if (state.cooldownTimer > 0) {
+      return { kind: "blocked", weaponId, label: "Spike cooldown" };
+    }
+    state.activeTimer = spikeModeDuration;
+    state.particleTimer = 0;
+    state.cooldownTimer = 0;
+    this.inventory.cooldowns[weaponId] = 0;
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spikeMode"));
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.42 };
+    this.addEffect("aura", center.x, center.y, center.x, center.y - 62, colorForWeapon(weaponId), "SPIKE MODE");
+    this.spawnSpikeModeParticles(owner, 10);
+    this.queueSound("spike-mode");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, normalize(context.aim), "Spike Mode", context.now));
+    return { kind: "utility", weaponId, label: "Spike Mode" };
+  }
+
   private fireGrapplingHook(context: WeaponUseContext): WeaponUseResult {
     const weaponId: WeaponId = "grappling-hook";
     if (this.activeGrapple(context.ownerId)) {
@@ -1807,23 +1993,15 @@ export class CombatSystem {
       }
       state.mode = "idle";
       state.activeTimer = 0;
-      state.revTimer = 0;
       state.tickTimer = 0;
     }
     if (state.mode === "idle") {
-      state.mode = "revving";
-      state.revTimer = 0;
+      state.mode = "running";
       state.activeTimer = 0;
-      state.tickTimer = chainsawTickInterval;
-      this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, 0.08);
-      this.addEffect("aura", context.player.x + context.player.width / 2, context.player.y + 22, context.player.x + context.player.width / 2 + state.aim.x * 46, context.player.y + 22 + state.aim.y * 18, colorForWeapon(weaponId), "REV");
-      this.queueSound("chainsaw-rev");
-      this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", this.muzzle(context.player), state.aim, "Chainsaw Rev", context.now));
-      return { kind: "utility", weaponId, label: "Revving" };
-    }
-    if (state.mode === "revving") {
-      this.queueSound("chainsaw-rev");
-      return { kind: "utility", weaponId, label: "Revving" };
+      state.tickTimer = 0;
+      this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, 0.04);
+      this.addEffect("muzzle", context.player.x + context.player.width / 2, context.player.y + 22, context.player.x + context.player.width / 2 + state.aim.x * 48, context.player.y + 22 + state.aim.y * 18, colorForWeapon(weaponId), "RUNNING");
+      this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", this.muzzle(context.player), state.aim, "Chainsaw Running", context.now));
     }
     this.queueSound("chainsaw-run");
     return { kind: "utility", weaponId, label: "Running" };
@@ -1839,7 +2017,6 @@ export class CombatSystem {
       return { kind: "blocked", weaponId, label: "Overheated" };
     }
     state.mode = "idle";
-    state.revTimer = 0;
     state.activeTimer = 0;
     state.tickTimer = 0;
     this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, weaponRegistry.get(weaponId).secondary.cooldown);
@@ -3188,29 +3365,10 @@ export class CombatSystem {
         if (state.cooldownTimer === 0) {
           state.mode = "idle";
           state.activeTimer = 0;
-          state.revTimer = 0;
         }
         continue;
       }
-      let activeDt = dt;
-      if (state.mode === "revving") {
-        state.revTimer += dt;
-        if (state.revTimer >= chainsawRevSeconds) {
-          activeDt = Math.max(0, state.revTimer - chainsawRevSeconds);
-          state.mode = "running";
-          state.activeTimer = 0;
-          state.tickTimer = 0;
-          this.addEffect("muzzle", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2 + state.aim.x * 48, owner.y + 22 + state.aim.y * 18, colorForWeapon("chainsaw"), "RUNNING");
-          this.queueSound("chainsaw-run");
-        } else if (state.revTimer % 0.45 < dt) {
-          this.addEffect("spark", owner.x + owner.width / 2, owner.y + 22, owner.x + owner.width / 2 + state.aim.x * 32, owner.y + 22 + state.aim.y * 12, colorForWeapon("chainsaw"), "Rev");
-          this.queueSound("chainsaw-rev");
-          continue;
-        } else {
-          continue;
-        }
-      }
-
+      const activeDt = dt;
       state.activeTimer += activeDt;
       state.tickTimer -= activeDt;
       if (state.activeTimer >= chainsawOverheatSeconds) {
@@ -3284,6 +3442,25 @@ export class CombatSystem {
       zombie.biteTimer = Math.max(0, zombie.biteTimer - dt);
       zombie.biteAnim = Math.max(0, zombie.biteAnim - dt);
       zombie.wanderTimer = Math.max(0, zombie.wanderTimer - dt);
+      if (zombie.riseTimer > 0) {
+        zombie.riseTimer = Math.max(0, zombie.riseTimer - dt);
+        const progress = 1 - zombie.riseTimer / zombie.riseDuration;
+        body.x = body.spawnX;
+        body.y = body.spawnY + body.height * (1 - easeOutCubic(progress)) * 0.72;
+        body.velocityX = 0;
+        body.velocityY = 0;
+        body.hitstun = Math.max(body.hitstun, 0.12);
+        body.invulnerable = Math.max(body.invulnerable, zombie.riseTimer + 0.08);
+        if (zombie.age % 0.18 < dt) {
+          this.addEffect("spark", body.x + body.width / 2, body.spawnY + body.height - 4, body.x + body.width / 2 + zombie.wanderDirection * 24, body.spawnY + body.height - 22, "#5a3a22", "DIRT");
+        }
+        if (zombie.riseTimer === 0) {
+          body.y = body.spawnY;
+          body.invulnerable = 0.12;
+          this.addEffect("aura", body.x + body.width / 2, body.y + body.height - 6, body.x + body.width / 2, body.y - 44, "#164f24", "ZOMBIE UP");
+        }
+        continue;
+      }
       const target = this.findZombieTarget(zombie, body);
       if (target) {
         zombie.targetId = target.id;
@@ -3308,6 +3485,93 @@ export class CombatSystem {
         body.velocityX = zombie.wanderDirection * Math.max(48, zombie.speed * 0.24);
       }
     }
+  }
+
+  private updateSpikes(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [ownerId, mode] of [...this.spikeModes.entries()]) {
+      const owner = this.combatants.get(ownerId);
+      if (mode.activeTimer > 0) {
+        if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+          this.endSpikeMode(ownerId, false);
+          continue;
+        }
+        mode.activeTimer = Math.max(0, mode.activeTimer - dt);
+        mode.particleTimer -= dt;
+        owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spikeMode"));
+        if (mode.particleTimer <= 0) {
+          mode.particleTimer += 0.16;
+          this.spawnSpikeModeParticles(owner, 3);
+        }
+        if (mode.activeTimer === 0) {
+          this.endSpikeMode(ownerId, true);
+        }
+        continue;
+      }
+      if (mode.cooldownTimer > 0) {
+        mode.cooldownTimer = Math.max(0, mode.cooldownTimer - dt);
+        this.inventory.cooldowns.spikes = mode.cooldownTimer;
+      }
+    }
+
+    for (const spike of this.spikes) {
+      if (spike.disintegrating) {
+        spike.disintegrateAge += dt;
+        continue;
+      }
+      spike.age += dt;
+      if (spike.visualOnly && spike.age >= spikeModeDuration) {
+        this.disintegrateSpike(spike);
+        continue;
+      }
+      this.applySpikeContacts(spike);
+    }
+
+    for (const [targetId, impale] of [...this.spikeImpales.entries()]) {
+      const target = this.combatants.get(targetId);
+      const spike = this.spikes.find((item) => item.id === impale.spikeId);
+      if (!target || target.respawnTimer > 0 || target.hp <= 0 || !spike || spike.disintegrating) {
+        this.releaseSpikeImpale(targetId);
+        continue;
+      }
+      const x = spike.x - target.width / 2;
+      const y = spike.baseY - target.height;
+      impale.x = x;
+      impale.y = y;
+      target.x = x;
+      target.y = y;
+      target.velocityX = 0;
+      target.velocityY = 0;
+      target.hitstun = Math.max(target.hitstun, 0.12);
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("spikePoison"));
+      const player = players.find((item) => item.id === targetId);
+      if (player) {
+        player.x = x;
+        player.y = y;
+        player.velocityX = 0;
+        player.velocityY = 0;
+      }
+    }
+
+    for (const particle of this.spikeParticles) {
+      particle.age += dt;
+      particle.vy += 780 * dt;
+      particle.x += particle.vx * dt;
+      particle.y += particle.vy * dt;
+      if (particle.y > COMBAT_TUNING.projectiles.floorY) {
+        particle.y = COMBAT_TUNING.projectiles.floorY;
+        particle.vy *= -0.18;
+        particle.vx *= 0.68;
+      }
+    }
+
+    removeWhere(this.spikes, (spike) => {
+      const expired = spike.disintegrating && spike.disintegrateAge >= spikeDisintegrateDuration;
+      if (expired) {
+        this.releaseSpikeTargets(spike);
+      }
+      return expired;
+    });
+    removeWhere(this.spikeParticles, (particle) => particle.age >= particle.lifetime);
   }
 
   private applyZombieBite(zombie: ZombieState, body: Combatant, target: Combatant, direction: -1 | 1): void {
@@ -3343,7 +3607,6 @@ export class CombatSystem {
     }
     const state: ChainsawState = {
       mode: "idle",
-      revTimer: 0,
       activeTimer: 0,
       cooldownTimer: 0,
       tickTimer: 0,
@@ -3357,6 +3620,202 @@ export class CombatSystem {
   private chainsawDps(ownerId: string): number {
     const total = this.chainsaws.get(ownerId)?.damageTotal ?? 0;
     return clamp(chainsawBaseDps + Math.floor(total / chainsawDamagePerDps), chainsawBaseDps, chainsawMaxDps);
+  }
+
+  private getOrCreateSpikeMode(ownerId: string): SpikeModeState {
+    const existing = this.spikeModes.get(ownerId);
+    if (existing) {
+      return existing;
+    }
+    const state: SpikeModeState = {
+      activeTimer: 0,
+      cooldownTimer: this.inventory.cooldowns.spikes ?? 0,
+      particleTimer: 0,
+    };
+    this.spikeModes.set(ownerId, state);
+    return state;
+  }
+
+  private endSpikeMode(ownerId: string, startCooldown: boolean): void {
+    const state = this.getOrCreateSpikeMode(ownerId);
+    state.activeTimer = 0;
+    state.particleTimer = 0;
+    if (startCooldown) {
+      state.cooldownTimer = spikeModeCooldown;
+      this.inventory.cooldowns.spikes = spikeModeCooldown;
+    }
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      owner.statuses = owner.statuses.filter((status) => status.id !== "spikeMode");
+    }
+    for (const spike of this.spikes.filter((item) => item.ownerId === ownerId && !item.disintegrating)) {
+      this.disintegrateSpike(spike);
+    }
+  }
+
+  private trimOwnerSpikes(ownerId: string): void {
+    const active = this.spikes.filter((spike) => spike.ownerId === ownerId && !spike.disintegrating);
+    while (active.length > spikeMaxActive) {
+      const oldest = active.shift();
+      if (oldest) {
+        this.disintegrateSpike(oldest);
+      }
+    }
+  }
+
+  private applySpikeContacts(spike: SpikeState): void {
+    if (spike.visualOnly || spike.disintegrating) {
+      return;
+    }
+    for (const target of this.combatants.values()) {
+      if (target.id === spike.ownerId || target.respawnTimer > 0 || target.hp <= 0 || this.spikeImpales.has(target.id)) {
+        continue;
+      }
+      if (!targetIntersectsSpike(target, spike)) {
+        continue;
+      }
+      this.impaleTargetWithSpike(spike, target, true);
+    }
+  }
+
+  private impaleTargetWithSpike(spike: SpikeState, target: Combatant, applyDamage: boolean): void {
+    this.releaseSpikeImpale(target.id);
+    if (!spike.impaledTargetIds.includes(target.id)) {
+      spike.impaledTargetIds.push(target.id);
+    }
+    const lockX = spike.x - target.width / 2;
+    const lockY = spike.baseY - target.height;
+    this.spikeImpales.set(target.id, { spikeId: spike.id, x: lockX, y: lockY });
+    target.x = lockX;
+    target.y = lockY;
+    target.velocityX = 0;
+    target.velocityY = 0;
+    target.hitstun = Math.max(target.hitstun, 0.2);
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("spikePoison"));
+    this.addEffect("stun", target.x + target.width / 2, target.y + target.height * 0.45, spike.x, spike.baseY - spike.height * 0.55, colorForWeapon("spikes"), "IMPALED");
+    this.queueSound("spike-impale");
+    if (!applyDamage) {
+      return;
+    }
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: spike.ownerId,
+      targetId: target.id,
+      weaponId: "spikes",
+      damage: spikeImpaleDamage,
+      knockback: { x: 0, y: 0 },
+      stun: spikeImpaleStun,
+      label: "Spike Impale",
+      status: "spikePoison",
+      skipHitLocationScaling: true,
+      emitEvent: false,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+      this.releaseSpikeImpale(target.id);
+      return;
+    }
+    this.recentEvents.push(this.createEvent(
+      spike.ownerId,
+      "spikes",
+      "hit",
+      { x: spike.x, y: spike.baseY },
+      { x: 0, y: -1 },
+      "Spike Impale",
+      performanceNow(),
+      {
+        targetId: target.id,
+        damage: spikeImpaleDamage,
+        kx: 0,
+        ky: 0,
+        stun: spikeImpaleStun,
+        status: "spikePoison",
+      },
+    ));
+  }
+
+  private releaseSpikeImpale(targetId: string): void {
+    const existing = this.spikeImpales.get(targetId);
+    if (!existing) {
+      return;
+    }
+    const spike = this.spikes.find((item) => item.id === existing.spikeId);
+    if (spike) {
+      spike.impaledTargetIds = spike.impaledTargetIds.filter((id) => id !== targetId);
+    }
+    this.spikeImpales.delete(targetId);
+  }
+
+  private releaseSpikeTargets(spike: SpikeState): void {
+    for (const targetId of [...spike.impaledTargetIds]) {
+      this.releaseSpikeImpale(targetId);
+    }
+  }
+
+  private disintegrateSpike(spike: SpikeState): void {
+    if (spike.disintegrating) {
+      return;
+    }
+    spike.disintegrating = true;
+    spike.disintegrateAge = 0;
+    this.releaseSpikeTargets(spike);
+    this.spawnSpikeDisintegrateParticles(spike);
+    this.addEffect("spark", spike.x, spike.baseY - spike.height * 0.5, spike.x, spike.baseY - 22, colorForWeapon("spikes"), "CRUMBLE");
+    this.queueSound("spike-crumble");
+  }
+
+  private spawnSpikeGrowParticles(spike: SpikeState): void {
+    this.addEffect("shockwave", spike.x, spike.baseY, spike.x, spike.baseY - spike.height * 0.64, colorForWeapon("spikes"), "SPIKE");
+    for (let index = 0; index < 9; index += 1) {
+      const spread = (index - 4) * 18;
+      this.spikeParticles.push({
+        id: this.makeId("spike-particle"),
+        x: spike.x + spread * 0.2,
+        y: spike.baseY - 4,
+        vx: spread,
+        vy: -180 - Math.abs(spread) * 1.6,
+        size: 3 + (index % 3),
+        age: 0,
+        lifetime: 0.55 + index * 0.015,
+        color: index % 2 === 0 ? "#f2f2f2" : "#1a1a23",
+      });
+    }
+  }
+
+  private spawnSpikeDisintegrateParticles(spike: SpikeState): void {
+    for (let index = 0; index < 16; index += 1) {
+      const angle = -Math.PI + (index / 15) * Math.PI;
+      const speed = 90 + (index % 5) * 34;
+      this.spikeParticles.push({
+        id: this.makeId("spike-shard"),
+        x: spike.x + Math.sin(index * 1.7) * spike.width * 0.35,
+        y: spike.baseY - spike.height * (0.18 + (index % 6) * 0.12),
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 80,
+        size: 2 + (index % 4),
+        age: 0,
+        lifetime: 0.55 + (index % 5) * 0.06,
+        color: index % 3 === 0 ? "#0f0f16" : index % 2 === 0 ? "#7cff6b" : "#e8e8e8",
+      });
+    }
+  }
+
+  private spawnSpikeModeParticles(owner: Combatant, count: number): void {
+    for (let index = 0; index < count; index += 1) {
+      const side = index % 2 === 0 ? -1 : 1;
+      this.spikeParticles.push({
+        id: this.makeId("spike-mode"),
+        x: owner.x + owner.width / 2 + side * (16 + (index % 3) * 5),
+        y: owner.y + owner.height * (0.32 + (index % 4) * 0.12),
+        vx: side * (42 + index * 5),
+        vy: -80 - (index % 5) * 18,
+        size: 2 + (index % 3),
+        age: 0,
+        lifetime: 0.42 + (index % 4) * 0.05,
+        color: index % 2 === 0 ? "#f2f2f2" : "#1a1a23",
+      });
+    }
   }
 
   private recordChainsawDamage(ownerId: string, victimId: string, damage: number): void {
@@ -3384,21 +3843,22 @@ export class CombatSystem {
     const biteDamage = contribution >= 95 ? 30 : contribution >= 40 ? 15 : 6;
     const speed = lerp(260, 620, strength);
     const id = this.makeId("zombie");
+    const spawnY = Math.min(deathSpot.y, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height);
     const zombieBody: Combatant = {
       id,
       name: "Chainsaw Zombie",
       x: deathSpot.x,
-      y: Math.min(deathSpot.y, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      y: spawnY + DEFAULT_PHYSICS.height * 0.72,
       width: DEFAULT_PHYSICS.width,
       height: DEFAULT_PHYSICS.height,
       spawnX: deathSpot.x,
-      spawnY: Math.min(deathSpot.y, DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height),
+      spawnY,
       hp: health,
       maxHp: health,
       velocityX: 0,
-      velocityY: -120,
+      velocityY: 0,
       hitstun: 0,
-      invulnerable: 0,
+      invulnerable: zombieRiseDuration,
       respawnTimer: 0,
       color: "#164f24",
       statuses: [],
@@ -3411,6 +3871,8 @@ export class CombatSystem {
       biteDamage,
       speed,
       age: 0,
+      riseTimer: zombieRiseDuration,
+      riseDuration: zombieRiseDuration,
       biteTimer: 0,
       biteAnim: 0,
       wanderTimer: 0,
@@ -3418,6 +3880,21 @@ export class CombatSystem {
     });
     this.addEffect("aura", deathSpot.x + victim.width / 2, deathSpot.y + victim.height / 2, deathSpot.x + victim.width / 2, deathSpot.y - 74, "#164f24", "ZOMBIE");
     this.addEffect("spark", deathSpot.x + victim.width / 2, deathSpot.y + victim.height - 4, deathSpot.x + victim.width / 2 + 28, deathSpot.y + victim.height - 18, "#7cff6b", "RISE");
+    this.addEffect("shockwave", deathSpot.x + victim.width / 2, spawnY + victim.height - 2, deathSpot.x + victim.width / 2, spawnY + victim.height - 44, "#5a3a22", "DUST");
+    for (let index = 0; index < 10; index += 1) {
+      const angle = -Math.PI + (index / 9) * Math.PI;
+      this.spikeParticles.push({
+        id: this.makeId("dirt"),
+        x: deathSpot.x + victim.width / 2,
+        y: spawnY + victim.height - 4,
+        vx: Math.cos(angle) * (80 + index * 7),
+        vy: Math.sin(angle) * 130 - 120,
+        size: 3 + (index % 3),
+        age: 0,
+        lifetime: 0.5 + index * 0.02,
+        color: index % 2 === 0 ? "#5a3a22" : "#2f2118",
+      });
+    }
     this.queueSound("zombie-spawn");
   }
 
@@ -3689,6 +4166,24 @@ export class CombatSystem {
         combatant.velocityY += DEFAULT_PHYSICS.gravity * dt * deathFrozenGravityMultiplier;
         combatant.hitstun = Math.max(combatant.hitstun, 0.1);
       }
+      const risingZombie = this.zombies.get(combatant.id);
+      if (risingZombie && risingZombie.riseTimer > 0) {
+        combatant.velocityX = 0;
+        combatant.velocityY = 0;
+        combatant.hitstun = Math.max(combatant.hitstun, 0.08);
+        combatant.invulnerable = Math.max(combatant.invulnerable, risingZombie.riseTimer);
+        continue;
+      }
+      const impale = this.spikeImpales.get(combatant.id);
+      if (impale) {
+        combatant.x = impale.x;
+        combatant.y = impale.y;
+        combatant.velocityX = 0;
+        combatant.velocityY = 0;
+        combatant.hitstun = Math.max(0, combatant.hitstun - dt);
+        combatant.invulnerable = Math.max(0, combatant.invulnerable - dt);
+        continue;
+      }
       combatant.hitstun = Math.max(0, combatant.hitstun - dt);
       combatant.invulnerable = Math.max(0, combatant.invulnerable - dt);
       combatant.x += combatant.velocityX * dt;
@@ -3708,6 +4203,10 @@ export class CombatSystem {
 
   private startRespawn(target: Combatant, label: string): void {
     this.clearChainsawVictimRecords(target.id);
+    this.releaseSpikeImpale(target.id);
+    if (this.spikeModes.has(target.id)) {
+      this.endSpikeMode(target.id, false);
+    }
     if (target.id.startsWith("zombie-")) {
       this.zombies.delete(target.id);
     }
@@ -5065,6 +5564,34 @@ function statusForHit(weaponId: WeaponId | undefined, location: HitLocation | un
   return status ?? "legStagger";
 }
 
+function clampSpikePoint(point: Vec2): Vec2 {
+  return {
+    x: clamp(point.x, DEFAULT_PHYSICS.platformLeft + spikeBoundsPadding, DEFAULT_PHYSICS.platformRight - spikeBoundsPadding),
+    y: clamp(point.y, 90, COMBAT_TUNING.projectiles.floorY),
+  };
+}
+
+function spikeCurrentHeight(spike: SpikeState): number {
+  if (spike.disintegrating) {
+    return spike.height * Math.max(0, 1 - spike.disintegrateAge / spikeDisintegrateDuration);
+  }
+  return spike.height * easeOutCubic(clamp(spike.age / spike.growDuration, 0, 1));
+}
+
+function targetIntersectsSpike(target: Combatant, spike: SpikeState): boolean {
+  const height = Math.max(18, spikeCurrentHeight(spike));
+  const top = spike.baseY - height;
+  return target.x + target.width >= spike.x - spike.width / 2
+    && target.x <= spike.x + spike.width / 2
+    && target.y + target.height >= top
+    && target.y <= spike.baseY + 6;
+}
+
+function easeOutCubic(value: number): number {
+  const t = clamp(value, 0, 1);
+  return 1 - (1 - t) ** 3;
+}
+
 function isBackstab(owner: Combatant, target: Combatant, attackDirection: number): boolean {
   const direction = Math.sign(attackDirection || target.x - owner.x || 1);
   const ownerCenter = owner.x + owner.width / 2;
@@ -5112,6 +5639,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#fff4a8";
     case "chainsaw":
       return "#b8bfd7";
+    case "spikes":
+      return "#f2f2f2";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -5265,6 +5794,10 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Frozen", duration: 0.55, stacks: 1 };
     case "poison":
       return { id, label: "Poison", duration: 18, stacks: 1, tickDamage: 2, tickEvery: 1, tickTimer: 1 };
+    case "spikePoison":
+      return { id, label: "Spike Poison", duration: 18, stacks: 1, tickDamage: 4, tickEvery: 0.75, tickTimer: 0.75 };
+    case "spikeMode":
+      return { id, label: "Spike Mode", duration: spikeModeDuration, stacks: 1 };
     case "scrambled":
       return { id, label: "Scrambled", duration: 7.5, stacks: 1, tickDamage: 1, tickEvery: 1 };
     case "handsMissing":

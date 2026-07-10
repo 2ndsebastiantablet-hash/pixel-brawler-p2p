@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, SpikeParticleState, SpikeState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -459,6 +459,10 @@ export class Game {
       this.drawRemoteStatusVisuals(ctx, remote);
       this.drawInvulnerabilityGlow(ctx, remote.player.state, remote.current.invulnerable ?? this.combat.getCombatant(remote.player.state.id)?.invulnerable ?? 0);
       remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      this.drawPlayerStatusOverlay(ctx, remote.player.state, remote.current.statuses ?? []);
+      if (remote.current.statuses?.includes("spikeMode")) {
+        this.drawSpikeModeHands(ctx, remote.player.state);
+      }
       const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
       this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
       if (remoteLoadout.attachment) {
@@ -479,6 +483,11 @@ export class Game {
     if (!steady) {
       this.drawInvulnerabilityGlow(ctx, this.localPlayer.state, localCombatant?.invulnerable ?? 0);
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+      const localStatuses = localCombatant?.statuses.map((status) => status.id) ?? [];
+      this.drawPlayerStatusOverlay(ctx, this.localPlayer.state, localStatuses);
+      if (localStatuses.includes("spikeMode")) {
+        this.drawSpikeModeHands(ctx, this.localPlayer.state);
+      }
       this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
       if (this.loadout.attachment) {
         this.drawAttachmentString(ctx, this.localPlayer.state, this.loadout.attachment);
@@ -531,7 +540,16 @@ export class Game {
       this.useAttachmentSlot();
     }
 
-    const primaryAction = resolveMouseWeaponAction("primary", this.loadout);
+    const spikeRuntime = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
+    const spikeModeActive = spikeRuntime.spikeModeActive;
+    if (spikeModeActive && (input.primaryPressed || input.secondaryPressed)) {
+      this.recordAttack(this.combat.placeSpikeAt(this.localPlayer.state.id, this.localPlayer.state, {
+        x: this.lastMouse.x + this.camera.x,
+        y: this.lastMouse.y + this.camera.y,
+      }, time), input.secondaryPressed ? "secondary" : "primary");
+    }
+
+    const primaryAction = spikeModeActive ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
@@ -545,7 +563,10 @@ export class Game {
       });
     }
 
-    const secondaryAction = resolveMouseWeaponAction("secondary", this.loadout);
+    const grappleRuntime = this.combat.getWeaponRuntimeState("grappling-hook", this.localPlayer.state.id);
+    const secondaryAction = spikeModeActive ? null : resolveMouseWeaponAction("secondary", this.loadout, {
+      preferGrapplePull: grappleRuntime.grappleActive,
+    });
     if (secondaryAction && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
       this.handleWeaponAction(secondaryAction.weaponId, secondaryAction.action, {
         pressed: input.secondaryPressed,
@@ -993,7 +1014,11 @@ export class Game {
     const legSlow = local?.statuses.some((status) => status.id === "legShotSlow") ? COMBAT_TUNING.sniper.legShotMoveMultiplier : 1;
     const legStagger = local?.statuses.some((status) => status.id === "legStagger") ? 0.72 : 1;
     const suppressed = local?.statuses.some((status) => status.id === "suppressed") ? 0.82 : 1;
-    const poison = local?.statuses.some((status) => status.id === "poison") ? 0.78 : 1;
+    const poison = local?.statuses.some((status) => status.id === "spikePoison")
+      ? 0.62
+      : local?.statuses.some((status) => status.id === "poison")
+        ? 0.78
+        : 1;
     const steadyLock = local?.statuses.some((status) => status.id === "steady") ? 0 : 1;
     const minigunSlow = weapon.id === "minigun" && runtime.heat > 0.02
       ? COMBAT_TUNING.minigun.firingSlowMultiplier
@@ -1138,6 +1163,10 @@ export class Game {
 
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
     const weaponId = this.combat.getPlayerInventory().equippedWeapon;
+    const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+    if (localCombatant?.statuses.some((status) => status.id === "spikeMode")) {
+      return;
+    }
     if (weaponId === "super-legs") {
       this.drawSuperLegs(ctx, this.localPlayer.state);
       return;
@@ -1533,7 +1562,6 @@ export class Game {
       }
     } else if (weaponId === "chainsaw") {
       const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
-      const rev = runtime?.chainsawRev ?? 0;
       const heat = runtime?.chainsawHeat ?? 0;
       const running = runtime?.chainsawMode === "running";
       const shake = running ? Math.round(Math.sin(performance.now() * 0.07) * 3) : 0;
@@ -1547,9 +1575,9 @@ export class Game {
       for (let index = 0; index < 6; index += 1) {
         this.pixelRect(ctx, 24 + index * 6 + shake, -11 + (index % 2) * 18, 4, 5);
       }
-      if (running || rev > 0) {
-        ctx.fillStyle = running ? "rgba(255, 244, 168, 0.45)" : "rgba(184, 191, 215, 0.34)";
-        this.pixelRect(ctx, 58 + shake, -14, Math.round(18 + rev * 20), 28);
+      if (running) {
+        ctx.fillStyle = "rgba(255, 244, 168, 0.45)";
+        this.pixelRect(ctx, 58 + shake, -14, 32, 28);
       }
     } else if (weaponId === "lightning-rod") {
       ctx.fillStyle = "#ffd84d";
@@ -1665,8 +1693,8 @@ export class Game {
       ctx.fillRect(x + 2, y - 4, 8, 4);
       ctx.fillRect(x + state.width - 10, y + state.height + 1, 7, 4);
     }
-    if (statuses.includes("poison")) {
-      ctx.fillStyle = "rgba(22, 79, 36, 0.34)";
+    if (statuses.includes("poison") || statuses.includes("spikePoison")) {
+      ctx.fillStyle = statuses.includes("spikePoison") ? "rgba(4, 62, 24, 0.46)" : "rgba(22, 79, 36, 0.34)";
       ctx.fillRect(x - 5, y - 6, state.width + 10, state.height + 12);
       ctx.fillStyle = "#7cff6b";
       ctx.fillRect(x + 4, y - 10, 5, 5);
@@ -1687,9 +1715,45 @@ export class Game {
     ctx.restore();
   }
 
+  private drawPlayerStatusOverlay(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, statuses: string[]): void {
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const poisoned = statuses.includes("poison");
+    const spikePoisoned = statuses.includes("spikePoison");
+    if (poisoned || spikePoisoned) {
+      ctx.save();
+      ctx.fillStyle = spikePoisoned ? "rgba(4, 62, 24, 0.46)" : "rgba(22, 79, 36, 0.34)";
+      ctx.fillRect(x - 5, y - 6, state.width + 10, state.height + 12);
+      ctx.fillStyle = spikePoisoned ? "#b8ffd0" : "#7cff6b";
+      const pulse = Math.round(performance.now() / 120) % 3;
+      ctx.fillRect(x + 4 + pulse * 5, y - 10, 5, 5);
+      ctx.fillRect(x + state.width - 8, y + 8 + pulse * 3, 4, 4);
+      ctx.restore();
+    }
+  }
+
+  private drawSpikeModeHands(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState): void {
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const pulse = performance.now() * 0.018;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (const side of [-1, 1] as const) {
+      const handX = x + state.width / 2 + side * 17;
+      const handY = y + 28 + Math.sin(pulse + side) * 3;
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(Math.round(handX - 5), Math.round(handY - 5), 10, 10);
+      ctx.fillStyle = "#1a1a23";
+      ctx.fillRect(Math.round(handX - 3), Math.round(handY - 3), 6, 6);
+      ctx.fillStyle = "rgba(124, 255, 107, 0.55)";
+      ctx.fillRect(Math.round(handX + side * 7), Math.round(handY - 2), 10 * side, 4);
+    }
+    ctx.restore();
+  }
+
   private drawRemoteWeapon(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
     const weaponId = remote.current.weaponId;
-    if (!weaponId || weaponId === "wings" || weaponId === "super-legs") {
+    if (!weaponId || weaponId === "wings" || weaponId === "super-legs" || remote.current.statuses?.includes("spikeMode")) {
       return;
     }
     const state = remote.player.state;
@@ -1928,6 +1992,12 @@ export class Game {
     for (const grapple of snapshot.grapples) {
       this.drawGrapple(ctx, grapple);
     }
+    for (const spike of snapshot.spikes) {
+      this.drawSpike(ctx, spike);
+    }
+    for (const particle of snapshot.spikeParticles) {
+      this.drawSpikeParticle(ctx, particle);
+    }
     for (const projectile of snapshot.projectiles) {
       this.drawProjectile(ctx, projectile);
     }
@@ -1994,6 +2064,57 @@ export class Game {
     ctx.restore();
   }
 
+  private drawSpike(ctx: CanvasRenderingContext2D, spike: SpikeState): void {
+    const progress = spike.disintegrating
+      ? Math.max(0, 1 - spike.disintegrateAge / 0.72)
+      : 1 - (1 - Math.min(1, spike.age / spike.growDuration)) ** 3;
+    const height = Math.max(8, Math.round(spike.height * progress));
+    const x = Math.round(spike.x - this.camera.x);
+    const baseY = Math.round(spike.baseY - this.camera.y);
+    const half = Math.round(spike.width / 2);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = spike.visualOnly ? 0.74 : 1;
+    if (spike.disintegrating) {
+      ctx.globalAlpha *= Math.max(0.18, progress);
+    }
+    ctx.fillStyle = "rgba(124, 255, 107, 0.18)";
+    ctx.fillRect(x - half - 9, baseY - height - 8, half * 2 + 18, height + 14);
+    for (let row = 0; row < height; row += 8) {
+      const t = row / Math.max(1, height);
+      const rowHalf = Math.max(2, Math.round(half * (1 - t)));
+      const y = baseY - row - 8;
+      ctx.fillStyle = t > 0.72 ? "#101016" : t > 0.42 ? "#565b66" : "#f2f2f2";
+      ctx.fillRect(x - rowHalf, y, rowHalf * 2, 8);
+      if (t > 0.22 && t < 0.84) {
+        ctx.fillStyle = "#164f24";
+        ctx.fillRect(x - 2, y + 1, 4, 6);
+      }
+    }
+    ctx.fillStyle = "#0f0f16";
+    ctx.fillRect(x - 3, baseY - height - 8, 6, 9);
+    if (spike.impaledTargetIds.length > 0) {
+      ctx.strokeStyle = "rgba(184, 255, 208, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - half - 6, baseY - height - 10, half * 2 + 12, height + 16);
+    }
+    ctx.restore();
+  }
+
+  private drawSpikeParticle(ctx: CanvasRenderingContext2D, particle: SpikeParticleState): void {
+    const fade = Math.max(0, 1 - particle.age / particle.lifetime);
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = particle.color;
+    ctx.fillRect(
+      Math.round(particle.x - this.camera.x),
+      Math.round(particle.y - this.camera.y),
+      Math.round(particle.size),
+      Math.round(particle.size),
+    );
+    ctx.restore();
+  }
+
   private drawAmmoPickup(ctx: CanvasRenderingContext2D, pickup: AmmoPickup): void {
     const x = Math.round(pickup.x - this.camera.x);
     const y = Math.round(pickup.y - this.camera.y);
@@ -2047,10 +2168,11 @@ export class Game {
       ctx.fillRect(x + 2, y - 3, 8, 4);
       ctx.fillRect(x + 25, y + 50, 7, 4);
     }
-    if (combatant.statuses.some((status) => status.id === "poison")) {
-      ctx.fillStyle = "rgba(22, 79, 36, 0.34)";
+    if (combatant.statuses.some((status) => status.id === "poison" || status.id === "spikePoison")) {
+      const spikePoisoned = combatant.statuses.some((status) => status.id === "spikePoison");
+      ctx.fillStyle = spikePoisoned ? "rgba(4, 62, 24, 0.46)" : "rgba(22, 79, 36, 0.34)";
       ctx.fillRect(x - 5, y - 6, 42, 60);
-      ctx.fillStyle = "#7cff6b";
+      ctx.fillStyle = spikePoisoned ? "#b8ffd0" : "#7cff6b";
       ctx.fillRect(x + 4, y - 10, 5, 5);
       ctx.fillRect(x + 24, y + 8, 4, 4);
     }
@@ -2317,9 +2439,21 @@ export class Game {
     const facing = combatant.velocityX < -4 ? -1 : combatant.velocityX > 4 ? 1 : zombie.wanderDirection;
     const lunge = zombie.biteAnim > 0 ? Math.round(7 * (zombie.biteAnim / 0.28)) : 0;
     const wobble = Math.round(Math.sin(zombie.age * 18) * 2);
+    const rising = zombie.riseTimer > 0;
+    const groundY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = combatant.respawnTimer > 0 ? 0.25 : 1;
+    if (rising) {
+      ctx.fillStyle = "rgba(90, 58, 34, 0.72)";
+      ctx.fillRect(x - 8, groundY - 8, combatant.width + 16, 10);
+      ctx.fillStyle = "#5a3a22";
+      ctx.fillRect(x - 4, groundY - 14, 7, 7);
+      ctx.fillRect(x + combatant.width - 3, groundY - 13, 7, 7);
+      ctx.beginPath();
+      ctx.rect(0, 0, this.canvas.width, groundY + 1);
+      ctx.clip();
+    }
     ctx.fillStyle = "rgba(22, 79, 36, 0.28)";
     ctx.fillRect(x - 6, y - 8, combatant.width + 12, combatant.height + 14);
     ctx.fillStyle = combatant.invulnerable > 0 ? "#ffffff" : "#164f24";
@@ -2525,6 +2659,7 @@ export class Game {
     const local = this.combat.getCombatant(this.localPlayer.state.id);
     const teleport = this.combat.getTeleportState(this.localPlayer.state.id);
     const lightning = this.combat.getLightningState(this.localPlayer.state.id);
+    const spikes = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
@@ -2539,6 +2674,8 @@ export class Game {
       lightning.charging ? `Lightning in ${lightning.chargeTimer.toFixed(1)}s` : "",
       lightning.empoweredTimer > 0 ? `Empowered ${lightning.empoweredTimer.toFixed(1)}s` : "",
       lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
+      spikes.spikeModeActive ? `Spikes ${spikes.spikeModeTimer.toFixed(1)}s - ${spikes.spikeCount} active` : "",
+      !spikes.spikeModeActive && spikes.spikeCooldown > 0 ? `Spikes cooldown ${spikes.spikeCooldown.toFixed(1)}s` : "",
       superLegsText,
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
@@ -2680,8 +2817,12 @@ export class Game {
 export function resolveMouseWeaponAction(
   button: "primary" | "secondary",
   loadout: Partial<LoadoutState>,
+  options: { preferGrapplePull?: boolean } = {},
 ): { weaponId: WeaponId; action: "primary" | "secondary" } | null {
   const normalized = normalizeLoadout(loadout);
+  if (button === "secondary" && options.preferGrapplePull && loadoutHasWeapon(normalized, "grappling-hook")) {
+    return { weaponId: "grappling-hook", action: "secondary" };
+  }
   const weaponId = button === "primary" ? normalized.leftHand : normalized.rightHand;
   return weaponId ? { weaponId, action: button } : null;
 }
@@ -2720,6 +2861,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#5ad7ff";
     case "chainsaw":
       return "#b8bfd7";
+    case "spikes":
+      return "#f2f2f2";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -2808,7 +2951,11 @@ function weaponHudDetail(
           ? "Hook flying - left release"
           : `Left fire rope - right pull once attached - ${runtime.chamber.toFixed(1)}s`;
     case "chainsaw":
-      return `${runtime.chainsawMode.toUpperCase()} - Rev ${Math.round(runtime.chainsawRev * 100)}% - Heat ${Math.round(runtime.chainsawHeat * 100)}% - DPS ${runtime.chainsawDps} - Zombies ${runtime.zombieCount}`;
+      return `${runtime.chainsawMode.toUpperCase()} - Heat ${Math.round(runtime.chainsawHeat * 100)}% - DPS ${runtime.chainsawDps} - Zombies ${runtime.zombieCount}`;
+    case "spikes":
+      return runtime.spikeModeActive
+        ? `Spike mode ${runtime.spikeModeTimer.toFixed(1)}s - Active spikes ${runtime.spikeCount}`
+        : `Spike cooldown ${runtime.spikeCooldown.toFixed(1)}s - Active spikes ${runtime.spikeCount}`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -2865,7 +3012,9 @@ function weaponHelper(id: WeaponId): string {
     case "grappling-hook":
       return "Left fires/releases rope hook - hold right to pull while attached";
     case "chainsaw":
-      return "Hold left to rev/run - close DPS overheats - chainsaw KOs make poison zombies";
+      return "Left runs immediately - close DPS overheats - chainsaw KOs make rising poison zombies";
+    case "spikes":
+      return "Q/E activates 30s spike mode - click places impaling poison spikes";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

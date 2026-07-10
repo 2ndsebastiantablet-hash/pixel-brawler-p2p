@@ -45,6 +45,12 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "frontStrap", "Death Aura");
     await expect(page.locator("[data-loadout-error]")).toContainText("Grappling Hook cannot attach");
 
+    await dragItemToSlot(page, "spikes", "Spikes", "frontStrap");
+    await expectSlot(page, "frontStrap", "Spikes");
+
+    await dragItemToSlot(page, "spikes", "Spikes", "backStrap");
+    await expectSlot(page, "backStrap", "Spikes");
+
     await dragItemToSlot(page, "wings", "Wings", "backStrap");
     await expectSlot(page, "backStrap", "Wings");
 
@@ -61,9 +67,17 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "rightHand", "Chainsaw");
     await expect(page.locator("[data-loadout-error]")).toContainText("Death Aura cannot attach");
 
+    await dragItemToSlot(page, "spikes", "Spikes", "rightHand");
+    await expectSlot(page, "rightHand", "Chainsaw");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
+
     await dragItemToSlot(page, "wings", "Wings", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Wings cannot attach");
+
+    await dragItemToSlot(page, "spikes", "Spikes", "attachment");
+    await expectSlot(page, "attachment", "Virgin Blood");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
 
     await dragItemToSlot(page, "super-legs", "Super Legs", "rightHand");
     await expectSlot(page, "rightHand", "Chainsaw");
@@ -73,8 +87,12 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "legs", "Super Legs");
     await expect(page.locator("[data-loadout-error]")).toContainText("Grappling Hook cannot attach");
 
+    await dragItemToSlot(page, "spikes", "Spikes", "legs");
+    await expectSlot(page, "legs", "Super Legs");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
+
     await page.locator("[data-offline]").click();
-    await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Death Aura");
+    await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Spikes");
     await expect(page.locator(".loadout-strip")).toContainText("E Back Strap: Wings");
     await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Chainsaw");
     await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Chainsaw");

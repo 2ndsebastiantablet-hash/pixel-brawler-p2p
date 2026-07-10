@@ -14,6 +14,8 @@ export type StatusEffectId =
   | "angelWings"
   | "deathFrozen"
   | "poison"
+  | "spikePoison"
+  | "spikeMode"
   | "scrambled"
   | "handsMissing"
   | "superLegs";

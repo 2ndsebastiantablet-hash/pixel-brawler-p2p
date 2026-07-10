@@ -24,6 +24,7 @@ const enabledWeapons = [
   "holy-bazooka",
   "grappling-hook",
   "chainsaw",
+  "spikes",
 ] as const;
 
 describe("weapon registry", () => {
@@ -51,6 +52,7 @@ describe("weapon registry", () => {
       "holy-bazooka",
       "grappling-hook",
       "chainsaw",
+      "spikes",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -95,6 +97,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo["holy-bazooka"]?.reserve).toBe(0);
     expect(inventory.ammo["grappling-hook"]).toBeUndefined();
     expect(inventory.ammo.chainsaw).toBeUndefined();
+    expect(inventory.ammo.spikes).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -112,7 +115,9 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("super-legs").description).toContain("leg equipment");
     expect(weaponRegistry.get("grappling-hook").description).toContain("physical rope hook");
     expect(weaponRegistry.get("grappling-hook").weight.label).toBe("Light");
-    expect(weaponRegistry.get("chainsaw").description).toContain("Rev for 2 seconds");
+    expect(weaponRegistry.get("chainsaw").description).not.toContain("Rev for 2 seconds");
     expect(weaponRegistry.get("chainsaw").weight.label).toBe("Heavy");
+    expect(weaponRegistry.get("spikes").description).toBe("Strap weapon. Q/E activates 30s spike mode. Click to spawn impaling poison spikes. No spike cooldown during mode. 60s cooldown after.");
+    expect(weaponRegistry.get("spikes").weight.label).toBe("Light");
   });
 });
