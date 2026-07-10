@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -98,6 +98,7 @@ export interface GameDebugSnapshot {
     y: number;
     weaponId: WeaponId;
     hp?: number;
+    maxHp?: number;
   };
   remotePlayers: {
     count: number;
@@ -109,6 +110,7 @@ export interface GameDebugSnapshot {
       x: number;
       y: number;
       hp?: number;
+      maxHp?: number;
     }>;
   };
 }
@@ -201,6 +203,7 @@ export class Game {
         x: remote.player.state.x,
         y: remote.player.state.y,
         hp: combatant?.hp,
+        maxHp: combatant?.maxHp,
       };
     });
 
@@ -214,6 +217,7 @@ export class Game {
         y: this.localPlayer.state.y,
         weaponId: this.combat.getPlayerInventory().equippedWeapon,
         hp: localCombatant?.hp,
+        maxHp: localCombatant?.maxHp,
       },
       remotePlayers: {
         count: remotePlayers.length,
@@ -372,6 +376,7 @@ export class Game {
         velocityX: remote.player.state.velocityX,
         velocityY: remote.player.state.velocityY,
         hp: remote.current.hp,
+        maxHp: remote.current.maxHp,
         statuses: remote.current.statuses,
         respawnTimer: remote.current.respawnTimer,
         invulnerable: remote.current.invulnerable,
@@ -413,6 +418,7 @@ export class Game {
         ...this.localPlayer.toNetState(time),
         weaponId: this.combat.getPlayerInventory().equippedWeapon,
         hp: localCombatant?.hp,
+        maxHp: localCombatant?.maxHp,
         statuses: localCombatant?.statuses.map((status) => status.id),
         respawnTimer: localCombatant?.respawnTimer,
         invulnerable: localCombatant?.invulnerable,
@@ -621,7 +627,7 @@ export class Game {
       return;
     }
     this.loadout = swap.loadout;
-    this.combat.setEquippedWeapon(this.loadout[preferredSlot] ?? this.loadout.rightHand ?? this.loadout.leftHand ?? "pistol");
+    this.combat.setEquippedWeapon(this.loadout[preferredSlot] ?? this.loadout.rightHand ?? this.loadout.leftHand ?? this.loadout.attachment ?? "pistol");
     this.attachmentVisual.initialized = false;
     playSound("weapon-pickup");
   }
@@ -1375,6 +1381,7 @@ export class Game {
       && weaponId !== "sledgehammer"
       && weaponId !== "rocket"
       && weaponId !== "holy-bazooka"
+      && weaponId !== "grappling-hook"
       && weaponId !== "lightning-rod"
       && weaponId !== "slingshot"
       && weaponId !== "whip"
@@ -1477,6 +1484,24 @@ export class Game {
         this.pixelRect(ctx, -34, -8, 30 + Math.round(glow * 18), 16);
         ctx.fillStyle = "rgba(255, 255, 255, 0.42)";
         this.pixelRect(ctx, 68, -15, 26 + Math.round(glow * 10), 30);
+      }
+    } else if (weaponId === "grappling-hook") {
+      const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
+      ctx.fillStyle = "#2b3542";
+      this.pixelRect(ctx, 0, -5, 34, 10);
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, 26, -8, 18, 16);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, 40, -3, 14, 6);
+      ctx.strokeStyle = runtime?.grappleActive ? "#5ad7ff" : "rgba(216, 242, 255, 0.88)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.quadraticCurveTo(28, -16, 46, -2);
+      ctx.stroke();
+      if (runtime?.grappleAttached) {
+        ctx.fillStyle = "rgba(90, 215, 255, 0.35)";
+        this.pixelRect(ctx, 2, -16, 54, 32);
       }
     } else if (weaponId === "lightning-rod") {
       ctx.fillStyle = "#ffd84d";
@@ -1840,6 +1865,9 @@ export class Game {
     for (const dropped of snapshot.droppedWeapons) {
       this.drawDroppedWeapon(ctx, dropped);
     }
+    for (const grapple of snapshot.grapples) {
+      this.drawGrapple(ctx, grapple);
+    }
     for (const projectile of snapshot.projectiles) {
       this.drawProjectile(ctx, projectile);
     }
@@ -1863,6 +1891,47 @@ export class Game {
       ctx.fillStyle = number.color;
       ctx.fillText(text, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
     }
+  }
+
+  private drawGrapple(ctx: CanvasRenderingContext2D, grapple: GrappleState): void {
+    const color = colorForWeapon("grappling-hook");
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.lineWidth = grapple.state === "attached" ? 4 : 3;
+    ctx.strokeStyle = grapple.state === "attached" ? "rgba(90, 215, 255, 0.92)" : "rgba(216, 242, 255, 0.72)";
+    ctx.beginPath();
+    const points = grapple.points.length >= 2 ? grapple.points : [{ x: grapple.x, y: grapple.y }];
+    points.forEach((point, index) => {
+      const x = Math.round(point.x - this.camera.x);
+      const y = Math.round(point.y - this.camera.y);
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+    for (let index = 1; index < points.length - 1; index += 1) {
+      if (index % 2 === 0) {
+        const point = points[index];
+        ctx.fillStyle = "rgba(255, 255, 255, 0.82)";
+        ctx.fillRect(Math.round(point.x - this.camera.x) - 2, Math.round(point.y - this.camera.y) - 2, 4, 4);
+      }
+    }
+    const hookX = Math.round(grapple.x - this.camera.x);
+    const hookY = Math.round(grapple.y - this.camera.y);
+    ctx.fillStyle = color;
+    ctx.fillRect(hookX - 6, hookY - 5, 12, 10);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(hookX + (grapple.vx >= 0 ? 2 : -8), hookY - 2, 8, 4);
+    if (grapple.state === "attached") {
+      ctx.strokeStyle = "rgba(90, 215, 255, 0.38)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(hookX, hookY, 18, 12, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private drawAmmoPickup(ctx: CanvasRenderingContext2D, pickup: AmmoPickup): void {
@@ -2091,6 +2160,13 @@ export class Game {
       ctx.fillRect(x + 30, y - 4, 10, 8);
       ctx.fillStyle = "#2b3542";
       ctx.fillRect(x - 8, y + 6, 12, 14);
+    } else if (dropped.weaponId === "grappling-hook") {
+      ctx.fillStyle = "#2b3542";
+      ctx.fillRect(x - 16, y - 4, 28, 8);
+      ctx.fillStyle = colorForWeapon("grappling-hook");
+      ctx.fillRect(x + 8, y - 8, 14, 16);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x + 18, y - 2, 9, 4);
     } else if (dropped.weaponId === "whip") {
       for (let index = 0; index < 6; index += 1) {
         ctx.fillRect(x - 18 + index * 7, y + Math.sin(index) * 4, 6, 5);
@@ -2273,10 +2349,21 @@ export class Game {
   }
 
   private drawHealthBar(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, hp: number, max: number): void {
+    const safeMax = Math.max(1, max);
+    const ratio = Math.min(1, Math.max(0, hp / safeMax));
     ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
-    ctx.fillRect(x, y, width, 5);
+    ctx.fillRect(x, y, width, 6);
     ctx.fillStyle = hp > max * 0.35 ? "#7cff6b" : "#ff6f91";
-    ctx.fillRect(x, y, Math.max(0, width * (hp / max)), 5);
+    ctx.fillRect(x, y, Math.round(width * ratio), 6);
+    const text = `${Math.ceil(hp)}/${Math.ceil(safeMax)}`;
+    ctx.font = "8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.86)";
+    ctx.strokeText(text, x + width / 2, y - 1);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(text, x + width / 2, y - 1);
   }
 
   private drawLocalHealth(ctx: CanvasRenderingContext2D): void {
@@ -2511,6 +2598,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff8f3d";
     case "holy-bazooka":
       return "#fff4a8";
+    case "grappling-hook":
+      return "#5ad7ff";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -2591,7 +2680,9 @@ function weaponHudDetail(
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
     case "holy-bazooka":
-      return `Ammo pickups - Cooldown ${runtime.chamber.toFixed(1)}s - max HP steals`;
+      return `Right calls ammo - Fire cooldown ${runtime.chamber.toFixed(1)}s - max HP steals`;
+    case "grappling-hook":
+      return runtime.grappleAttached ? "Attached - right click releases" : runtime.grappleActive ? "Hook flying - wait or release" : `Left fire rope - Right release - ${runtime.chamber.toFixed(1)}s`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -2608,7 +2699,7 @@ function weaponHudDetail(
 function weaponHelper(id: WeaponId): string {
   switch (id) {
     case "pistol":
-      return "Tap shots - R reload/perfect - Right throw";
+      return "Tap shots - R reload/perfect - pistol stays equipped";
     case "whip":
       return "Long arc - Tip cracks - 2 quick hits pull";
     case "teleport-ball":
@@ -2644,7 +2735,9 @@ function weaponHelper(id: WeaponId): string {
     case "rocket":
       return "Left place - Right light - stand on it to ride";
     case "holy-bazooka":
-      return "Left fires homing missile - ammo pickups every 10s - huge holy splash";
+      return "Right calls one map ammo pickup - Left fires homing missile";
+    case "grappling-hook":
+      return "Left fires rope hook - attaches to floors, walls, and players - Right releases";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

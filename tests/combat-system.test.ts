@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(20);
+    expect(fighter.weaponInventory).toHaveLength(21);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -138,6 +138,33 @@ describe("combat system", () => {
     combat.update(2.1, [playerState]);
     expect(combat.getCombatant(dummy.id)?.hp).toBe(100);
     expect(combat.getCombatant(dummy.id)?.x).toBe(dummy.spawnX);
+  });
+
+  it("preserves synced remote max health for visible health bars", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+
+    const remote = combat.syncRemotePlayer({
+      id: "peer-holy",
+      name: "Holy Guest",
+      color: "#fff4a8",
+      x: 80,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+      hp: 143,
+      maxHp: 220,
+      statuses: ["holyBuff"],
+    });
+
+    expect(remote.hp).toBe(143);
+    expect(remote.maxHp).toBe(220);
+    expect(combat.getSnapshot().combatants.find((combatant) => combatant.id === "peer-holy")).toMatchObject({
+      hp: 143,
+      maxHp: 220,
+    });
   });
 
   it("kills void-fallen combatants and gives a full blue respawn invulnerability window", () => {
@@ -425,6 +452,7 @@ describe("combat system", () => {
     combat.start(createDefaultInventory());
     combat.syncLocalPlayer(playerState, "Tester", "#18dff5");
 
+    combat.equip("revolver");
     combat.dropCurrentWeapon("local", playerState, { x: 1, y: 0 }, 100);
     const dropped = combat.getSnapshot().droppedWeapons[0];
     dropped.x = playerState.x + 190;
@@ -445,9 +473,9 @@ describe("combat system", () => {
     combat.update(1 / 60, [playerState]);
 
     expect(combat.getSnapshot().droppedWeapons).toHaveLength(0);
-    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("revolver");
     expect(combat.consumeSounds()).toContain("weapon-pickup");
-    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "pickup" && effect.label === "Pistol")).toBe(true);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "pickup" && effect.label === "Revolver")).toBe(true);
   });
 
   it("teleports the player to the teleport ball after three seconds unless canceled", () => {
@@ -1357,6 +1385,73 @@ describe("combat system", () => {
     expect(target.hp).toBeGreaterThanOrEqual(98);
   });
 
+  it("fires a physical Grappling Hook rope that attaches, lightly damages, pulls, and releases", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("grappling-hook");
+    const player = {
+      ...playerState,
+      id: "peer-a",
+      x: 0,
+      y: playerState.y - 40,
+      grounded: false,
+      velocityX: 0,
+      velocityY: 0,
+    };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    const dummy = combat.spawnTrainingDummy({ x: 330, y: playerState.y - 35 });
+
+    const fired = combat.usePrimary({
+      ownerId: "peer-a",
+      player,
+      aim: { x: 1, y: 0.02 },
+      now: 100,
+      heldMs: 0,
+      isNewPress: true,
+    });
+
+    expect(fired).toMatchObject({ kind: "fired", weaponId: "grappling-hook", label: "Grapple Fire" });
+    expect(combat.getSnapshot().grapples).toHaveLength(1);
+    expect(combat.getSnapshot().grapples[0]).toMatchObject({ ownerId: "peer-a", state: "flying" });
+
+    for (let index = 0; index < 36; index += 1) {
+      combat.update(1 / 60, [player]);
+    }
+
+    const grapple = combat.getSnapshot().grapples[0];
+    const target = combat.getCombatant(dummy.id)!;
+    expect(grapple).toMatchObject({ ownerId: "peer-a", state: "attached", targetId: dummy.id });
+    expect(grapple.points.length).toBeGreaterThanOrEqual(6);
+    expect(target.hp).toBeGreaterThanOrEqual(92);
+    expect(target.hp).toBeLessThan(100);
+    expect(player.velocityX).toBeGreaterThan(180);
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "hit", weaponId: "grappling-hook", targetId: dummy.id, label: "Grapple Hook" }),
+    ]));
+    expect(combat.consumeSounds()).toEqual(expect.arrayContaining(["grapple-fire", "grapple-attach"]));
+
+    const blocked = combat.usePrimary({
+      ownerId: "peer-a",
+      player,
+      aim: { x: 1, y: 0 },
+      now: 800,
+      heldMs: 0,
+      isNewPress: true,
+    });
+    expect(blocked).toMatchObject({ kind: "blocked", weaponId: "grappling-hook", label: "Already attached" });
+
+    const released = combat.useSecondary({
+      ownerId: "peer-a",
+      player,
+      aim: { x: 1, y: 0 },
+      now: 900,
+      heldMs: 0,
+      isNewPress: true,
+    });
+    expect(released).toMatchObject({ kind: "utility", weaponId: "grappling-hook", label: "Grapple Release" });
+    expect(combat.getSnapshot().grapples).toHaveLength(0);
+  });
+
   it("replays remote projectile weapon events as visual-only projectiles without local damage", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -1493,13 +1588,13 @@ describe("combat system", () => {
     expect(combat.getSnapshot().effects.some((effect) => effect.kind === "shockwave" && effect.label === "SUPER LEG SLAM")).toBe(true);
   });
 
-  it("removes thrown physical weapons from inventory until the ground pickup is collected", () => {
+  it("keeps pistol right click and drop from throwing or removing the pistol", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
     combat.equip("pistol");
     const player = { ...playerState, id: "local" };
 
-    const thrown = combat.useSecondary({
+    const secondary = combat.useSecondary({
       ownerId: "local",
       player,
       aim: { x: 1, y: -0.1 },
@@ -1508,10 +1603,32 @@ describe("combat system", () => {
       isNewPress: true,
     });
 
-    expect(thrown).toMatchObject({ kind: "fired", weaponId: "pistol", label: "Throw" });
-    expect(combat.getPlayerInventory().weaponInventory).not.toContain("pistol");
-    expect(combat.getPlayerInventory().equippedWeapon).not.toBe("pistol");
-    const dropped = combat.getSnapshot().droppedWeapons.find((item) => item.weaponId === "pistol")!;
+    expect(secondary).toMatchObject({ kind: "blocked", weaponId: "pistol" });
+    expect(secondary.label.toLowerCase()).toContain("no throw");
+    expect(combat.getPlayerInventory().weaponInventory).toContain("pistol");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
+    expect(combat.getSnapshot().droppedWeapons.some((item) => item.weaponId === "pistol")).toBe(false);
+    expect(combat.getSnapshot().projectiles.some((item) => item.weaponId === "pistol" && item.label.includes("throw"))).toBe(false);
+
+    const drop = combat.dropCurrentWeapon("local", player, { x: 1, y: -0.1 }, 200);
+    expect(drop).toMatchObject({ kind: "blocked", weaponId: "pistol" });
+    expect(combat.getPlayerInventory().weaponInventory).toContain("pistol");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
+    expect(combat.getSnapshot().droppedWeapons.some((item) => item.weaponId === "pistol")).toBe(false);
+  });
+
+  it("removes dropped physical weapons from inventory until the ground pickup is collected", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("revolver");
+    const player = { ...playerState, id: "local" };
+
+    const thrown = combat.dropCurrentWeapon("local", player, { x: 1, y: -0.1 }, 100);
+
+    expect(thrown).toMatchObject({ kind: "fired", weaponId: "revolver", label: "Throw" });
+    expect(combat.getPlayerInventory().weaponInventory).not.toContain("revolver");
+    expect(combat.getPlayerInventory().equippedWeapon).not.toBe("revolver");
+    const dropped = combat.getSnapshot().droppedWeapons.find((item) => item.weaponId === "revolver")!;
     expect(dropped).toBeDefined();
     dropped.x = player.x + player.width / 2;
     dropped.y = player.y + player.height / 2;
@@ -1519,10 +1636,10 @@ describe("combat system", () => {
     dropped.vy = 0;
     dropped.pickupable = true;
 
-    expect(combat.pickUpNearest(player)).toBe("pistol");
-    expect(combat.getPlayerInventory().weaponInventory).toContain("pistol");
-    expect(combat.getPlayerInventory().equippedWeapon).toBe("pistol");
-    expect(combat.getSnapshot().droppedWeapons.some((item) => item.weaponId === "pistol")).toBe(false);
+    expect(combat.pickUpNearest(player)).toBe("revolver");
+    expect(combat.getPlayerInventory().weaponInventory).toContain("revolver");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("revolver");
+    expect(combat.getSnapshot().droppedWeapons.some((item) => item.weaponId === "revolver")).toBe(false);
   });
 
   it("reduces leg-hit damage and leg slow while Super Legs are equipped", () => {
@@ -1909,8 +2026,17 @@ describe("combat system", () => {
     expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "holy-bazooka")).toBe(false);
 
     combat.update(10.1, [owner]);
+    expect(combat.getSnapshot().ammoPickups.some((item) => item.weaponId === "holy-bazooka")).toBe(false);
+
+    const spawnedAmmo = combat.useSecondary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 10_200, heldMs: 0, isNewPress: true });
+    expect(spawnedAmmo).toMatchObject({ kind: "utility", weaponId: "holy-bazooka", label: "Holy Ammo" });
     const pickup = combat.getSnapshot().ammoPickups.find((item) => item.weaponId === "holy-bazooka");
     expect(pickup).toBeDefined();
+    expect(Math.hypot(pickup!.x - (owner.x + owner.width / 2), pickup!.y - (owner.y + owner.height / 2))).toBeGreaterThan(120);
+    const cooldownSpawn = combat.useSecondary({ ownerId: "peer-a", player: owner, aim: { x: 1, y: 0 }, now: 10_300, heldMs: 0, isNewPress: true });
+    expect(cooldownSpawn).toMatchObject({ kind: "blocked", weaponId: "holy-bazooka", label: "Ammo cooldown" });
+    expect(combat.getSnapshot().ammoPickups.filter((item) => item.weaponId === "holy-bazooka")).toHaveLength(1);
+
     pickup!.x = owner.x + owner.width / 2;
     pickup!.y = owner.y + owner.height / 2;
     combat.update(1 / 60, [owner]);

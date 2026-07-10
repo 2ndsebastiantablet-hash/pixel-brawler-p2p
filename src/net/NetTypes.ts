@@ -24,6 +24,7 @@ export interface PlayerNetState {
   sentAt: number;
   weaponId?: WeaponId;
   hp?: number;
+  maxHp?: number;
   statuses?: StatusEffectId[];
   respawnTimer?: number;
   invulnerable?: number;
@@ -57,6 +58,7 @@ export interface PlayerStatePacket {
   ts: number;
   w?: WeaponId;
   hp?: number;
+  mh?: number;
   st?: StatusEffectId[];
   ko?: number;
   iv?: number;
@@ -148,6 +150,7 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ts: state.sentAt,
     ...(state.weaponId ? { w: state.weaponId } : {}),
     ...(typeof state.hp === "number" ? { hp: round(state.hp, 1) } : {}),
+    ...(typeof state.maxHp === "number" ? { mh: round(state.maxHp, 1) } : {}),
     ...(state.statuses ? { st: state.statuses } : {}),
     ...(typeof state.respawnTimer === "number" ? { ko: round(state.respawnTimer, 2) } : {}),
     ...(typeof state.invulnerable === "number" ? { iv: round(state.invulnerable, 2) } : {}),
@@ -191,6 +194,7 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     sentAt: packet.ts,
     ...(packet.w ? { weaponId: packet.w } : {}),
     ...(typeof packet.hp === "number" ? { hp: packet.hp } : {}),
+    ...(typeof packet.mh === "number" ? { maxHp: packet.mh } : {}),
     ...(packet.st ? { statuses: packet.st } : {}),
     ...(typeof packet.ko === "number" ? { respawnTimer: packet.ko } : {}),
     ...(typeof packet.iv === "number" ? { invulnerable: packet.iv } : {}),
@@ -239,6 +243,7 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     typeof value.ts === "number" &&
     (value.w === undefined || typeof value.w === "string") &&
     (value.hp === undefined || typeof value.hp === "number") &&
+    (value.mh === undefined || typeof value.mh === "number") &&
     (value.st === undefined || (Array.isArray(value.st) && value.st.every((item) => typeof item === "string"))) &&
     (value.ko === undefined || typeof value.ko === "number") &&
     (value.iv === undefined || typeof value.iv === "number") &&

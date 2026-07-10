@@ -18,6 +18,7 @@ export type WeaponId =
   | "death-aura"
   | "rocket"
   | "holy-bazooka"
+  | "grappling-hook"
   | "hands"
   | "super-legs"
   | "teleport-ball"

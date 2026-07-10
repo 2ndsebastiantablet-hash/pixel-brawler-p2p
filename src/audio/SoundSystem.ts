@@ -92,6 +92,9 @@ export type SoundId =
   | "holy-bazooka-fire"
   | "holy-bazooka-explode"
   | "holy-bazooka-pickup"
+  | "grapple-fire"
+  | "grapple-attach"
+  | "grapple-release"
   | "hand-spawn"
   | "hand-skitter"
   | "hand-attach"
@@ -197,6 +200,9 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "holy-bazooka-fire": { category: "heavy", frequency: 160, endFrequency: 760, duration: 0.34, noise: true, minInterval: 0.2 },
   "holy-bazooka-explode": { category: "heavy", frequency: 96, endFrequency: 34, duration: 0.56, noise: true, minInterval: 0.34 },
   "holy-bazooka-pickup": { category: "weapon", frequency: 760, endFrequency: 1040, duration: 0.14, type: "triangle", minInterval: 0.08 },
+  "grapple-fire": { category: "weapon", frequency: 420, endFrequency: 720, duration: 0.12, noise: true, minInterval: 0.12 },
+  "grapple-attach": { category: "weapon", frequency: 180, endFrequency: 430, duration: 0.13, type: "square", minInterval: 0.12 },
+  "grapple-release": { category: "weapon", frequency: 360, endFrequency: 140, duration: 0.09, noise: true, minInterval: 0.1 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },
   "hand-skitter": { category: "movement", frequency: 320, endFrequency: 260, duration: 0.045, type: "square", minInterval: 0.22 },
   "hand-attach": { category: "combat", frequency: 540, endFrequency: 210, duration: 0.12, noise: true, minInterval: 0.16 },

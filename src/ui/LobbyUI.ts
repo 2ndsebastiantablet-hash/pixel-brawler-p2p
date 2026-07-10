@@ -1084,6 +1084,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#ff8f3d";
     case "holy-bazooka":
       return "#fff4a8";
+    case "grappling-hook":
+      return "#5ad7ff";
     case "hands":
       return "#b8ffd0";
     case "super-legs":

@@ -91,6 +91,7 @@ describe("network player packets", () => {
       sentAt: 1010,
       weaponId: "sniper",
       hp: 64,
+      maxHp: 180,
       statuses: ["marked", "legShotSlow"],
       respawnTimer: 0,
       invulnerable: 1.95,
@@ -115,6 +116,7 @@ describe("network player packets", () => {
     const packet = encodePlayerStatePacket(state);
     expect(packet.w).toBe("sniper");
     expect(packet.hp).toBe(64);
+    expect(packet.mh).toBe(180);
     expect(packet.st).toEqual(["marked", "legShotSlow"]);
     expect(packet.iv).toBe(1.95);
     expect(packet.cw).toBe("lightning-rod");

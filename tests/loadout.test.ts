@@ -63,6 +63,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("holy-bazooka", "frontStrap")).toBe(false);
     expect(isSlotCompatible("holy-bazooka", "legs")).toBe(false);
     expect(isSlotCompatible("rocket", "legs")).toBe(false);
+    expect(isSlotCompatible("grappling-hook", "rightHand")).toBe(true);
+    expect(isSlotCompatible("grappling-hook", "leftHand")).toBe(true);
+    expect(isSlotCompatible("grappling-hook", "attachment")).toBe(true);
+    expect(isSlotCompatible("grappling-hook", "frontStrap")).toBe(false);
+    expect(isSlotCompatible("grappling-hook", "backStrap")).toBe(false);
+    expect(isSlotCompatible("grappling-hook", "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -111,13 +117,35 @@ describe("loadout equipment slots", () => {
 
   it("swaps the attachment string with the active hand item without deleting or using either item", () => {
     const emptySwap = swapAttachmentWithHand(DEFAULT_LOADOUT, "rightHand");
-    expect(emptySwap).toMatchObject({ swapped: false, reason: "No attachment", loadout: {} });
+    expect(emptySwap).toMatchObject({ swapped: false, reason: "Nothing to swap", loadout: {} });
+
+    const attachmentToEmptyHand = swapAttachmentWithHand({ attachment: "pistol" }, "rightHand");
+    expect(attachmentToEmptyHand).toMatchObject({
+      swapped: true,
+      loadout: { rightHand: "pistol" },
+    });
+    expect(attachmentToEmptyHand.loadout.attachment).toBeUndefined();
+
+    const handToEmptyAttachment = swapAttachmentWithHand({ rightHand: "knife" }, "rightHand");
+    expect(handToEmptyAttachment).toMatchObject({
+      swapped: true,
+      loadout: { attachment: "knife" },
+    });
+    expect(handToEmptyAttachment.loadout.rightHand).toBeUndefined();
 
     const defaultSwap = swapAttachmentWithHand(STARTER_LOADOUT, "rightHand");
     expect(defaultSwap.swapped).toBe(true);
     expect(defaultSwap.loadout.leftHand).toBe("pistol");
     expect(defaultSwap.loadout.rightHand).toBe("virgin-blood");
     expect(defaultSwap.loadout.attachment).toBe("knife");
+
+    const repeatedStart = { rightHand: "knife" as const, attachment: "pistol" as const };
+    const repeatedFirst = swapAttachmentWithHand(repeatedStart, "rightHand");
+    expect(repeatedFirst.loadout.rightHand).toBe("pistol");
+    expect(repeatedFirst.loadout.attachment).toBe("knife");
+    const repeatedSecond = swapAttachmentWithHand(repeatedFirst.loadout, "rightHand");
+    expect(repeatedSecond.loadout.rightHand).toBe("knife");
+    expect(repeatedSecond.loadout.attachment).toBe("pistol");
 
     const pairedSwap = swapAttachmentWithHand({
       ...STARTER_LOADOUT,
@@ -142,5 +170,12 @@ describe("loadout equipment slots", () => {
       rightHand: "knife",
       attachment: "rocket",
     });
+
+    const incompatibleHandToAttachment = swapAttachmentWithHand({
+      leftHand: "holy-bazooka",
+      rightHand: "holy-bazooka",
+    }, "rightHand");
+    expect(incompatibleHandToAttachment.swapped).toBe(false);
+    expect(incompatibleHandToAttachment.reason).toContain("Holy Bazooka cannot attach");
   });
 });

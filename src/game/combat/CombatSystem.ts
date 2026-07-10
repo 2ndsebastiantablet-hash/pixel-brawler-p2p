@@ -49,6 +49,31 @@ export interface AmmoPickup {
   age: number;
 }
 
+export interface GrappleRopePoint {
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+}
+
+export interface GrappleState {
+  id: string;
+  ownerId: string;
+  state: "flying" | "attached";
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  ropeLength: number;
+  targetId?: string;
+  anchorX: number;
+  anchorY: number;
+  maxRange: number;
+  points: GrappleRopePoint[];
+  visualOnly?: boolean;
+}
+
 export interface CombatEffect {
   id: string;
   kind:
@@ -87,6 +112,7 @@ export interface CombatSnapshot {
   combatants: Combatant[];
   droppedWeapons: DroppedWeapon[];
   ammoPickups: AmmoPickup[];
+  grapples: GrappleState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
 }
@@ -155,7 +181,7 @@ const rocketExplosionCenterStun = 0.74;
 const rocketExplosionEdgeStun = 0.42;
 const rocketLaunchSpeed = 660;
 const rocketChaosSpeed = 850;
-const holyBazookaAmmoSpawnSeconds = 10;
+const holyBazookaAmmoCallCooldown = 7;
 const holyBazookaMaxAmmoPickups = 4;
 const holyBazookaMaxLoadedAmmo = 6;
 const holyBazookaPickupRadius = 48;
@@ -170,6 +196,15 @@ const holyBazookaExplosionEdgeKnockback = 960;
 const holyBazookaExplosionCenterStun = 0.96;
 const holyBazookaExplosionEdgeStun = 0.52;
 const holyBazookaMaxHpCap = 260;
+const grappleHookSpeed = 980;
+const grappleHookRange = 780;
+const grappleHookRadius = 8;
+const grappleHookAttachDamage = 6;
+const grappleHookAttachStun = 0.08;
+const grappleHookPullForce = 1450;
+const grappleHookMaxPullSpeed = 1040;
+const grappleHookSnapDistance = 1240;
+const grappleHookRopePoints = 9;
 const handsMissingDuration = 40;
 const handSummonCount = 5;
 const macheteHitGrowth = 12;
@@ -242,6 +277,8 @@ export interface WeaponRuntimeState {
   rocketActive: boolean;
   rocketLit: boolean;
   rocketRiding: boolean;
+  grappleActive: boolean;
+  grappleAttached: boolean;
   attachedHands: number;
 }
 
@@ -253,6 +290,7 @@ export class CombatSystem {
   private inventory: WeaponInventoryState = createDefaultInventory();
   private readonly combatants = new Map<string, Combatant>();
   private readonly projectiles: Projectile[] = [];
+  private readonly grapples: GrappleState[] = [];
   private readonly hitboxes: Hitbox[] = [];
   private readonly droppedWeapons: DroppedWeapon[] = [];
   private readonly ammoPickups: AmmoPickup[] = [];
@@ -272,7 +310,7 @@ export class CombatSystem {
   private readonly handAttachments = new Map<string, HandAttachmentState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
-  private holyBazookaAmmoSpawnTimer = holyBazookaAmmoSpawnSeconds;
+  private holyBazookaAmmoCooldown = 0;
   private holyBazookaAmmoSpawnIndex = 0;
   private nextId = 0;
 
@@ -282,6 +320,7 @@ export class CombatSystem {
     this.inventory = inventory;
     this.combatants.clear();
     this.projectiles.length = 0;
+    this.grapples.length = 0;
     this.hitboxes.length = 0;
     this.droppedWeapons.length = 0;
     this.ammoPickups.length = 0;
@@ -301,7 +340,7 @@ export class CombatSystem {
     this.handAttachments.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
-    this.holyBazookaAmmoSpawnTimer = holyBazookaAmmoSpawnSeconds;
+    this.holyBazookaAmmoCooldown = 0;
     this.holyBazookaAmmoSpawnIndex = 0;
   }
 
@@ -365,6 +404,7 @@ export class CombatSystem {
     velocityX: number;
     velocityY: number;
     hp?: number;
+    maxHp?: number;
     statuses?: StatusEffectId[];
     respawnTimer?: number;
     invulnerable?: number;
@@ -379,8 +419,8 @@ export class CombatSystem {
       height: player.height,
       spawnX: existing?.spawnX ?? player.x,
       spawnY: existing?.spawnY ?? player.y,
-      hp: player.hp ?? existing?.hp ?? maxHp,
-      maxHp,
+      hp: Math.min(player.maxHp ?? existing?.maxHp ?? maxHp, player.hp ?? existing?.hp ?? maxHp),
+      maxHp: player.maxHp ?? existing?.maxHp ?? maxHp,
       velocityX: player.velocityX,
       velocityY: player.velocityY,
       hitstun: existing?.hitstun ?? 0,
@@ -459,6 +499,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "holy-bazooka") {
       return this.fireHolyBazooka(context);
     }
+    if (this.inventory.equippedWeapon === "grappling-hook") {
+      return this.fireGrapplingHook(context);
+    }
     if (this.inventory.equippedWeapon === "hands") {
       return this.spawnHands(context);
     }
@@ -492,13 +535,19 @@ export class CombatSystem {
       return this.lightRocket(context);
     }
     if (weapon.id === "holy-bazooka") {
-      return { kind: "blocked", weaponId: weapon.id, label: "Use primary" };
+      return this.callHolyBazookaAmmo(context);
+    }
+    if (weapon.id === "grappling-hook") {
+      return this.releaseGrapplingHook(context.ownerId, context.now);
     }
     if (weapon.id === "hands") {
       return this.spawnHands(context);
     }
-    if (weapon.id === "pistol" || weapon.id === "knife") {
-      return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, weapon.id === "pistol" && this.inventory.ammo.pistol?.magazine === 0);
+    if (weapon.id === "pistol") {
+      return { kind: "blocked", weaponId: weapon.id, label: "No throw" };
+    }
+    if (weapon.id === "knife") {
+      return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, false);
     }
     if (weapon.id === "axe") {
       return this.throwAxe(context);
@@ -631,6 +680,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "virgin-blood") {
       return { kind: "blocked", weaponId: "virgin-blood", label: "Click to bless" };
+    }
+    if (this.inventory.equippedWeapon === "pistol") {
+      return { kind: "blocked", weaponId: "pistol", label: "No throw" };
     }
     return this.throwCurrentWeapon(ownerId, player, aim, now, false);
   }
@@ -780,6 +832,7 @@ export class CombatSystem {
     this.updateTimedVisuals(dt);
     this.updateInventory(dt);
     this.updateHolyBazookaAmmo(dt, players);
+    this.updateGrapples(dt, players);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
@@ -908,6 +961,7 @@ export class CombatSystem {
     const axeProjectileId = this.axeThrows.get(ownerId);
     const axeProjectile = axeProjectileId ? this.projectiles.find((projectile) => projectile.id === axeProjectileId) : undefined;
     const rocket = this.activeRocket(ownerId);
+    const grapple = this.activeGrapple(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -925,6 +979,8 @@ export class CombatSystem {
       rocketActive: Boolean(rocket),
       rocketLit: rocket?.state === "lit" || rocket?.state === "chaotic",
       rocketRiding: rocket?.riderId === ownerId,
+      grappleActive: Boolean(grapple),
+      grappleAttached: grapple?.state === "attached",
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
   }
@@ -1058,6 +1114,10 @@ export class CombatSystem {
       this.spawnRemoteRocketVisual(event, aim);
       return;
     }
+    if (event.weaponId === "grappling-hook") {
+      this.spawnRemoteGrappleVisual(event, aim);
+      return;
+    }
     if (event.weaponId === "hands" && (event.action === "primary" || event.action === "secondary")) {
       this.spawnRemoteHandsVisual(event, aim);
       return;
@@ -1112,6 +1172,39 @@ export class CombatSystem {
       visualOnly: true,
       hits: [],
     };
+  }
+
+  private spawnRemoteGrappleVisual(event: CombatEventPacket, aim: Vec2): void {
+    if (event.action === "secondary") {
+      removeWhere(this.grapples, (grapple) => grapple.ownerId === event.ownerId);
+      this.addEffect("spark", event.x, event.y, event.x, event.y - 24, colorForWeapon("grappling-hook"), "Release");
+      return;
+    }
+    if (event.action !== "primary") {
+      return;
+    }
+    removeWhere(this.grapples, (grapple) => grapple.ownerId === event.ownerId);
+    const start = { x: event.x, y: event.y };
+    const end = {
+      x: event.x + aim.x * 24,
+      y: event.y + aim.y * 24,
+    };
+    this.grapples.push({
+      id: `remote-grapple-${event.id}`,
+      ownerId: event.ownerId,
+      state: "flying",
+      x: end.x,
+      y: end.y,
+      vx: aim.x * grappleHookSpeed,
+      vy: aim.y * grappleHookSpeed,
+      age: 0,
+      ropeLength: 120,
+      anchorX: end.x,
+      anchorY: end.y,
+      maxRange: grappleHookRange,
+      points: createRopePoints(start, end, grappleHookRopePoints),
+      visualOnly: true,
+    });
   }
 
   private spawnRemoteRocketVisual(event: CombatEventPacket, aim: Vec2): void {
@@ -1197,6 +1290,7 @@ export class CombatSystem {
       combatants: [...this.combatants.values()],
       droppedWeapons: this.droppedWeapons,
       ammoPickups: this.ammoPickups,
+      grapples: this.grapples,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
     };
@@ -1507,6 +1601,73 @@ export class CombatSystem {
     this.queueSound("holy-bazooka-fire");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", start, aim, "Holy Bazooka", context.now));
     return { kind: "fired", weaponId, label: "Holy Bazooka" };
+  }
+
+  private callHolyBazookaAmmo(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "holy-bazooka";
+    if (this.holyBazookaAmmoCooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Ammo cooldown" };
+    }
+    if (this.ammoPickups.filter((pickup) => pickup.weaponId === weaponId).length >= holyBazookaMaxAmmoPickups) {
+      return { kind: "blocked", weaponId, label: "Ammo cap" };
+    }
+    const pickup = this.spawnHolyBazookaAmmoPickup(context.player);
+    this.holyBazookaAmmoCooldown = holyBazookaAmmoCallCooldown;
+    this.queueSound("holy-bazooka-pickup");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", { x: pickup.x, y: pickup.y }, normalize(context.aim), "Holy Ammo", context.now));
+    return { kind: "utility", weaponId, label: "Holy Ammo" };
+  }
+
+  private fireGrapplingHook(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "grappling-hook";
+    if (this.activeGrapple(context.ownerId)) {
+      return { kind: "blocked", weaponId, label: "Already attached" };
+    }
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Cooldown" };
+    }
+    const aim = normalize(context.aim);
+    const start = this.muzzle(context.player);
+    const end = {
+      x: start.x + aim.x * 24,
+      y: start.y + aim.y * 24,
+    };
+    const grapple: GrappleState = {
+      id: this.makeId("grapple"),
+      ownerId: context.ownerId,
+      state: "flying",
+      x: end.x,
+      y: end.y,
+      vx: aim.x * grappleHookSpeed,
+      vy: aim.y * grappleHookSpeed,
+      age: 0,
+      ropeLength: 120,
+      anchorX: end.x,
+      anchorY: end.y,
+      maxRange: grappleHookRange,
+      points: createRopePoints(start, end, grappleHookRopePoints),
+    };
+    this.grapples.push(grapple);
+    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    this.addEffect("tracer", start.x, start.y, start.x + aim.x * 92, start.y + aim.y * 92, colorForWeapon(weaponId), "Grapple Fire");
+    this.queueSound("grapple-fire");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", start, aim, "Grapple Fire", context.now));
+    return { kind: "fired", weaponId, label: "Grapple Fire" };
+  }
+
+  private releaseGrapplingHook(ownerId: string, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "grappling-hook";
+    const grapple = this.activeGrapple(ownerId);
+    if (!grapple) {
+      return { kind: "blocked", weaponId, label: "No grapple" };
+    }
+    const point = { x: grapple.x, y: grapple.y };
+    removeWhere(this.grapples, (item) => item.ownerId === ownerId);
+    this.inventory.cooldowns[weaponId] = Math.max(this.inventory.cooldowns[weaponId] ?? 0, weaponRegistry.get(weaponId).secondary.cooldown);
+    this.addEffect("spark", point.x, point.y, point.x, point.y - 28, colorForWeapon(weaponId), "Release");
+    this.queueSound("grapple-release");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", point, { x: 0, y: -1 }, "Grapple Release", now));
+    return { kind: "utility", weaponId, label: "Grapple Release" };
   }
 
   private spawnHands(context: WeaponUseContext): WeaponUseResult {
@@ -2695,13 +2856,7 @@ export class CombatSystem {
       return;
     }
 
-    this.holyBazookaAmmoSpawnTimer -= dt;
-    while (this.holyBazookaAmmoSpawnTimer <= 0) {
-      this.holyBazookaAmmoSpawnTimer += holyBazookaAmmoSpawnSeconds;
-      if (this.ammoPickups.length < holyBazookaMaxAmmoPickups) {
-        this.spawnHolyBazookaAmmoPickup(players);
-      }
-    }
+    this.holyBazookaAmmoCooldown = Math.max(0, this.holyBazookaAmmoCooldown - dt);
 
     for (const pickup of this.ammoPickups) {
       pickup.age += dt;
@@ -2734,21 +2889,258 @@ export class CombatSystem {
     removeWhere(this.ammoPickups, (pickup) => pickup.age > 45);
   }
 
-  private spawnHolyBazookaAmmoPickup(players: PlayerPhysicsState[]): void {
-    const offsets = [-760, -480, -180, 160, 460, 740, 0, 620];
-    const anchor = players[this.holyBazookaAmmoSpawnIndex % Math.max(players.length, 1)];
-    const anchorX = anchor ? anchor.x + anchor.width / 2 : 0;
-    const x = clamp(anchorX + offsets[this.holyBazookaAmmoSpawnIndex % offsets.length], DEFAULT_PHYSICS.platformLeft + 80, DEFAULT_PHYSICS.platformRight - 80);
+  private spawnHolyBazookaAmmoPickup(player: PlayerPhysicsState): AmmoPickup {
+    const anchorX = player.x + player.width / 2;
+    const anchorY = player.y + player.height / 2;
+    const left = DEFAULT_PHYSICS.platformLeft + 90;
+    const right = DEFAULT_PHYSICS.platformRight - 90;
+    let x = left;
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const seed = (this.holyBazookaAmmoSpawnIndex * 997 + attempt * 431 + 193) % 1000;
+      x = left + (right - left) * (seed / 1000);
+      if (Math.abs(x - anchorX) > 180) {
+        break;
+      }
+    }
+    if (Math.abs(x - anchorX) <= 180) {
+      x = clamp(anchorX + (anchorX < (left + right) / 2 ? 260 : -260), left, right);
+    }
     const y = DEFAULT_PHYSICS.groundY - 20;
+    if (Math.hypot(x - anchorX, y - anchorY) < 120) {
+      x = clamp(anchorX + 220, left, right);
+    }
     this.holyBazookaAmmoSpawnIndex += 1;
-    this.ammoPickups.push({
+    const pickup: AmmoPickup = {
       id: this.makeId("ammo"),
       weaponId: "holy-bazooka",
       x,
       y,
       age: 0,
-    });
+    };
+    this.ammoPickups.push(pickup);
     this.addEffect("aura", x, y, x, y - 42, colorForWeapon("holy-bazooka"), "HOLY AMMO");
+    return pickup;
+  }
+
+  private activeGrapple(ownerId: string): GrappleState | undefined {
+    return this.grapples.find((grapple) => grapple.ownerId === ownerId);
+  }
+
+  private updateGrapples(dt: number, players: PlayerPhysicsState[]): void {
+    for (const grapple of [...this.grapples]) {
+      const ownerAnchor = this.ownerRopeAnchor(grapple.ownerId, players);
+      if (!ownerAnchor) {
+        removeWhere(this.grapples, (item) => item === grapple);
+        continue;
+      }
+      grapple.age += dt;
+
+      if (grapple.state === "flying") {
+        const previousX = grapple.x;
+        const previousY = grapple.y;
+        grapple.x += grapple.vx * dt;
+        grapple.y += grapple.vy * dt;
+        grapple.vy += 120 * dt;
+        grapple.anchorX = grapple.x;
+        grapple.anchorY = grapple.y;
+        this.addEffect("tracer", grapple.x, grapple.y, previousX, previousY, colorForWeapon("grappling-hook"), "Rope");
+
+        const target = grapple.visualOnly ? undefined : this.findGrappleTarget(grapple, previousX, previousY);
+        if (target) {
+          this.attachGrappleToTarget(grapple, target);
+        } else if (grapple.y >= DEFAULT_PHYSICS.groundY - grappleHookRadius && grapple.x >= DEFAULT_PHYSICS.platformLeft && grapple.x <= DEFAULT_PHYSICS.platformRight) {
+          this.attachGrappleToPoint(grapple, grapple.x, DEFAULT_PHYSICS.groundY - grappleHookRadius);
+        } else if (grapple.x <= DEFAULT_PHYSICS.platformLeft || grapple.x >= DEFAULT_PHYSICS.platformRight) {
+          this.attachGrappleToPoint(grapple, clamp(grapple.x, DEFAULT_PHYSICS.platformLeft, DEFAULT_PHYSICS.platformRight), grapple.y);
+        } else if (Math.hypot(grapple.x - ownerAnchor.x, grapple.y - ownerAnchor.y) > grapple.maxRange) {
+          removeWhere(this.grapples, (item) => item === grapple);
+          this.addEffect("spark", grapple.x, grapple.y, grapple.x, grapple.y - 18, colorForWeapon("grappling-hook"), "Miss");
+          this.queueSound("grapple-release");
+          continue;
+        }
+      }
+
+      if (grapple.state === "attached") {
+        if (grapple.targetId) {
+          const target = this.combatants.get(grapple.targetId);
+          if (!target || target.respawnTimer > 0 || target.hp <= 0) {
+            removeWhere(this.grapples, (item) => item === grapple);
+            continue;
+          }
+          grapple.anchorX = target.x + target.width / 2;
+          grapple.anchorY = target.y + target.height * 0.34;
+          grapple.x = grapple.anchorX;
+          grapple.y = grapple.anchorY;
+        }
+        grapple.ropeLength = Math.max(82, grapple.ropeLength - dt * 130);
+        if (!grapple.visualOnly) {
+          this.applyGrapplePull(grapple, players, dt);
+        }
+        if (Math.hypot(grapple.anchorX - ownerAnchor.x, grapple.anchorY - ownerAnchor.y) > grappleHookSnapDistance) {
+          removeWhere(this.grapples, (item) => item === grapple);
+          this.addEffect("spark", grapple.anchorX, grapple.anchorY, grapple.anchorX, grapple.anchorY - 28, colorForWeapon("grappling-hook"), "Snap");
+          this.queueSound("grapple-release");
+          continue;
+        }
+      }
+
+      this.syncGrappleRope(grapple, ownerAnchor, { x: grapple.anchorX, y: grapple.anchorY }, dt);
+    }
+  }
+
+  private ownerRopeAnchor(ownerId: string, players: PlayerPhysicsState[]): Vec2 | undefined {
+    const player = players.find((item) => item.id === ownerId);
+    if (player) {
+      return { x: player.x + player.width / 2, y: player.y + player.height * 0.42 };
+    }
+    const combatant = this.combatants.get(ownerId);
+    return combatant ? { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height * 0.42 } : undefined;
+  }
+
+  private findGrappleTarget(grapple: GrappleState, previousX: number, previousY: number): Combatant | undefined {
+    const swept = sweptCircleBounds(previousX, previousY, grapple.x, grapple.y, grappleHookRadius);
+    for (const target of this.combatants.values()) {
+      if (target.id === grapple.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      if (intersectsRect(swept, target)) {
+        return target;
+      }
+    }
+    return undefined;
+  }
+
+  private attachGrappleToTarget(grapple: GrappleState, target: Combatant): void {
+    const ownerAnchor = this.ownerRopeAnchor(grapple.ownerId, []);
+    grapple.state = "attached";
+    grapple.targetId = target.id;
+    grapple.anchorX = target.x + target.width / 2;
+    grapple.anchorY = target.y + target.height * 0.34;
+    grapple.x = grapple.anchorX;
+    grapple.y = grapple.anchorY;
+    const distance = ownerAnchor ? Math.hypot(grapple.anchorX - ownerAnchor.x, grapple.anchorY - ownerAnchor.y) : 260;
+    grapple.ropeLength = clamp(distance * 0.62, 90, 420);
+    const direction = ownerAnchor ? normalize({ x: grapple.anchorX - ownerAnchor.x, y: grapple.anchorY - ownerAnchor.y }) : { x: 1, y: -0.2 };
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: grapple.ownerId,
+      targetId: target.id,
+      weaponId: "grappling-hook",
+      damage: grappleHookAttachDamage,
+      knockback: { x: direction.x * 120, y: direction.y * 90 - 35 },
+      stun: grappleHookAttachStun,
+      label: "Grapple Hook",
+      skipHitLocationScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+    }
+    target.velocityX += direction.x * 42;
+    target.velocityY += direction.y * 28;
+    this.addEffect("spark", grapple.anchorX, grapple.anchorY, grapple.anchorX, grapple.anchorY - 30, colorForWeapon("grappling-hook"), "Hooked");
+    this.queueSound("grapple-attach");
+  }
+
+  private attachGrappleToPoint(grapple: GrappleState, x: number, y: number): void {
+    const ownerAnchor = this.ownerRopeAnchor(grapple.ownerId, []);
+    grapple.state = "attached";
+    grapple.targetId = undefined;
+    grapple.anchorX = x;
+    grapple.anchorY = y;
+    grapple.x = x;
+    grapple.y = y;
+    const distance = ownerAnchor ? Math.hypot(x - ownerAnchor.x, y - ownerAnchor.y) : 260;
+    grapple.ropeLength = clamp(distance * 0.68, 95, 460);
+    this.addEffect("spark", x, y, x, y - 28, colorForWeapon("grappling-hook"), "Attached");
+    this.queueSound("grapple-attach");
+  }
+
+  private applyGrapplePull(grapple: GrappleState, players: PlayerPhysicsState[], dt: number): void {
+    const player = players.find((item) => item.id === grapple.ownerId);
+    const owner = this.combatants.get(grapple.ownerId);
+    const source = player ?? owner;
+    if (!source) {
+      return;
+    }
+    const ox = source.x + source.width / 2;
+    const oy = source.y + source.height * 0.42;
+    const dx = grapple.anchorX - ox;
+    const dy = grapple.anchorY - oy;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 1) {
+      return;
+    }
+    const tension = Math.max(0, distance - grapple.ropeLength) / Math.max(distance, 1);
+    if (tension <= 0) {
+      return;
+    }
+    const direction = { x: dx / distance, y: dy / distance };
+    const force = grappleHookPullForce * (0.35 + tension);
+    source.velocityX += direction.x * force * dt;
+    source.velocityY += direction.y * force * dt - 22 * tension;
+    const speed = Math.hypot(source.velocityX, source.velocityY);
+    if (speed > grappleHookMaxPullSpeed) {
+      const scale = grappleHookMaxPullSpeed / speed;
+      source.velocityX *= scale;
+      source.velocityY *= scale;
+    }
+    if (player) {
+      player.grounded = false;
+    }
+    if (owner) {
+      owner.velocityX = source.velocityX;
+      owner.velocityY = source.velocityY;
+    }
+    this.addEffect("tracer", ox, oy, ox - direction.x * 46, oy - direction.y * 26, colorForWeapon("grappling-hook"), "Tension");
+  }
+
+  private syncGrappleRope(grapple: GrappleState, ownerAnchor: Vec2, anchor: Vec2, dt: number): void {
+    if (grapple.points.length < 2) {
+      grapple.points = createRopePoints(ownerAnchor, anchor, grappleHookRopePoints);
+    }
+    const points = grapple.points;
+    points[0].x = ownerAnchor.x;
+    points[0].y = ownerAnchor.y;
+    points[points.length - 1].x = anchor.x;
+    points[points.length - 1].y = anchor.y;
+
+    for (let index = 1; index < points.length - 1; index += 1) {
+      const point = points[index];
+      const vx = (point.x - point.px) * 0.94;
+      const vy = (point.y - point.py) * 0.94;
+      point.px = point.x;
+      point.py = point.y;
+      point.x += vx;
+      point.y += vy + 780 * dt * dt;
+    }
+
+    const direct = Math.hypot(anchor.x - ownerAnchor.x, anchor.y - ownerAnchor.y);
+    const segmentLength = Math.max(12, Math.max(direct, grapple.ropeLength) / Math.max(1, points.length - 1));
+    for (let iteration = 0; iteration < 4; iteration += 1) {
+      points[0].x = ownerAnchor.x;
+      points[0].y = ownerAnchor.y;
+      points[points.length - 1].x = anchor.x;
+      points[points.length - 1].y = anchor.y;
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const a = points[index];
+        const b = points[index + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        const difference = (distance - segmentLength) / distance;
+        const offsetX = dx * difference * 0.5;
+        const offsetY = dy * difference * 0.5;
+        if (index > 0) {
+          a.x += offsetX;
+          a.y += offsetY;
+        }
+        if (index + 1 < points.length - 1) {
+          b.x -= offsetX;
+          b.y -= offsetY;
+        }
+      }
+    }
   }
 
   private updateWeaponCharge(id: WeaponId, charge: WeaponChargeState, dt: number): void {
@@ -4459,6 +4851,32 @@ function sweptProjectileBounds(projectile: Projectile, previousX: number, previo
     width: maxX - minX,
     height: maxY - minY,
   };
+}
+
+function sweptCircleBounds(previousX: number, previousY: number, x: number, y: number, radius: number): { x: number; y: number; width: number; height: number } {
+  const minX = Math.min(previousX, x) - radius;
+  const maxX = Math.max(previousX, x) + radius;
+  const minY = Math.min(previousY, y) - radius;
+  const maxY = Math.max(previousY, y) + radius;
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function createRopePoints(start: Vec2, end: Vec2, count: number): GrappleRopePoint[] {
+  const points: GrappleRopePoint[] = [];
+  const total = Math.max(2, count);
+  for (let index = 0; index < total; index += 1) {
+    const t = index / (total - 1);
+    const sag = Math.sin(t * Math.PI) * 14;
+    const x = lerp(start.x, end.x, t);
+    const y = lerp(start.y, end.y, t) + sag;
+    points.push({ x, y, px: x, py: y });
+  }
+  return points;
 }
 
 function round(value: number): number {

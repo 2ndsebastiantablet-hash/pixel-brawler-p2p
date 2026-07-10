@@ -67,6 +67,7 @@ const oneHandedWeapons = new Set<WeaponId>([
   "knife",
   "machete",
   "pistol",
+  "grappling-hook",
   "revolver",
   "slingshot",
   "teleport-ball",
@@ -191,19 +192,29 @@ export function swapAttachmentWithHand(
 ): { loadout: LoadoutState; swapped: boolean; reason?: string } {
   const next = normalizeLoadout(current);
   const attachment = next.attachment;
-  if (!attachment) {
-    return { loadout: next, swapped: false, reason: "No attachment" };
-  }
-  if (!isSlotCompatible(attachment, preferredSlot)) {
-    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} cannot be held` };
-  }
-
   const fallbackSlot = preferredSlot === "rightHand" ? "leftHand" : "rightHand";
   const handSlot = next[preferredSlot] ? preferredSlot : fallbackSlot;
   const held = next[handSlot];
-  if (!held) {
-    return { loadout: next, swapped: false, reason: "No held item" };
+
+  if (!attachment && !held) {
+    return { loadout: next, swapped: false, reason: "Nothing to swap" };
   }
+
+  if (attachment && !isSlotCompatible(attachment, preferredSlot)) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} cannot be held` };
+  }
+
+  if (!held) {
+    next.attachment = undefined;
+    if (attachment && isTwoHandedWeapon(attachment)) {
+      next.leftHand = attachment;
+      next.rightHand = attachment;
+    } else if (attachment) {
+      next[preferredSlot] = attachment;
+    }
+    return { loadout: normalizeLoadout(next), swapped: true };
+  }
+
   if (!isSlotCompatible(held, "attachment")) {
     return { loadout: next, swapped: false, reason: `${loadoutWeaponName(held)} cannot attach to ${LOADOUT_SLOT_LABELS.attachment}` };
   }
@@ -211,6 +222,17 @@ export function swapAttachmentWithHand(
   const handsMatch = next.leftHand !== undefined && next.leftHand === next.rightHand;
   const attachmentNeedsBothHands = isTwoHandedWeapon(attachment);
   const heldUsesBothHands = isTwoHandedWeapon(held) || handsMatch;
+  if (!attachment) {
+    if (heldUsesBothHands) {
+      next.leftHand = undefined;
+      next.rightHand = undefined;
+    } else {
+      next[handSlot] = undefined;
+    }
+    next.attachment = held;
+    return { loadout: normalizeLoadout(next), swapped: true };
+  }
+
   if (attachmentNeedsBothHands && !heldUsesBothHands) {
     return { loadout: next, swapped: false, reason: `${loadoutWeaponName(attachment)} needs both hands` };
   }
@@ -315,6 +337,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   }
   if (id === "slingshot" || id === "teleport-ball") {
     return "throwables";
+  }
+  if (id === "grappling-hook") {
+    return "mobility";
   }
   if (id === "death-aura" || id === "lightning-rod") {
     return "body";

@@ -22,6 +22,7 @@ const enabledWeapons = [
   "hands",
   "super-legs",
   "holy-bazooka",
+  "grappling-hook",
 ] as const;
 
 describe("weapon registry", () => {
@@ -47,6 +48,7 @@ describe("weapon registry", () => {
       "hands",
       "super-legs",
       "holy-bazooka",
+      "grappling-hook",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -89,6 +91,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo["super-legs"]).toBeUndefined();
     expect(inventory.ammo["holy-bazooka"]?.magazine).toBe(0);
     expect(inventory.ammo["holy-bazooka"]?.reserve).toBe(0);
+    expect(inventory.ammo["grappling-hook"]).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -104,5 +107,7 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("rocket").description).toContain("Ride it by standing on it");
     expect(weaponRegistry.get("hands").description).toContain("lose your own hands for 40 seconds");
     expect(weaponRegistry.get("super-legs").description).toContain("leg equipment");
+    expect(weaponRegistry.get("grappling-hook").description).toContain("physical rope hook");
+    expect(weaponRegistry.get("grappling-hook").weight.label).toBe("Light");
   });
 });
