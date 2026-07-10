@@ -103,6 +103,23 @@ describe("network player packets", () => {
       deathAuraPower: 0.72,
       rocketActive: true,
       rocketLit: false,
+      van: {
+        id: "van-peer-a",
+        ownerId: "peer-a",
+        x: 220,
+        y: 468,
+        velocityX: 112,
+        velocityY: 0,
+        facing: 1,
+        state: "active",
+        health: 140,
+        maxHealth: 180,
+        gas: 62,
+        maxGas: 100,
+        speedLevel: 3,
+        occupantId: "peer-a",
+        honkCooldown: 1.2,
+      },
       loadout: {
         leftHand: "pistol",
         rightHand: "knife",
@@ -127,6 +144,12 @@ describe("network player packets", () => {
     expect(packet.dp).toBe(0.72);
     expect(packet.ra).toBe(1);
     expect(packet.rl).toBe(0);
+    expect(packet.vn).toBe("van-peer-a");
+    expect(packet.vs).toBe("active");
+    expect(packet.vo).toBe("peer-a");
+    expect(packet.vhp).toBe(140);
+    expect(packet.vg).toBe(62);
+    expect(packet.vl).toBe(3);
     expect(packet.lh).toBe("pistol");
     expect(packet.rh).toBe("knife");
     expect(packet.fs).toBe("spikes");

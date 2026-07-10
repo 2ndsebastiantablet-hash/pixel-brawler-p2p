@@ -55,6 +55,7 @@ export const COMBAT_TUNING = {
     "grappling-hook": { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.12, jumpMultiplier: 1.02, slideMultiplier: 1.02 },
     chainsaw: { label: "Heavy", moveSpeedMultiplier: 0.9, accelerationMultiplier: 0.86, airAccelerationMultiplier: 0.86, jumpMultiplier: 0.94, slideMultiplier: 0.88 },
     spikes: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
+    van: { label: "Heavy", moveSpeedMultiplier: 0.88, accelerationMultiplier: 0.88, airAccelerationMultiplier: 0.9, jumpMultiplier: 0.96, slideMultiplier: 0.9 },
     hands: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
     "super-legs": { label: "Light", moveSpeedMultiplier: 1.44, accelerationMultiplier: 1.58, airAccelerationMultiplier: 1.42, jumpMultiplier: 1.64, slideMultiplier: 1.5 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,

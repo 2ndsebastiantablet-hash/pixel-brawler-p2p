@@ -19,6 +19,7 @@ import { sniper } from "./weapons/Sniper";
 import { spikes } from "./weapons/Spikes";
 import { superLegs } from "./weapons/SuperLegs";
 import { teleportBall } from "./weapons/TeleportBall";
+import { van } from "./weapons/Van";
 import { virginBlood } from "./weapons/VirginBlood";
 import { whip } from "./weapons/Whip";
 import { wings } from "./weapons/Wings";
@@ -48,6 +49,7 @@ export const WEAPON_IDS = [
   "grappling-hook",
   "chainsaw",
   "spikes",
+  "van",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -74,6 +76,7 @@ const ALL_WEAPON_IDS = [
   "grappling-hook",
   "chainsaw",
   "spikes",
+  "van",
 ] as const satisfies readonly WeaponId[];
 
 const weaponDefinitions: WeaponDefinition[] = [
@@ -95,6 +98,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   grapplingHook,
   chainsaw,
   spikes,
+  van,
   hands,
   superLegs,
   teleportBall,

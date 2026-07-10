@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(23);
+    expect(fighter.weaponInventory).toHaveLength(24);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -2198,13 +2198,13 @@ describe("combat system", () => {
     });
   });
 
-  it("activates Spikes mode, places impaling poison spikes on click, then disintegrates them on mode end", () => {
+  it("aims Spikes tips at clicks, poisons body contact including the owner, and impales only on the tip", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     combat.equip("spikes");
     const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
     combat.syncLocalPlayer(player, "Host", "#18dff5");
-    const dummy = combat.spawnTrainingDummy({ x: 122, y: playerState.y });
+    const dummy = combat.spawnTrainingDummy({ x: 860, y: playerState.y });
 
     const activated = combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
     expect(activated).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Mode" });
@@ -2214,31 +2214,52 @@ describe("combat system", () => {
       spikeCooldown: 0,
     });
 
-    const spawnPoint = {
-      x: dummy.x + dummy.width / 2,
-      y: DEFAULT_PHYSICS.groundY - 2,
-    };
+    const spawnPoint = { x: 260, y: DEFAULT_PHYSICS.groundY - 260 };
     const placed = combat.placeSpikeAt("peer-a", player, spawnPoint, 120);
     expect(placed).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Spawn" });
     const spike = combat.getSnapshot().spikes[0];
     expect(spike).toMatchObject({ ownerId: "peer-a", disintegrating: false });
-    expect(spike.height).toBeGreaterThan(80);
+    expect(spike.tipX).toBeCloseTo(spawnPoint.x, 0);
+    expect(spike.tipY).toBeCloseTo(spawnPoint.y, 0);
+    expect(spike.length).toBeGreaterThan(120);
+    expect(Math.hypot(spike.dirX, spike.dirY)).toBeCloseTo(1, 2);
 
     const target = combat.getCombatant(dummy.id)!;
+    const shaftX = (spike.baseX + spike.tipX) / 2;
+    const shaftY = (spike.baseY + spike.tipY) / 2;
+    target.x = shaftX - target.width / 2;
+    target.y = shaftY - target.height / 2;
+    target.invulnerable = 0;
+    combat.update(0.05, [player]);
     expect(target.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "spikePoison" })]));
+    expect(combat.isMovementLocked(dummy.id)).toBe(false);
+
+    target.statuses = [];
+    target.x = spike.tipX - target.width / 2;
+    target.y = spike.tipY - target.height / 2;
+    target.invulnerable = 0;
+    combat.update(0.05, [player]);
     expect(combat.isMovementLocked(dummy.id)).toBe(true);
     const lockedX = target.x;
     target.velocityX = 900;
     target.invulnerable = 0;
     const hpAfterImpale = target.hp;
     combat.update(1.05, [player]);
-    expect(target.x).toBeCloseTo(lockedX, 0);
+    expect(Math.abs(target.x - lockedX)).toBeLessThan(6);
     expect(target.velocityX).toBe(0);
     expect(target.hp).toBeLessThan(hpAfterImpale);
 
-    const second = combat.placeSpikeAt("peer-a", player, { x: spawnPoint.x + 50, y: spawnPoint.y }, 180);
+    const ownerTouch = combat.placeSpikeAt("peer-a", player, {
+      x: player.x + player.width / 2,
+      y: player.y + player.height / 2,
+    }, 180);
+    expect(ownerTouch).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Spawn" });
+    combat.update(0.2, [player]);
+    expect(combat.getCombatant("peer-a")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "spikePoison" })]));
+
+    const second = combat.placeSpikeAt("peer-a", player, { x: spawnPoint.x + 50, y: spawnPoint.y }, 220);
     expect(second).toMatchObject({ kind: "utility", weaponId: "spikes", label: "Spike Spawn" });
-    expect(combat.getSnapshot().spikes.filter((item) => !item.disintegrating)).toHaveLength(2);
+    expect(combat.getSnapshot().spikes.filter((item) => !item.disintegrating)).toHaveLength(3);
 
     combat.update(30.2, [player]);
     expect(combat.getWeaponRuntimeState("spikes", "peer-a")).toMatchObject({
@@ -2247,6 +2268,125 @@ describe("combat system", () => {
     });
     expect(combat.getSnapshot().spikes.every((item) => item.disintegrating)).toBe(true);
     expect(combat.isMovementLocked(dummy.id)).toBe(false);
+  });
+
+  it("lets Teleporting Ball break a spike impale while normal movement stays locked", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const targetPlayer = { ...playerState, id: "target", x: 210, velocityX: 0, velocityY: 0 };
+    const spiker = { ...playerState, id: "spiker", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(targetPlayer, "Target", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "spiker",
+      name: "Spiker",
+      color: "#ff6f91",
+      x: spiker.x,
+      y: spiker.y,
+      width: spiker.width,
+      height: spiker.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.equip("spikes");
+    combat.usePrimary({ ownerId: "spiker", player: spiker, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.placeSpikeAt("spiker", spiker, {
+      x: targetPlayer.x + targetPlayer.width / 2,
+      y: targetPlayer.y + targetPlayer.height / 2,
+    }, 120);
+    combat.update(0.2, [targetPlayer]);
+    expect(combat.isMovementLocked("target")).toBe(true);
+    const pinnedX = targetPlayer.x;
+    targetPlayer.velocityX = 900;
+    combat.update(0.08, [targetPlayer]);
+    expect(targetPlayer.x).toBeCloseTo(pinnedX, 0);
+
+    combat.equip("teleport-ball");
+    combat.usePrimary({ ownerId: "target", player: targetPlayer, aim: { x: 1, y: -0.1 }, now: 200, heldMs: 0, isNewPress: true });
+    combat.update(3.2, [targetPlayer]);
+    expect(combat.isMovementLocked("target")).toBe(false);
+    expect(targetPlayer.x).toBeGreaterThan(pinnedX + 80);
+  });
+
+  it("spawns a strap Van, lets anyone drive it, rams, honks, absorbs, refills gas, and explodes with splash", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("van");
+    const owner = { ...playerState, id: "owner", x: 0, velocityX: 0, velocityY: 0 };
+    const driver = { ...playerState, id: "driver", x: 70, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Owner", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "driver",
+      name: "Driver",
+      color: "#ff6f91",
+      x: driver.x,
+      y: driver.y,
+      width: driver.width,
+      height: driver.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const spawned = combat.usePrimary({ ownerId: "owner", player: owner, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(spawned).toMatchObject({ kind: "utility", weaponId: "van", label: "Van Spawn" });
+    combat.update(0.6, [owner, driver]);
+    const van = combat.getSnapshot().vans[0];
+    expect(van).toMatchObject({ ownerId: "owner", state: "active", health: van.maxHealth, gas: van.maxGas });
+
+    const entered = combat.tryEnterVan("driver", driver, { x: van.x, y: van.y }, 140);
+    expect(entered).toMatchObject({ kind: "utility", weaponId: "van", label: "Enter Van" });
+    expect(van.occupantId).toBe("driver");
+
+    combat.handleVanDriverInput("driver", {
+      left: false,
+      right: true,
+      shiftPressed: true,
+      jumpPressed: false,
+      honkPressed: false,
+    }, driver, 160);
+    combat.update(0.55, [owner, driver]);
+    expect(van.speedLevel).toBe(1);
+    expect(van.gas).toBeLessThan(van.maxGas);
+    expect(van.velocityX).toBeGreaterThan(0);
+
+    const hornTarget = combat.spawnTrainingDummy({ x: van.x + van.width + 95, y: playerState.y });
+    combat.handleVanDriverInput("driver", {
+      left: false,
+      right: false,
+      shiftPressed: false,
+      jumpPressed: false,
+      honkPressed: true,
+    }, driver, 800);
+    expect(combat.getCombatant(hornTarget.id)!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "daze" })]));
+
+    const ramTarget = combat.spawnTrainingDummy({ x: van.x + van.width + 4, y: playerState.y });
+    van.velocityX = 960;
+    van.speedLevel = 5;
+    combat.getCombatant(ramTarget.id)!.invulnerable = 0;
+    combat.update(0.06, [owner, driver]);
+    expect(combat.getCombatant(ramTarget.id)!.hp).toBeLessThan(100);
+    expect(combat.getCombatant(ramTarget.id)!.velocityX).toBeGreaterThan(200);
+
+    const absorbed = combat.usePrimary({ ownerId: "owner", player: owner, aim: { x: 1, y: 0 }, now: 1000, heldMs: 0, isNewPress: true });
+    expect(absorbed).toMatchObject({ kind: "utility", weaponId: "van", label: "Van Absorb" });
+    expect(van.occupantId).toBeUndefined();
+    combat.update(2, [owner, driver]);
+    expect(van.state).toBe("stored");
+    van.gas = 40;
+    van.health = 77;
+    combat.update(1, [owner, driver]);
+    expect(van.gas).toBeGreaterThan(40);
+    expect(van.health).toBe(77);
+
+    van.state = "active";
+    van.x = owner.x + 60;
+    van.y = DEFAULT_PHYSICS.groundY - van.height;
+    van.health = 1;
+    const ownerHp = combat.getCombatant("owner")!.hp;
+    combat.damageVan(van.id, 999, "driver", 4000);
+    expect(van.state).toBe("destroyed");
+    expect(combat.getCombatant("owner")!.hp).toBeLessThan(ownerHp);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "VAN EXPLOSION")).toBe(true);
   });
 
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {

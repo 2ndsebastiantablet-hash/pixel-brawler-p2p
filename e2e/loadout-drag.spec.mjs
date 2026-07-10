@@ -51,6 +51,9 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "spikes", "Spikes", "backStrap");
     await expectSlot(page, "backStrap", "Spikes");
 
+    await dragItemToSlot(page, "van", "Van", "backStrap");
+    await expectSlot(page, "backStrap", "Van");
+
     await dragItemToSlot(page, "wings", "Wings", "backStrap");
     await expectSlot(page, "backStrap", "Wings");
 
@@ -71,6 +74,10 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "rightHand", "Chainsaw");
     await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
 
+    await dragItemToSlot(page, "van", "Van", "rightHand");
+    await expectSlot(page, "rightHand", "Chainsaw");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
+
     await dragItemToSlot(page, "wings", "Wings", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Wings cannot attach");
@@ -78,6 +85,10 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "spikes", "Spikes", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
+
+    await dragItemToSlot(page, "van", "Van", "attachment");
+    await expectSlot(page, "attachment", "Virgin Blood");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
 
     await dragItemToSlot(page, "super-legs", "Super Legs", "rightHand");
     await expectSlot(page, "rightHand", "Chainsaw");
@@ -90,6 +101,10 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "spikes", "Spikes", "legs");
     await expectSlot(page, "legs", "Super Legs");
     await expect(page.locator("[data-loadout-error]")).toContainText("Spikes cannot attach");
+
+    await dragItemToSlot(page, "van", "Van", "legs");
+    await expectSlot(page, "legs", "Super Legs");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
 
     await page.locator("[data-offline]").click();
     await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Spikes");

@@ -21,6 +21,7 @@ export type WeaponId =
   | "grappling-hook"
   | "chainsaw"
   | "spikes"
+  | "van"
   | "hands"
   | "super-legs"
   | "teleport-ball"

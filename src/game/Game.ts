@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, SpikeParticleState, SpikeState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -321,6 +321,23 @@ export class Game {
     if (movementInput.jumpPressed && this.combat.getRocketState(this.localPlayer.state.id).riding) {
       this.combat.jumpOffRocket(this.localPlayer.state.id, this.localPlayer.state);
     }
+    let vanConsumedSecondary = false;
+    if (this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      const vanResult = this.combat.handleVanDriverInput(this.localPlayer.state.id, {
+        left: movementInput.left,
+        right: movementInput.right,
+        shiftPressed: movementInput.dashPressed,
+        jumpPressed: movementInput.jumpPressed,
+        honkPressed: combatInput.secondaryPressed,
+      }, this.localPlayer.state, time);
+      if (vanResult) {
+        this.recordAttack(vanResult, combatInput.secondaryPressed ? "secondary" : "primary");
+      }
+      vanConsumedSecondary = combatInput.secondaryPressed;
+      if (movementInput.jumpPressed) {
+        movementInput = { ...movementInput, jumpPressed: false, jumpHeld: false };
+      }
+    }
     const lockedOut = (localCombatant?.respawnTimer ?? 0) > 0
       || (localCombatant?.statuses.some((status) => status.id === "deathFrozen") ?? false)
       || this.combat.isMovementLocked(this.localPlayer.state.id);
@@ -331,7 +348,11 @@ export class Game {
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.combat.setEquipmentStatus(this.localPlayer.state.id, "superLegs", loadoutHasWeapon(this.loadout, "super-legs"));
     this.handleSuperLegsKick(movementInput, lockedOut, time);
-    this.handleCombatInput(combatInput, dt, time);
+    this.handleCombatInput({
+      ...combatInput,
+      secondaryPressed: vanConsumedSecondary ? false : combatInput.secondaryPressed,
+      secondaryHeld: vanConsumedSecondary ? false : combatInput.secondaryHeld,
+    }, dt, time);
     if (this.combat.getCombatant(this.localPlayer.state.id)?.statuses.some((status) => status.id === "steady")) {
       this.localPlayer.state.velocityX = 0;
       this.localPlayer.state.velocityY = 0;
@@ -381,6 +402,7 @@ export class Game {
         respawnTimer: remote.current.respawnTimer,
         invulnerable: remote.current.invulnerable,
       });
+      this.combat.syncRemoteVan(remote.current.van);
       this.combat.setEquipmentStatus(remote.player.state.id, "superLegs", loadoutHasWeapon(remoteLoadout, "super-legs"));
     }
 
@@ -431,6 +453,7 @@ export class Game {
         deathAuraPower: deathAura.power,
         rocketActive: rocket.active,
         rocketLit: rocket.lit,
+        van: this.combat.getNetworkVanState(this.localPlayer.state.id),
         loadout: this.loadout,
         lastActivityAt: Date.now(),
       }));
@@ -549,7 +572,19 @@ export class Game {
       }, time), input.secondaryPressed ? "secondary" : "primary");
     }
 
-    const primaryAction = spikeModeActive ? null : resolveMouseWeaponAction("primary", this.loadout);
+    let vanConsumedPrimary = false;
+    if (!spikeModeActive && input.primaryPressed && !this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      const enter = this.combat.tryEnterVan(this.localPlayer.state.id, this.localPlayer.state, {
+        x: this.lastMouse.x + this.camera.x,
+        y: this.lastMouse.y + this.camera.y,
+      }, time);
+      if (enter.kind === "utility") {
+        this.recordAttack(enter, "primary");
+        vanConsumedPrimary = true;
+      }
+    }
+
+    const primaryAction = spikeModeActive || vanConsumedPrimary ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
@@ -861,7 +896,8 @@ export class Game {
       case "laser-overcharge":
       case "rocket-explode":
       case "holy-bazooka-explode":
-        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : 0.22);
+      case "van-explode":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : 0.22);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -871,6 +907,7 @@ export class Game {
       case "minigun-overheat":
       case "chainsaw-overheat":
       case "zombie-spawn":
+      case "van-crash":
         this.shakeTimer = Math.max(this.shakeTimer, 0.1);
         break;
       case "machete-chop":
@@ -1973,6 +2010,9 @@ export class Game {
 
   private drawCombatEntities(ctx: CanvasRenderingContext2D): void {
     const snapshot = this.combat.getSnapshot();
+    for (const van of snapshot.vans) {
+      this.drawVan(ctx, van);
+    }
     for (const combatant of snapshot.combatants) {
       if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id)) {
         const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
@@ -2068,35 +2108,106 @@ export class Game {
     const progress = spike.disintegrating
       ? Math.max(0, 1 - spike.disintegrateAge / 0.72)
       : 1 - (1 - Math.min(1, spike.age / spike.growDuration)) ** 3;
-    const height = Math.max(8, Math.round(spike.height * progress));
-    const x = Math.round(spike.x - this.camera.x);
+    const length = Math.max(8, Math.round(spike.length * progress));
+    const baseX = Math.round(spike.baseX - this.camera.x);
     const baseY = Math.round(spike.baseY - this.camera.y);
     const half = Math.round(spike.width / 2);
+    const angle = Math.atan2(spike.dirY, spike.dirX);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = spike.visualOnly ? 0.74 : 1;
     if (spike.disintegrating) {
       ctx.globalAlpha *= Math.max(0.18, progress);
     }
+    ctx.translate(baseX, baseY);
+    ctx.rotate(angle);
     ctx.fillStyle = "rgba(124, 255, 107, 0.18)";
-    ctx.fillRect(x - half - 9, baseY - height - 8, half * 2 + 18, height + 14);
-    for (let row = 0; row < height; row += 8) {
-      const t = row / Math.max(1, height);
+    ctx.fillRect(-8, -half - 9, length + 16, half * 2 + 18);
+    for (let row = 0; row < length; row += 8) {
+      const t = row / Math.max(1, length);
       const rowHalf = Math.max(2, Math.round(half * (1 - t)));
-      const y = baseY - row - 8;
+      const x = row;
       ctx.fillStyle = t > 0.72 ? "#101016" : t > 0.42 ? "#565b66" : "#f2f2f2";
-      ctx.fillRect(x - rowHalf, y, rowHalf * 2, 8);
+      ctx.fillRect(x, -rowHalf, 8, rowHalf * 2);
       if (t > 0.22 && t < 0.84) {
         ctx.fillStyle = "#164f24";
-        ctx.fillRect(x - 2, y + 1, 4, 6);
+        ctx.fillRect(x + 1, -2, 6, 4);
       }
     }
     ctx.fillStyle = "#0f0f16";
-    ctx.fillRect(x - 3, baseY - height - 8, 6, 9);
+    ctx.fillRect(length - 2, -4, 9, 8);
     if (spike.impaledTargetIds.length > 0) {
       ctx.strokeStyle = "rgba(184, 255, 208, 0.7)";
       ctx.lineWidth = 2;
-      ctx.strokeRect(x - half - 6, baseY - height - 10, half * 2 + 12, height + 16);
+      ctx.strokeRect(-4, -half - 7, length + 12, half * 2 + 14);
+    }
+    ctx.restore();
+  }
+
+  private drawVan(ctx: CanvasRenderingContext2D, van: VanState): void {
+    if (van.state === "stored") {
+      return;
+    }
+    const x = Math.round(van.x - this.camera.x);
+    const y = Math.round(van.y - this.camera.y);
+    const facing = van.facing;
+    const alpha = van.state === "destroyed" ? 0.55 : van.visualOnly ? 0.78 : 1;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = alpha;
+    if (van.state !== "destroyed") {
+      const headlightX = facing > 0 ? x + van.width : x;
+      const gradient = ctx.createLinearGradient(headlightX, y + 25, headlightX + facing * 160, y + 25);
+      gradient.addColorStop(0, "rgba(255, 244, 168, 0.28)");
+      gradient.addColorStop(1, "rgba(255, 244, 168, 0)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(headlightX, y + 20);
+      ctx.lineTo(headlightX + facing * 160, y - 8);
+      ctx.lineTo(headlightX + facing * 160, y + 62);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = van.damageFlash > 0 ? "#ffd0a6" : "#f2f2f2";
+    ctx.fillRect(x + 8, y + 14, van.width - 16, 31);
+    ctx.fillStyle = "#d8d8e2";
+    ctx.fillRect(x + 15, y + 8, van.width - 36, 16);
+    ctx.fillStyle = "#101016";
+    ctx.fillRect(x + (facing > 0 ? 72 : 22), y + 12, 24, 12);
+    ctx.fillStyle = "#2b2b32";
+    ctx.fillRect(x + (facing > 0 ? 98 : 8), y + 19, 8, 12);
+    ctx.fillStyle = "#c71943";
+    const panelX = x + (facing > 0 ? 28 : 48);
+    ctx.fillRect(panelX, y + 27, 42, 8);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(panelX + 4, y + 29, 5, 4);
+    ctx.fillRect(panelX + 13, y + 29, 5, 4);
+    ctx.fillRect(panelX + 22, y + 29, 5, 4);
+    ctx.fillRect(panelX + 31, y + 29, 5, 4);
+    ctx.fillStyle = "#fff4a8";
+    ctx.fillRect(x + (facing > 0 ? van.width - 7 : 3), y + 25, 5, 8);
+    ctx.fillStyle = "#101016";
+    const wheelPhase = Math.round(Math.abs(Math.sin(van.wheelSpin)) * 3);
+    for (const wx of [x + 25, x + van.width - 31]) {
+      ctx.fillRect(wx - 8, y + van.height - 13, 16, 16);
+      ctx.fillStyle = "#86869b";
+      ctx.fillRect(wx - 3, y + van.height - 8 + wheelPhase, 6, 3);
+      ctx.fillStyle = "#101016";
+    }
+    const healthWidth = Math.max(0, Math.round((van.health / Math.max(1, van.maxHealth)) * (van.width - 22)));
+    ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+    ctx.fillRect(x + 11, y - 8, van.width - 22, 4);
+    ctx.fillStyle = van.health < van.maxHealth * 0.35 ? "#c71943" : "#7cff6b";
+    ctx.fillRect(x + 11, y - 8, healthWidth, 4);
+    if (van.occupantId) {
+      ctx.strokeStyle = "rgba(255, 244, 168, 0.82)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 6, y + 6, van.width - 12, van.height - 12);
+    }
+    if (van.health < van.maxHealth * 0.35 || van.state === "destroyed") {
+      ctx.fillStyle = "rgba(43, 43, 50, 0.72)";
+      ctx.fillRect(x + 38, y - 12, 10, 8);
+      ctx.fillRect(x + 48, y - 20, 14, 10);
     }
     ctx.restore();
   }
@@ -2660,6 +2771,7 @@ export class Game {
     const teleport = this.combat.getTeleportState(this.localPlayer.state.id);
     const lightning = this.combat.getLightningState(this.localPlayer.state.id);
     const spikes = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
+    const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
@@ -2676,6 +2788,9 @@ export class Game {
       lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
       spikes.spikeModeActive ? `Spikes ${spikes.spikeModeTimer.toFixed(1)}s - ${spikes.spikeCount} active` : "",
       !spikes.spikeModeActive && spikes.spikeCooldown > 0 ? `Spikes cooldown ${spikes.spikeCooldown.toFixed(1)}s` : "",
+      (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
+        ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : ""}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
+        : "",
       superLegsText,
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
@@ -2863,6 +2978,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#b8bfd7";
     case "spikes":
       return "#f2f2f2";
+    case "van":
+      return "#f2f2f2";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -2956,6 +3073,8 @@ function weaponHudDetail(
       return runtime.spikeModeActive
         ? `Spike mode ${runtime.spikeModeTimer.toFixed(1)}s - Active spikes ${runtime.spikeCount}`
         : `Spike cooldown ${runtime.spikeCooldown.toFixed(1)}s - Active spikes ${runtime.spikeCount}`;
+    case "van":
+      return `HP ${Math.ceil(runtime.vanHealth)}/${runtime.vanMaxHealth} - Gas ${Math.ceil(runtime.vanGas)}/${runtime.vanMaxGas} - Speed ${runtime.vanSpeedLevel}${runtime.vanDriving ? " - Space exits" : ""}`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -3014,7 +3133,9 @@ function weaponHelper(id: WeaponId): string {
     case "chainsaw":
       return "Left runs immediately - close DPS overheats - chainsaw KOs make rising poison zombies";
     case "spikes":
-      return "Q/E activates 30s spike mode - click places impaling poison spikes";
+      return "Q/E activates 30s spike mode - click aims spike tips";
+    case "van":
+      return "Q/E spawn/absorb - click enter - A/D drive - Shift speed - right honk";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

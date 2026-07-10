@@ -79,6 +79,7 @@ const strapWeapons = new Set<WeaponId>([
   "death-aura",
   "hands",
   "spikes",
+  "van",
   "wings",
 ]);
 
@@ -348,7 +349,7 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   if (id === "death-aura" || id === "lightning-rod") {
     return "body";
   }
-  if (id === "spikes") {
+  if (id === "spikes" || id === "van") {
     return "body";
   }
   if (id === "wings") {

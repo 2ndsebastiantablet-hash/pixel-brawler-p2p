@@ -36,8 +36,27 @@ export interface PlayerNetState {
   deathAuraPower?: number;
   rocketActive?: boolean;
   rocketLit?: boolean;
+  van?: VanNetState;
   loadout?: LoadoutState;
   lastActivityAt?: number;
+}
+
+export interface VanNetState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  velocityX: number;
+  velocityY: number;
+  facing: Facing;
+  state: "stored" | "emerging" | "active" | "absorbing" | "destroyed";
+  health: number;
+  maxHealth: number;
+  gas: number;
+  maxGas: number;
+  speedLevel: number;
+  occupantId?: string;
+  honkCooldown: number;
 }
 
 export interface PlayerStatePacket {
@@ -70,6 +89,21 @@ export interface PlayerStatePacket {
   dp?: number;
   ra?: 0 | 1;
   rl?: 0 | 1;
+  vn?: string;
+  vo?: string;
+  vxv?: number;
+  vyv?: number;
+  vvx?: number;
+  vvy?: number;
+  vf?: Facing;
+  vs?: VanNetState["state"];
+  vhp?: number;
+  vmh?: number;
+  vg?: number;
+  vmg?: number;
+  vl?: number;
+  voc?: string;
+  vhc?: number;
   lh?: WeaponId;
   rh?: WeaponId;
   fs?: WeaponId;
@@ -98,6 +132,7 @@ export interface CombatEventPacket {
   stun?: number;
   status?: string;
   hitLocation?: HitLocation;
+  range?: number;
 }
 
 export type SignalMessage =
@@ -162,6 +197,23 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(typeof state.deathAuraPower === "number" ? { dp: round(state.deathAuraPower, 2) } : {}),
     ...(typeof state.rocketActive === "boolean" ? { ra: state.rocketActive ? 1 : 0 } : {}),
     ...(typeof state.rocketLit === "boolean" ? { rl: state.rocketLit ? 1 : 0 } : {}),
+    ...(state.van ? {
+      vn: state.van.id,
+      vo: state.van.ownerId,
+      vxv: round(state.van.x, 2),
+      vyv: round(state.van.y, 2),
+      vvx: round(state.van.velocityX, 1),
+      vvy: round(state.van.velocityY, 1),
+      vf: state.van.facing,
+      vs: state.van.state,
+      vhp: round(state.van.health, 1),
+      vmh: round(state.van.maxHealth, 1),
+      vg: round(state.van.gas, 1),
+      vmg: round(state.van.maxGas, 1),
+      vl: state.van.speedLevel,
+      ...(state.van.occupantId ? { voc: state.van.occupantId } : {}),
+      vhc: round(state.van.honkCooldown, 2),
+    } : {}),
     ...(state.loadout?.leftHand ? { lh: state.loadout.leftHand } : {}),
     ...(state.loadout?.rightHand ? { rh: state.loadout.rightHand } : {}),
     ...(state.loadout?.frontStrap ? { fs: state.loadout.frontStrap } : {}),
@@ -206,6 +258,25 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
     ...(typeof packet.dp === "number" ? { deathAuraPower: packet.dp } : {}),
     ...(packet.ra !== undefined ? { rocketActive: packet.ra === 1 } : {}),
     ...(packet.rl !== undefined ? { rocketLit: packet.rl === 1 } : {}),
+    ...(packet.vn && packet.vo && typeof packet.vxv === "number" && typeof packet.vyv === "number" && typeof packet.vvx === "number" && typeof packet.vvy === "number" && (packet.vf === -1 || packet.vf === 1) && packet.vs ? {
+      van: {
+        id: packet.vn,
+        ownerId: packet.vo,
+        x: packet.vxv,
+        y: packet.vyv,
+        velocityX: packet.vvx,
+        velocityY: packet.vvy,
+        facing: packet.vf,
+        state: packet.vs,
+        health: packet.vhp ?? 0,
+        maxHealth: packet.vmh ?? 1,
+        gas: packet.vg ?? 0,
+        maxGas: packet.vmg ?? 1,
+        speedLevel: packet.vl ?? 0,
+        ...(packet.voc ? { occupantId: packet.voc } : {}),
+        honkCooldown: packet.vhc ?? 0,
+      },
+    } : {}),
     ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at || packet.lg ? {
       loadout: {
         ...(packet.lh ? { leftHand: packet.lh } : {}),
@@ -255,6 +326,21 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.dp === undefined || typeof value.dp === "number") &&
     (value.ra === undefined || value.ra === 0 || value.ra === 1) &&
     (value.rl === undefined || value.rl === 0 || value.rl === 1) &&
+    (value.vn === undefined || typeof value.vn === "string") &&
+    (value.vo === undefined || typeof value.vo === "string") &&
+    (value.vxv === undefined || typeof value.vxv === "number") &&
+    (value.vyv === undefined || typeof value.vyv === "number") &&
+    (value.vvx === undefined || typeof value.vvx === "number") &&
+    (value.vvy === undefined || typeof value.vvy === "number") &&
+    (value.vf === undefined || value.vf === -1 || value.vf === 1) &&
+    (value.vs === undefined || value.vs === "stored" || value.vs === "emerging" || value.vs === "active" || value.vs === "absorbing" || value.vs === "destroyed") &&
+    (value.vhp === undefined || typeof value.vhp === "number") &&
+    (value.vmh === undefined || typeof value.vmh === "number") &&
+    (value.vg === undefined || typeof value.vg === "number") &&
+    (value.vmg === undefined || typeof value.vmg === "number") &&
+    (value.vl === undefined || typeof value.vl === "number") &&
+    (value.voc === undefined || typeof value.voc === "string") &&
+    (value.vhc === undefined || typeof value.vhc === "number") &&
     (value.lh === undefined || typeof value.lh === "string") &&
     (value.rh === undefined || typeof value.rh === "string") &&
     (value.fs === undefined || typeof value.fs === "string") &&
@@ -293,7 +379,8 @@ export function isCombatEventPacket(packet: unknown): packet is CombatEventPacke
     (value.ky === undefined || typeof value.ky === "number") &&
     (value.stun === undefined || typeof value.stun === "number") &&
     (value.status === undefined || typeof value.status === "string") &&
-    (value.hitLocation === undefined || value.hitLocation === "head" || value.hitLocation === "body" || value.hitLocation === "leg")
+    (value.hitLocation === undefined || value.hitLocation === "head" || value.hitLocation === "body" || value.hitLocation === "leg") &&
+    (value.range === undefined || typeof value.range === "number")
   );
 }
 

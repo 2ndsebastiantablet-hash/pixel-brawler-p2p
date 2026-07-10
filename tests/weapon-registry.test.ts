@@ -25,6 +25,7 @@ const enabledWeapons = [
   "grappling-hook",
   "chainsaw",
   "spikes",
+  "van",
 ] as const;
 
 describe("weapon registry", () => {
@@ -53,6 +54,7 @@ describe("weapon registry", () => {
       "grappling-hook",
       "chainsaw",
       "spikes",
+      "van",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -98,6 +100,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo["grappling-hook"]).toBeUndefined();
     expect(inventory.ammo.chainsaw).toBeUndefined();
     expect(inventory.ammo.spikes).toBeUndefined();
+    expect(inventory.ammo.van).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -119,5 +122,7 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("chainsaw").weight.label).toBe("Heavy");
     expect(weaponRegistry.get("spikes").description).toBe("Strap weapon. Q/E activates 30s spike mode. Click to spawn impaling poison spikes. No spike cooldown during mode. 60s cooldown after.");
     expect(weaponRegistry.get("spikes").weight.label).toBe("Light");
+    expect(weaponRegistry.get("van").description).toBe("Strap vehicle. Q/E spawns or absorbs a physics van. Anyone can drive it. Ram players, honk to stun, shoot from inside, and manage gas/health.");
+    expect(weaponRegistry.get("van").weight.label).toBe("Heavy");
   });
 });

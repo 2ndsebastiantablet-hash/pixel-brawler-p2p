@@ -102,6 +102,15 @@ export type SoundId =
   | "spike-grow"
   | "spike-impale"
   | "spike-crumble"
+  | "van-spawn"
+  | "van-absorb"
+  | "van-enter"
+  | "van-shift"
+  | "van-honk"
+  | "van-bump"
+  | "van-crash"
+  | "van-hit"
+  | "van-explode"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -219,6 +228,15 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "spike-grow": { category: "weapon", frequency: 180, endFrequency: 70, duration: 0.13, noise: true, minInterval: 0.035 },
   "spike-impale": { category: "combat", frequency: 420, endFrequency: 90, duration: 0.12, noise: true, minInterval: 0.08 },
   "spike-crumble": { category: "combat", frequency: 160, endFrequency: 44, duration: 0.18, noise: true, minInterval: 0.1 },
+  "van-spawn": { category: "heavy", frequency: 110, endFrequency: 260, duration: 0.24, noise: true, minInterval: 0.12 },
+  "van-absorb": { category: "weapon", frequency: 260, endFrequency: 90, duration: 0.2, noise: true, minInterval: 0.12 },
+  "van-enter": { category: "weapon", frequency: 360, endFrequency: 220, duration: 0.07, type: "square", minInterval: 0.08 },
+  "van-shift": { category: "weapon", frequency: 420, endFrequency: 720, duration: 0.08, type: "square", minInterval: 0.1 },
+  "van-honk": { category: "heavy", frequency: 280, endFrequency: 210, duration: 0.34, type: "sawtooth", minInterval: 0.25 },
+  "van-bump": { category: "combat", frequency: 170, endFrequency: 76, duration: 0.11, noise: true, minInterval: 0.08 },
+  "van-crash": { category: "heavy", frequency: 92, endFrequency: 32, duration: 0.28, noise: true, minInterval: 0.16 },
+  "van-hit": { category: "combat", frequency: 250, endFrequency: 110, duration: 0.08, noise: true, minInterval: 0.06 },
+  "van-explode": { category: "heavy", frequency: 70, endFrequency: 28, duration: 0.5, noise: true, minInterval: 0.28 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

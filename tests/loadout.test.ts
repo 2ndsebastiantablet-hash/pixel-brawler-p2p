@@ -46,6 +46,14 @@ describe("loadout equipment slots", () => {
     })).toEqual({
       frontStrap: "spikes",
     });
+    expect(normalizeLoadout({
+      backStrap: "van",
+      rightHand: "van",
+      attachment: "van",
+      legs: "van",
+    })).toEqual({
+      backStrap: "van",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -89,6 +97,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("spikes", "rightHand")).toBe(false);
     expect(isSlotCompatible("spikes", "attachment")).toBe(false);
     expect(isSlotCompatible("spikes", "legs")).toBe(false);
+    expect(isSlotCompatible("van", "frontStrap")).toBe(true);
+    expect(isSlotCompatible("van", "backStrap")).toBe(true);
+    expect(isSlotCompatible("van", "leftHand")).toBe(false);
+    expect(isSlotCompatible("van", "rightHand")).toBe(false);
+    expect(isSlotCompatible("van", "attachment")).toBe(false);
+    expect(isSlotCompatible("van", "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -108,6 +122,10 @@ describe("loadout equipment slots", () => {
     const withSpikes = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "spikes");
     expect(withSpikes.frontStrap).toBe("spikes");
     expect(loadoutHasWeapon(withSpikes, "spikes")).toBe(true);
+
+    const withVan = assignLoadoutItem(DEFAULT_LOADOUT, "backStrap", "van");
+    expect(withVan.backStrap).toBe("van");
+    expect(loadoutHasWeapon(withVan, "van")).toBe(true);
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {

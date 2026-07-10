@@ -95,6 +95,12 @@ export interface ZombieState {
 export interface SpikeState {
   id: string;
   ownerId: string;
+  baseX: number;
+  tipX: number;
+  tipY: number;
+  dirX: number;
+  dirY: number;
+  length: number;
   x: number;
   baseY: number;
   height: number;
@@ -117,6 +123,43 @@ export interface SpikeParticleState {
   age: number;
   lifetime: number;
   color: string;
+  angle?: number;
+}
+
+export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
+
+export interface VanState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  velocityX: number;
+  velocityY: number;
+  width: number;
+  height: number;
+  facing: -1 | 1;
+  state: VanStateKind;
+  health: number;
+  maxHealth: number;
+  gas: number;
+  maxGas: number;
+  speedLevel: number;
+  occupantId?: string;
+  honkCooldown: number;
+  age: number;
+  wheelSpin: number;
+  damageFlash: number;
+  smokeTimer: number;
+  destroyedTimer: number;
+  visualOnly?: boolean;
+}
+
+export interface VanDriverInput {
+  left: boolean;
+  right: boolean;
+  shiftPressed: boolean;
+  jumpPressed: boolean;
+  honkPressed: boolean;
 }
 
 export interface CombatEffect {
@@ -161,6 +204,7 @@ export interface CombatSnapshot {
   zombies: ZombieState[];
   spikes: SpikeState[];
   spikeParticles: SpikeParticleState[];
+  vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
 }
@@ -184,6 +228,7 @@ export interface CombatEventPacket {
   stun?: number;
   status?: string;
   hitLocation?: HitLocation;
+  range?: number;
 }
 
 export type SuperLegsKickKind = "neutral" | "forward" | "downward" | "back" | "slam" | "bounce";
@@ -269,9 +314,37 @@ const spikeGrowDuration = 0.14;
 const spikeDisintegrateDuration = 0.72;
 const spikeHeight = 118;
 const spikeWidth = 30;
+const spikeMinLength = 96;
+const spikeMaxLength = 520;
+const spikeTipRadius = 26;
+const spikeBodyPoisonCooldown = 0.18;
 const spikeImpaleDamage = 3;
 const spikeImpaleStun = 0.18;
 const spikeBoundsPadding = 26;
+const vanWidth = 118;
+const vanHeight = 58;
+const vanMaxHealth = 180;
+const vanMaxGas = 100;
+const vanGasRefillPerSecond = 9;
+const vanStoredRepairPerSecond = 2.5;
+const vanDestroyedRepairThreshold = 34;
+const vanDriveAcceleration = 680;
+const vanFriction = 2.6;
+const vanAirDrag = 0.58;
+const vanMaxSpeedBase = 210;
+const vanMaxSpeedStep = 72;
+const vanGasDrainBase = 2.4;
+const vanGasDrainStep = 1.6;
+const vanRamCooldown = 0.28;
+const vanHonkCooldownSeconds = 4.2;
+const vanHonkRange = 230;
+const vanExplosionRadius = 320;
+const vanExplosionCenterDamage = 78;
+const vanExplosionEdgeDamage = 32;
+const vanExplosionCenterKnockback = 1180;
+const vanExplosionEdgeKnockback = 520;
+const vanExplosionCenterStun = 0.72;
+const vanExplosionEdgeStun = 0.38;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -384,6 +457,16 @@ export interface WeaponRuntimeState {
   spikeModeTimer: number;
   spikeCooldown: number;
   spikeCount: number;
+  vanActive: boolean;
+  vanStored: boolean;
+  vanDestroyed: boolean;
+  vanDriving: boolean;
+  vanHealth: number;
+  vanMaxHealth: number;
+  vanGas: number;
+  vanMaxGas: number;
+  vanSpeedLevel: number;
+  vanHonkCooldown: number;
   zombieCount: number;
   attachedHands: number;
 }
@@ -422,6 +505,7 @@ export class CombatSystem {
   private readonly spikes: SpikeState[] = [];
   private readonly spikeParticles: SpikeParticleState[] = [];
   private readonly spikeImpales = new Map<string, SpikeImpaleState>();
+  private readonly vans: VanState[] = [];
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -460,6 +544,7 @@ export class CombatSystem {
     this.spikes.length = 0;
     this.spikeParticles.length = 0;
     this.spikeImpales.clear();
+    this.vans.length = 0;
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -623,6 +708,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "spikes") {
       return this.activateSpikes(context);
     }
+    if (this.inventory.equippedWeapon === "van") {
+      return this.toggleVan(context);
+    }
     if (this.inventory.equippedWeapon === "rocket") {
       return this.placeRocket(context);
     }
@@ -666,6 +754,9 @@ export class CombatSystem {
     }
     if (weapon.id === "spikes") {
       return this.activateSpikes(context);
+    }
+    if (weapon.id === "van") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Van uses Q/E" };
     }
     if (weapon.id === "rocket") {
       return this.lightRocket(context);
@@ -989,6 +1080,7 @@ export class CombatSystem {
     this.updateChainsaws(dt);
     this.updateZombies(dt);
     this.updateSpikes(dt, players);
+    this.updateVans(dt, players);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
     this.updateTeleports(dt, players);
@@ -1039,7 +1131,7 @@ export class CombatSystem {
   }
 
   isMovementLocked(ownerId: string): boolean {
-    return this.axeRushes.has(ownerId) || this.spikeImpales.has(ownerId);
+    return this.axeRushes.has(ownerId) || this.spikeImpales.has(ownerId) || Boolean(this.getVanDrivenBy(ownerId));
   }
 
   getVirginBloodState(ownerId: string): { reviveAvailable: boolean; cooldown: number } {
@@ -1110,13 +1202,19 @@ export class CombatSystem {
     if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
       return { kind: "blocked", weaponId, label: "No owner" };
     }
-    const clamped = clampSpikePoint(point);
+    const geometry = buildSpikeGeometry(player, point);
     const spike: SpikeState = {
       id: this.makeId("spike"),
       ownerId,
-      x: clamped.x,
-      baseY: clamped.y,
-      height: spikeHeight,
+      baseX: geometry.base.x,
+      baseY: geometry.base.y,
+      tipX: geometry.tip.x,
+      tipY: geometry.tip.y,
+      dirX: geometry.direction.x,
+      dirY: geometry.direction.y,
+      length: geometry.length,
+      x: geometry.base.x,
+      height: geometry.length,
       width: spikeWidth,
       age: 0,
       growDuration: spikeGrowDuration,
@@ -1128,7 +1226,16 @@ export class CombatSystem {
     this.trimOwnerSpikes(ownerId);
     this.spawnSpikeGrowParticles(spike);
     this.queueSound("spike-grow");
-    this.recentEvents.push(this.createEvent(ownerId, weaponId, "primary", { x: spike.x, y: spike.baseY }, normalize({ x: point.x - (player.x + player.width / 2), y: point.y - (player.y + player.height / 2) }), "Spike Spawn", now));
+    this.recentEvents.push(this.createEvent(
+      ownerId,
+      weaponId,
+      "primary",
+      { x: spike.tipX, y: spike.tipY },
+      { x: spike.dirX, y: spike.dirY },
+      "Spike Spawn",
+      now,
+      { range: spike.length },
+    ));
     this.applySpikeContacts(spike);
     return { kind: "utility", weaponId, label: "Spike Spawn" };
   }
@@ -1158,6 +1265,9 @@ export class CombatSystem {
     const chainsaw = this.chainsaws.get(ownerId);
     const chainsawMode = chainsaw?.mode ?? "idle";
     const spikeMode = this.spikeModes.get(ownerId);
+    const ownedVan = this.getVanForOwner(ownerId);
+    const drivenVan = this.getVanDrivenBy(ownerId);
+    const van = ownedVan ?? drivenVan;
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1192,6 +1302,16 @@ export class CombatSystem {
       spikeModeTimer: spikeMode?.activeTimer ?? 0,
       spikeCooldown: spikeMode?.cooldownTimer ?? this.inventory.cooldowns.spikes ?? 0,
       spikeCount: this.spikes.filter((spike) => spike.ownerId === ownerId && !spike.disintegrating).length,
+      vanActive: Boolean(van && (van.state === "active" || van.state === "emerging" || van.state === "absorbing")),
+      vanStored: van?.state === "stored",
+      vanDestroyed: van?.state === "destroyed",
+      vanDriving: drivenVan?.occupantId === ownerId,
+      vanHealth: van?.health ?? 0,
+      vanMaxHealth: van?.maxHealth ?? vanMaxHealth,
+      vanGas: van?.gas ?? vanMaxGas,
+      vanMaxGas: van?.maxGas ?? vanMaxGas,
+      vanSpeedLevel: van?.speedLevel ?? 0,
+      vanHonkCooldown: van?.honkCooldown ?? 0,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -1527,17 +1647,29 @@ export class CombatSystem {
   }
 
   private getOrCreateRemoteSpikeVisual(event: CombatEventPacket): SpikeState {
-    const existing = this.spikes.find((spike) => spike.ownerId === event.ownerId && spike.visualOnly && Math.hypot(spike.x - event.x, spike.baseY - event.y) < 36);
+    const existing = this.spikes.find((spike) => spike.ownerId === event.ownerId && spike.visualOnly && Math.hypot(spike.tipX - event.x, spike.tipY - event.y) < 36);
     if (existing) {
       return existing;
     }
-    const point = clampSpikePoint({ x: event.x, y: event.y });
+    const tip = clampSpikePoint({ x: event.x, y: event.y });
+    const direction = normalize({ x: event.ax || 0, y: event.ay || -1 });
+    const length = clamp(event.range ?? spikeHeight, spikeMinLength, spikeMaxLength);
+    const base = {
+      x: tip.x - direction.x * length,
+      y: tip.y - direction.y * length,
+    };
     const spike: SpikeState = {
       id: `remote-spike-${event.id}`,
       ownerId: event.ownerId,
-      x: point.x,
-      baseY: point.y,
-      height: spikeHeight,
+      baseX: base.x,
+      baseY: base.y,
+      tipX: tip.x,
+      tipY: tip.y,
+      dirX: direction.x,
+      dirY: direction.y,
+      length,
+      x: base.x,
+      height: length,
       width: spikeWidth,
       age: 0,
       growDuration: spikeGrowDuration,
@@ -1562,6 +1694,7 @@ export class CombatSystem {
       zombies: [...this.zombies.values()],
       spikes: this.spikes,
       spikeParticles: this.spikeParticles,
+      vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
     };
@@ -1910,6 +2043,121 @@ export class CombatSystem {
     this.queueSound("spike-mode");
     this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, normalize(context.aim), "Spike Mode", context.now));
     return { kind: "utility", weaponId, label: "Spike Mode" };
+  }
+
+  private toggleVan(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "van";
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No driver" };
+    }
+    const van = this.getOrCreateVan(context.ownerId);
+    if (van.state === "active" || van.state === "emerging" || van.state === "absorbing") {
+      van.state = "absorbing";
+      van.age = 0;
+      van.occupantId = undefined;
+      van.velocityX *= 0.45;
+      van.velocityY *= 0.45;
+      this.addEffect("tracer", van.x + van.width / 2, van.y + van.height / 2, owner.x + owner.width / 2, owner.y + owner.height / 2, colorForWeapon(weaponId), "VAN ABSORB");
+      this.queueSound("van-absorb");
+      this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", { x: van.x + van.width / 2, y: van.y + van.height / 2 }, { x: context.player.facing, y: 0 }, "Van Absorb", context.now));
+      return { kind: "utility", weaponId, label: "Van Absorb" };
+    }
+    if (van.state === "destroyed" && van.health < vanDestroyedRepairThreshold) {
+      return { kind: "blocked", weaponId, label: "Van wrecked" };
+    }
+    const facing = facingFromAim(context.aim.x, context.player.facing);
+    van.state = "emerging";
+    van.age = 0;
+    van.facing = facing;
+    van.x = context.player.x + context.player.width / 2 + facing * 34 - van.width / 2;
+    van.y = COMBAT_TUNING.projectiles.floorY - van.height;
+    van.velocityX = facing * 290;
+    van.velocityY = -34;
+    van.occupantId = undefined;
+    van.speedLevel = clamp(van.speedLevel, 0, 5);
+    van.damageFlash = 0;
+    van.smokeTimer = 0;
+    this.addEffect("shockwave", van.x + van.width / 2, van.y + van.height, van.x + van.width / 2 + facing * 54, van.y + van.height, colorForWeapon(weaponId), "VAN SPAWN");
+    this.queueSound("van-spawn");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", { x: van.x + van.width / 2, y: van.y + van.height / 2 }, { x: facing, y: 0 }, "Van Spawn", context.now));
+    return { kind: "utility", weaponId, label: "Van Spawn" };
+  }
+
+  tryEnterVan(driverId: string, player: PlayerPhysicsState, point: Vec2, now: number): WeaponUseResult {
+    const van = this.vans.find((item) =>
+      (item.state === "active" || item.state === "emerging")
+      && point.x >= item.x - 18
+      && point.x <= item.x + item.width + 18
+      && point.y >= item.y - 18
+      && point.y <= item.y + item.height + 20
+    );
+    if (!van) {
+      return { kind: "blocked", weaponId: "van", label: "No van" };
+    }
+    const driver = this.combatants.get(driverId);
+    if (!driver || driver.respawnTimer > 0 || driver.hp <= 0) {
+      return { kind: "blocked", weaponId: "van", label: "No driver" };
+    }
+    if (van.occupantId && van.occupantId !== driverId) {
+      return { kind: "blocked", weaponId: "van", label: "Occupied" };
+    }
+    const driverCenter = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
+    const vanCenter = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+    if (Math.hypot(driverCenter.x - vanCenter.x, driverCenter.y - vanCenter.y) > 210) {
+      return { kind: "blocked", weaponId: "van", label: "Too far" };
+    }
+    van.occupantId = driverId;
+    this.placeDriverInVan(van, player);
+    this.placeCombatantDriverInVan(van, driver);
+    this.addEffect("pickup", vanCenter.x, vanCenter.y, vanCenter.x, vanCenter.y - 28, colorForWeapon("van"), "ENTER");
+    this.queueSound("van-enter");
+    this.recentEvents.push(this.createEvent(driverId, "van", "equip", vanCenter, { x: van.facing, y: 0 }, "Enter Van", now));
+    return { kind: "utility", weaponId: "van", label: "Enter Van" };
+  }
+
+  handleVanDriverInput(driverId: string, input: VanDriverInput, player: PlayerPhysicsState, now: number): WeaponUseResult | null {
+    const van = this.getVanDrivenBy(driverId);
+    if (!van || van.state !== "active") {
+      return null;
+    }
+    if (input.jumpPressed) {
+      this.exitVan(van, player, now);
+      return { kind: "utility", weaponId: "van", label: "Exit Van" };
+    }
+    if (input.shiftPressed) {
+      van.speedLevel = (van.speedLevel + 1) % 6;
+      this.addEffect("muzzle", van.x + van.width / 2, van.y + 20, van.x + van.width / 2 + van.facing * 34, van.y + 20, colorForWeapon("van"), `SPEED ${van.speedLevel}`);
+      this.queueSound("van-shift");
+    }
+    const throttle = Number(input.right) - Number(input.left);
+    if (throttle !== 0 && van.gas > 0) {
+      van.facing = throttle < 0 ? -1 : 1;
+      van.velocityX += throttle * (vanDriveAcceleration / 9.5 + van.speedLevel * 24);
+      van.gas = Math.max(0, van.gas - 0.08 * (1 + van.speedLevel * 0.35));
+      this.addEffect("tracer", van.x + van.width / 2 - van.facing * 36, van.y + van.height - 8, van.x + van.width / 2 - van.facing * 70, van.y + van.height - 5, "#b8bfd7", "DUST");
+    }
+    if (input.honkPressed) {
+      return this.honkVan(van, driverId, now);
+    }
+    return null;
+  }
+
+  damageVan(vanId: string, damage: number, sourceId: string, now = performanceNow()): boolean {
+    const van = this.vans.find((item) => item.id === vanId);
+    if (!van || van.state === "stored" || van.state === "destroyed" || van.health <= 0) {
+      return false;
+    }
+    van.health = Math.max(0, van.health - damage);
+    van.damageFlash = 0.22;
+    van.velocityX += Math.sign((van.x + van.width / 2) - (this.combatants.get(sourceId)?.x ?? van.x) || 1) * Math.min(260, damage * 4);
+    this.addEffect("spark", van.x + van.width / 2, van.y + van.height * 0.45, van.x + van.width / 2, van.y, colorForWeapon("van"), "VAN HIT");
+    this.queueSound("van-hit");
+    if (van.health > 0) {
+      return true;
+    }
+    this.explodeVan(van, sourceId, now);
+    return true;
   }
 
   private fireGrapplingHook(context: WeaponUseContext): WeaponUseResult {
@@ -2706,6 +2954,23 @@ export class CombatSystem {
       if (!hit.applied) {
         target.invulnerable = previousInvulnerable;
       }
+    }
+    for (const van of this.vans) {
+      if (van.state === "stored" || van.state === "destroyed" || van.health <= 0) {
+        continue;
+      }
+      const vx = van.x + van.width / 2;
+      const vy = van.y + van.height / 2;
+      const distance = Math.hypot(vx - options.x, vy - options.y);
+      if (distance > options.radius) {
+        continue;
+      }
+      const falloff = 1 - distance / options.radius;
+      const damage = Math.round(lerp(options.edgeDamage, options.centerDamage, falloff) * 0.82);
+      const direction = normalize({ x: vx - options.x || 1, y: vy - options.y || -0.2 });
+      van.velocityX += direction.x * lerp(options.edgeKnockback, options.centerKnockback, falloff) * 0.22;
+      van.velocityY += -Math.abs(direction.y) * 260 - 120 * falloff;
+      this.damageVan(van.id, damage, options.sourceId);
     }
     const holy = options.weaponId === "holy-bazooka";
     this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, holy ? "#fff4a8" : "#ff8f3d", holy ? "HOLY EXPLOSION" : "EXPLOSION");
@@ -3533,8 +3798,9 @@ export class CombatSystem {
         this.releaseSpikeImpale(targetId);
         continue;
       }
-      const x = spike.x - target.width / 2;
-      const y = spike.baseY - target.height;
+      const pin = spikeCurrentTip(spike);
+      const x = pin.x - target.width / 2 - spike.dirX * 8;
+      const y = pin.y - target.height / 2 - spike.dirY * 10;
       impale.x = x;
       impale.y = y;
       target.x = x;
@@ -3668,14 +3934,28 @@ export class CombatSystem {
       return;
     }
     for (const target of this.combatants.values()) {
-      if (target.id === spike.ownerId || target.respawnTimer > 0 || target.hp <= 0 || this.spikeImpales.has(target.id)) {
+      if (target.respawnTimer > 0 || target.hp <= 0) {
         continue;
       }
-      if (!targetIntersectsSpike(target, spike)) {
+      const contact = targetSpikeContact(target, spike);
+      if (!contact) {
         continue;
       }
-      this.impaleTargetWithSpike(spike, target, true);
+      this.applySpikeBodyPoison(spike, target, contact.point);
+      if (contact.kind === "tip" && !this.spikeImpales.has(target.id)) {
+        this.impaleTargetWithSpike(spike, target, true);
+      }
     }
+  }
+
+  private applySpikeBodyPoison(spike: SpikeState, target: Combatant, point: Vec2): void {
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("spikePoison"));
+    const key = `${spike.id}:${target.id}:spike-body`;
+    if (this.bodyContactCooldowns.has(key)) {
+      return;
+    }
+    this.bodyContactCooldowns.set(key, spikeBodyPoisonCooldown);
+    this.addEffect("spark", point.x, point.y, point.x + spike.dirX * 16, point.y + spike.dirY * 16, "#7cff6b", "POISON");
   }
 
   private impaleTargetWithSpike(spike: SpikeState, target: Combatant, applyDamage: boolean): void {
@@ -3683,8 +3963,9 @@ export class CombatSystem {
     if (!spike.impaledTargetIds.includes(target.id)) {
       spike.impaledTargetIds.push(target.id);
     }
-    const lockX = spike.x - target.width / 2;
-    const lockY = spike.baseY - target.height;
+    const pin = spikeCurrentTip(spike);
+    const lockX = pin.x - target.width / 2 - spike.dirX * 8;
+    const lockY = pin.y - target.height / 2 - spike.dirY * 10;
     this.spikeImpales.set(target.id, { spikeId: spike.id, x: lockX, y: lockY });
     target.x = lockX;
     target.y = lockY;
@@ -3692,7 +3973,7 @@ export class CombatSystem {
     target.velocityY = 0;
     target.hitstun = Math.max(target.hitstun, 0.2);
     target.statuses = upsertStatusEffect(target.statuses, createStatus("spikePoison"));
-    this.addEffect("stun", target.x + target.width / 2, target.y + target.height * 0.45, spike.x, spike.baseY - spike.height * 0.55, colorForWeapon("spikes"), "IMPALED");
+    this.addEffect("stun", target.x + target.width / 2, target.y + target.height * 0.45, spike.tipX, spike.tipY, colorForWeapon("spikes"), "IMPALED");
     this.queueSound("spike-impale");
     if (!applyDamage) {
       return;
@@ -3720,8 +4001,8 @@ export class CombatSystem {
       spike.ownerId,
       "spikes",
       "hit",
-      { x: spike.x, y: spike.baseY },
-      { x: 0, y: -1 },
+      { x: spike.tipX, y: spike.tipY },
+      { x: spike.dirX, y: spike.dirY },
       "Spike Impale",
       performanceNow(),
       {
@@ -3731,6 +4012,7 @@ export class CombatSystem {
         ky: 0,
         stun: spikeImpaleStun,
         status: "spikePoison",
+        range: spike.length,
       },
     ));
   }
@@ -3761,42 +4043,54 @@ export class CombatSystem {
     spike.disintegrateAge = 0;
     this.releaseSpikeTargets(spike);
     this.spawnSpikeDisintegrateParticles(spike);
-    this.addEffect("spark", spike.x, spike.baseY - spike.height * 0.5, spike.x, spike.baseY - 22, colorForWeapon("spikes"), "CRUMBLE");
+    const mid = {
+      x: (spike.baseX + spike.tipX) / 2,
+      y: (spike.baseY + spike.tipY) / 2,
+    };
+    this.addEffect("spark", mid.x, mid.y, spike.tipX, spike.tipY, colorForWeapon("spikes"), "CRUMBLE");
     this.queueSound("spike-crumble");
   }
 
   private spawnSpikeGrowParticles(spike: SpikeState): void {
-    this.addEffect("shockwave", spike.x, spike.baseY, spike.x, spike.baseY - spike.height * 0.64, colorForWeapon("spikes"), "SPIKE");
+    this.addEffect("shockwave", spike.baseX, spike.baseY, spike.tipX, spike.tipY, colorForWeapon("spikes"), "SPIKE");
     for (let index = 0; index < 9; index += 1) {
       const spread = (index - 4) * 18;
+      const perp = { x: -spike.dirY, y: spike.dirX };
       this.spikeParticles.push({
         id: this.makeId("spike-particle"),
-        x: spike.x + spread * 0.2,
-        y: spike.baseY - 4,
-        vx: spread,
-        vy: -180 - Math.abs(spread) * 1.6,
+        x: spike.baseX + perp.x * spread * 0.2,
+        y: spike.baseY + perp.y * spread * 0.2,
+        vx: perp.x * spread + spike.dirX * 70,
+        vy: perp.y * spread + spike.dirY * 130 - 140 - Math.abs(spread) * 0.8,
         size: 3 + (index % 3),
         age: 0,
         lifetime: 0.55 + index * 0.015,
         color: index % 2 === 0 ? "#f2f2f2" : "#1a1a23",
+        angle: Math.atan2(spike.dirY, spike.dirX),
       });
     }
   }
 
   private spawnSpikeDisintegrateParticles(spike: SpikeState): void {
     for (let index = 0; index < 16; index += 1) {
-      const angle = -Math.PI + (index / 15) * Math.PI;
+      const t = (index % 8) / 7;
+      const point = {
+        x: spike.baseX + (spike.tipX - spike.baseX) * t,
+        y: spike.baseY + (spike.tipY - spike.baseY) * t,
+      };
+      const angle = Math.atan2(spike.dirY, spike.dirX) - Math.PI / 2 + (index / 15) * Math.PI;
       const speed = 90 + (index % 5) * 34;
       this.spikeParticles.push({
         id: this.makeId("spike-shard"),
-        x: spike.x + Math.sin(index * 1.7) * spike.width * 0.35,
-        y: spike.baseY - spike.height * (0.18 + (index % 6) * 0.12),
+        x: point.x + Math.sin(index * 1.7) * spike.width * 0.35,
+        y: point.y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed - 80,
         size: 2 + (index % 4),
         age: 0,
         lifetime: 0.55 + (index % 5) * 0.06,
         color: index % 3 === 0 ? "#0f0f16" : index % 2 === 0 ? "#7cff6b" : "#e8e8e8",
+        angle: Math.atan2(spike.dirY, spike.dirX),
       });
     }
   }
@@ -3816,6 +4110,363 @@ export class CombatSystem {
         color: index % 2 === 0 ? "#f2f2f2" : "#1a1a23",
       });
     }
+  }
+
+  private getOrCreateVan(ownerId: string): VanState {
+    const existing = this.getVanForOwner(ownerId);
+    if (existing) {
+      return existing;
+    }
+    const van: VanState = {
+      id: this.makeId("van"),
+      ownerId,
+      x: 0,
+      y: COMBAT_TUNING.projectiles.floorY - vanHeight,
+      velocityX: 0,
+      velocityY: 0,
+      width: vanWidth,
+      height: vanHeight,
+      facing: 1,
+      state: "stored",
+      health: vanMaxHealth,
+      maxHealth: vanMaxHealth,
+      gas: vanMaxGas,
+      maxGas: vanMaxGas,
+      speedLevel: 0,
+      honkCooldown: 0,
+      age: 0,
+      wheelSpin: 0,
+      damageFlash: 0,
+      smokeTimer: 0,
+      destroyedTimer: 0,
+    };
+    this.vans.push(van);
+    return van;
+  }
+
+  getVanForOwner(ownerId: string): VanState | undefined {
+    return this.vans.find((van) => van.ownerId === ownerId);
+  }
+
+  getVanDrivenBy(driverId: string): VanState | undefined {
+    return this.vans.find((van) => van.occupantId === driverId && van.state !== "stored" && van.state !== "destroyed");
+  }
+
+  getNetworkVanState(ownerId: string): VanState | undefined {
+    return this.getVanForOwner(ownerId);
+  }
+
+  syncRemoteVan(remote: {
+    id: string;
+    ownerId: string;
+    x: number;
+    y: number;
+    velocityX: number;
+    velocityY: number;
+    facing: -1 | 1;
+    state: VanStateKind;
+    health: number;
+    maxHealth: number;
+    gas: number;
+    maxGas: number;
+    speedLevel: number;
+    occupantId?: string;
+    honkCooldown: number;
+  } | undefined): void {
+    if (!remote) {
+      return;
+    }
+    const existing = this.getVanForOwner(remote.ownerId);
+    const van = existing ?? this.getOrCreateVan(remote.ownerId);
+    van.id = remote.id;
+    van.x = remote.x;
+    van.y = remote.y;
+    van.velocityX = remote.velocityX;
+    van.velocityY = remote.velocityY;
+    van.facing = remote.facing;
+    van.state = remote.state;
+    van.health = remote.health;
+    van.maxHealth = remote.maxHealth;
+    van.gas = remote.gas;
+    van.maxGas = remote.maxGas;
+    van.speedLevel = remote.speedLevel;
+    van.occupantId = remote.occupantId;
+    van.honkCooldown = remote.honkCooldown;
+    van.visualOnly = true;
+  }
+
+  private updateVans(dt: number, players: PlayerPhysicsState[]): void {
+    for (const van of this.vans) {
+      van.age += dt;
+      van.honkCooldown = Math.max(0, van.honkCooldown - dt);
+      van.damageFlash = Math.max(0, van.damageFlash - dt);
+      van.smokeTimer = Math.max(0, van.smokeTimer - dt);
+      if (van.state === "stored") {
+        van.gas = Math.min(van.maxGas, van.gas + vanGasRefillPerSecond * dt);
+        continue;
+      }
+      if (van.state === "destroyed") {
+        van.destroyedTimer += dt;
+        van.gas = Math.min(van.maxGas, van.gas + vanGasRefillPerSecond * 0.35 * dt);
+        van.health = Math.min(vanDestroyedRepairThreshold, van.health + vanStoredRepairPerSecond * 0.65 * dt);
+        if (van.health >= vanDestroyedRepairThreshold && van.destroyedTimer > 8) {
+          van.state = "stored";
+          van.destroyedTimer = 0;
+        }
+        continue;
+      }
+      if (van.state === "absorbing") {
+        this.updateAbsorbingVan(van, dt);
+        continue;
+      }
+      if (van.state === "emerging" && van.age > 0.42) {
+        van.state = "active";
+      }
+      this.updateActiveVan(van, dt, players);
+    }
+  }
+
+  private updateAbsorbingVan(van: VanState, dt: number): void {
+    const owner = this.combatants.get(van.ownerId);
+    if (!owner) {
+      van.state = "stored";
+      van.occupantId = undefined;
+      return;
+    }
+    van.occupantId = undefined;
+    const target = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.55 };
+    const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+    const toOwner = { x: target.x - center.x, y: target.y - center.y };
+    const distance = Math.hypot(toOwner.x, toOwner.y);
+    const travel = 760 * dt;
+    if (distance < 42 || travel >= distance || van.age > 2.2) {
+      van.state = "stored";
+      van.x = target.x - van.width / 2;
+      van.y = target.y - van.height / 2;
+      van.velocityX = 0;
+      van.velocityY = 0;
+      return;
+    }
+    const direction = normalize(toOwner);
+    van.velocityX = direction.x * 760;
+    van.velocityY = direction.y * 760;
+    van.x += van.velocityX * dt;
+    van.y += van.velocityY * dt;
+    this.addEffect("tracer", center.x, center.y, target.x, target.y, colorForWeapon("van"), "ABSORB");
+  }
+
+  private updateActiveVan(van: VanState, dt: number, players: PlayerPhysicsState[]): void {
+    const occupant = van.occupantId ? this.combatants.get(van.occupantId) : undefined;
+    const driverPlayer = van.occupantId ? players.find((player) => player.id === van.occupantId) : undefined;
+    if (occupant && occupant.respawnTimer > 0) {
+      van.occupantId = undefined;
+    }
+    if (van.occupantId && van.gas > 0) {
+      const maxSpeed = vanMaxSpeedBase + van.speedLevel * vanMaxSpeedStep;
+      van.velocityX = clamp(van.velocityX, -maxSpeed, maxSpeed);
+      if (Math.abs(van.velocityX) > 30 || van.speedLevel > 0) {
+        van.gas = Math.max(0, van.gas - (vanGasDrainBase + van.speedLevel * vanGasDrainStep) * dt);
+      }
+    } else if (van.gas <= 0) {
+      van.velocityX *= Math.max(0, 1 - dt * 2.2);
+    }
+    van.velocityY += DEFAULT_PHYSICS.gravity * dt;
+    van.velocityX *= Math.max(0, 1 - dt * vanFriction * (van.occupantId ? 0.45 : 1));
+    van.velocityY *= Math.max(0, 1 - dt * vanAirDrag);
+    van.x += van.velocityX * dt;
+    van.y += van.velocityY * dt;
+    const floorY = COMBAT_TUNING.projectiles.floorY - van.height;
+    if (van.y > floorY) {
+      if (van.state === "active" && van.age > 0.8 && van.velocityY > 520) {
+        this.addEffect("shockwave", van.x + van.width / 2, floorY + van.height, van.x + van.width / 2, floorY + van.height - 32, "#b8bfd7", "CRASH");
+        this.damageVan(van.id, Math.min(26, Math.round((van.velocityY - 480) / 24)), van.ownerId);
+      }
+      van.y = floorY;
+      van.velocityY = Math.min(0, -van.velocityY * 0.16);
+    }
+    if (van.x < DEFAULT_PHYSICS.platformLeft) {
+      this.crashVanWall(van, 1);
+    } else if (van.x + van.width > DEFAULT_PHYSICS.platformRight) {
+      this.crashVanWall(van, -1);
+    }
+    van.wheelSpin += van.velocityX * dt * 0.08;
+    if (driverPlayer && van.occupantId) {
+      this.placeDriverInVan(van, driverPlayer);
+    }
+    if (occupant && van.occupantId) {
+      this.placeCombatantDriverInVan(van, occupant);
+    }
+    if (van.health < van.maxHealth * 0.35 && van.smokeTimer === 0) {
+      van.smokeTimer = 0.2;
+      this.addEffect("aura", van.x + van.width * 0.45, van.y + 10, van.x + van.width * 0.55, van.y - 20, "#2b2b32", "SMOKE");
+    }
+    this.applyVanRamContacts(van);
+  }
+
+  private crashVanWall(van: VanState, direction: -1 | 1): void {
+    const speed = Math.abs(van.velocityX);
+    van.x = direction > 0 ? DEFAULT_PHYSICS.platformLeft : DEFAULT_PHYSICS.platformRight - van.width;
+    van.velocityX = direction * Math.min(520, Math.max(140, speed * 0.42));
+    if (speed > 360) {
+      this.damageVan(van.id, Math.round((speed - 320) / 18), van.ownerId);
+      this.addEffect("spark", direction > 0 ? van.x : van.x + van.width, van.y + van.height * 0.5, van.x + van.width / 2, van.y + 12, colorForWeapon("van"), "CRASH");
+      this.queueSound("van-crash");
+    }
+  }
+
+  private applyVanRamContacts(van: VanState): void {
+    if (van.state !== "active" && van.state !== "emerging") {
+      return;
+    }
+    const speed = Math.abs(van.velocityX);
+    if (speed < 75) {
+      return;
+    }
+    const front = van.facing > 0 ? van.x + van.width - 8 : van.x - 20;
+    const ramRect = {
+      x: van.facing > 0 ? front : front,
+      y: van.y + 6,
+      width: 28,
+      height: van.height - 12,
+    };
+    for (const target of this.combatants.values()) {
+      if (target.id === van.occupantId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      if (!intersectsRect(ramRect, target)) {
+        continue;
+      }
+      const key = `${van.id}:${target.id}:van-ram`;
+      if (this.bodyContactCooldowns.has(key)) {
+        continue;
+      }
+      const damage = clamp(Math.round((speed - 70) / 9 + van.speedLevel * 5), 4, 110);
+      const knockback = clamp(speed * 1.25 + van.speedLevel * 80, 190, 1320);
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: van.ownerId,
+        targetId: target.id,
+        weaponId: "van",
+        damage,
+        knockback: { x: van.facing * knockback, y: -220 - van.speedLevel * 28 },
+        stun: clamp(0.16 + speed / 1450, 0.18, 0.7),
+        label: speed > 620 ? "VAN RAM" : "Van Bump",
+        status: speed > 360 ? "daze" : undefined,
+        skipHitLocationScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+        continue;
+      }
+      target.x = van.facing > 0 ? van.x + van.width + 3 : van.x - target.width - 3;
+      van.velocityX *= speed > 620 ? -0.24 : -0.12;
+      van.velocityY = Math.min(van.velocityY, -65);
+      this.bodyContactCooldowns.set(key, vanRamCooldown);
+      this.addEffect("slam", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2 + van.facing * 46, target.y + target.height / 2 - 12, colorForWeapon("van"), "RAM");
+      this.queueSound(speed > 620 ? "van-crash" : "van-bump");
+    }
+  }
+
+  private honkVan(van: VanState, driverId: string, now: number): WeaponUseResult {
+    if (van.honkCooldown > 0) {
+      return { kind: "blocked", weaponId: "van", label: "Honk cooldown" };
+    }
+    van.honkCooldown = vanHonkCooldownSeconds;
+    const horn = {
+      x: van.facing > 0 ? van.x + van.width - 4 : van.x - vanHonkRange + 4,
+      y: van.y - 12,
+      width: vanHonkRange,
+      height: van.height + 24,
+    };
+    for (const target of this.combatants.values()) {
+      if (target.id === van.occupantId || target.respawnTimer > 0 || target.hp <= 0 || !intersectsRect(horn, target)) {
+        continue;
+      }
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: driverId,
+        targetId: target.id,
+        weaponId: "van",
+        damage: 1,
+        knockback: { x: van.facing * 130, y: -48 },
+        stun: 0.62,
+        label: "HONK",
+        status: "daze",
+        skipHitLocationScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+      }
+    }
+    const hornX = van.facing > 0 ? van.x + van.width : van.x;
+    this.addEffect("shockwave", hornX, van.y + van.height * 0.4, hornX + van.facing * vanHonkRange, van.y + van.height * 0.4, colorForWeapon("van"), "HONK");
+    this.queueSound("van-honk");
+    this.recentEvents.push(this.createEvent(driverId, "van", "hit", { x: hornX, y: van.y + van.height * 0.4 }, { x: van.facing, y: 0 }, "HONK", now, { damage: 0, stun: 0.62, status: "daze" }));
+    return { kind: "utility", weaponId: "van", label: "HONK" };
+  }
+
+  private exitVan(van: VanState, player: PlayerPhysicsState, now: number): void {
+    van.occupantId = undefined;
+    player.x = van.facing > 0 ? van.x - player.width - 8 : van.x + van.width + 8;
+    player.y = Math.min(van.y + van.height - player.height, DEFAULT_PHYSICS.groundY - player.height);
+    player.velocityX = van.velocityX * 0.35 - van.facing * 120;
+    player.velocityY = -120;
+    const combatant = this.combatants.get(player.id);
+    if (combatant) {
+      combatant.x = player.x;
+      combatant.y = player.y;
+      combatant.velocityX = player.velocityX;
+      combatant.velocityY = player.velocityY;
+    }
+    this.addEffect("pickup", player.x + player.width / 2, player.y + player.height / 2, player.x + player.width / 2, player.y, colorForWeapon("van"), "EXIT");
+    this.queueSound("van-enter");
+    this.recentEvents.push(this.createEvent(player.id, "van", "equip", { x: player.x + player.width / 2, y: player.y + player.height / 2 }, { x: -van.facing, y: 0 }, "Exit Van", now));
+  }
+
+  private placeDriverInVan(van: VanState, player: PlayerPhysicsState): void {
+    player.x = van.x + van.width * 0.5 - player.width / 2;
+    player.y = van.y + van.height - player.height - 8;
+    player.velocityX = van.velocityX;
+    player.velocityY = van.velocityY;
+    player.grounded = false;
+  }
+
+  private placeCombatantDriverInVan(van: VanState, combatant: Combatant): void {
+    combatant.x = van.x + van.width * 0.5 - combatant.width / 2;
+    combatant.y = van.y + van.height - combatant.height - 8;
+    combatant.velocityX = van.velocityX;
+    combatant.velocityY = van.velocityY;
+    combatant.hitstun = 0;
+  }
+
+  private explodeVan(van: VanState, sourceId: string, now: number): void {
+    const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+    van.state = "destroyed";
+    van.destroyedTimer = 0;
+    van.occupantId = undefined;
+    van.velocityX = 0;
+    van.velocityY = 0;
+    van.gas = 0;
+    this.applyExplosionDamage({
+      sourceId,
+      weaponId: "van",
+      x: center.x,
+      y: center.y,
+      radius: vanExplosionRadius,
+      centerDamage: vanExplosionCenterDamage,
+      edgeDamage: vanExplosionEdgeDamage,
+      centerKnockback: vanExplosionCenterKnockback,
+      edgeKnockback: vanExplosionEdgeKnockback,
+      centerStun: vanExplosionCenterStun,
+      edgeStun: vanExplosionEdgeStun,
+      label: "Van Explosion",
+    });
+    this.addEffect("explosion", center.x, center.y, center.x + vanExplosionRadius, center.y, colorForWeapon("van"), "VAN EXPLOSION");
+    this.addEffect("aura", center.x, center.y, center.x + vanExplosionRadius * 0.7, center.y, "#2b2b32", "VAN SMOKE");
+    this.queueSound("van-explode");
+    this.recentEvents.push(this.createEvent(van.ownerId, "van", "hit", center, { x: van.facing, y: -0.4 }, "Van Explosion", now, { damage: vanExplosionCenterDamage, stun: vanExplosionCenterStun }));
   }
 
   private recordChainsawDamage(ownerId: string, victimId: string, damage: number): void {
@@ -4013,6 +4664,10 @@ export class CombatSystem {
       return;
     }
     const direction = { x: dx / distance, y: dy / distance };
+    if (activePull > 0 && this.spikeImpales.has(grapple.ownerId) && distance > 78) {
+      this.releaseSpikeImpale(grapple.ownerId);
+      this.addEffect("spark", ox, oy, ox + direction.x * 40, oy + direction.y * 40, colorForWeapon("grappling-hook"), "PULLED FREE");
+    }
     const force = grappleHookPullForce * (activePull > 0 ? 1.05 : 0.35 + tension);
     source.velocityX += direction.x * force * dt;
     source.velocityY += direction.y * force * dt - 22 * Math.max(tension, activePull * 0.35);
@@ -4356,6 +5011,26 @@ export class CombatSystem {
           }
         }
       }
+      if (projectile.weaponId !== "teleport-ball" && projectile.age <= projectile.lifetime) {
+        const bounds = returningAxe ? sweptProjectileBounds(projectile, previousX, previousY) : projectileBounds(projectile);
+        for (const van of this.vans) {
+          if (van.state === "stored" || van.state === "destroyed" || projectile.hits.includes(van.id)) {
+            continue;
+          }
+          if (!intersectsRect(bounds, van)) {
+            continue;
+          }
+          this.damageVan(van.id, projectile.damage, projectile.ownerId);
+          projectile.hits.push(van.id);
+          this.addEffect("spark", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 20, projectile.y - 8, colorForWeapon(projectile.weaponId), "VAN HIT");
+          if (projectile.pierce <= 0) {
+            projectile.age = projectile.lifetime + 1;
+          } else {
+            projectile.pierce -= 1;
+          }
+          break;
+        }
+      }
       if (returningAxe && projectile.age <= projectile.lifetime) {
         this.catchReturningAxe(projectile);
       }
@@ -4419,6 +5094,17 @@ export class CombatSystem {
       if (intersectsRect(swept, target)) {
         projectile.x = target.x + target.width / 2;
         projectile.y = target.y + target.height / 2;
+        this.explodeHolyBazooka(projectile);
+        return;
+      }
+    }
+    for (const van of this.vans) {
+      if (van.state === "stored" || van.state === "destroyed") {
+        continue;
+      }
+      if (intersectsRect(swept, van)) {
+        projectile.x = van.x + van.width / 2;
+        projectile.y = van.y + van.height / 2;
         this.explodeHolyBazooka(projectile);
         return;
       }
@@ -4595,6 +5281,17 @@ export class CombatSystem {
       if (intersectsRect(swept, target)) {
         projectile.x = target.x + target.width / 2;
         projectile.y = target.y + target.height / 2;
+        this.explodeRocket(projectile);
+        return;
+      }
+    }
+    for (const van of this.vans) {
+      if (van.state === "stored" || van.state === "destroyed") {
+        continue;
+      }
+      if (intersectsRect(swept, van)) {
+        projectile.x = van.x + van.width / 2;
+        projectile.y = van.y + van.height / 2;
         this.explodeRocket(projectile);
         return;
       }
@@ -4922,6 +5619,7 @@ export class CombatSystem {
         continue;
       }
 
+      this.releaseSpikeImpale(pending.ownerId);
       const player = players.find((item) => item.id === pending.ownerId);
       const owner = this.combatants.get(pending.ownerId);
       const landingX = projectile.x - (player?.width ?? owner?.width ?? DEFAULT_PHYSICS.width) / 2;
@@ -4940,6 +5638,13 @@ export class CombatSystem {
         owner.y = landingY;
         owner.velocityX = projectile.vx * 0.28;
         owner.velocityY = Math.min(projectile.vy * 0.18, -180);
+      }
+      const riddenVan = this.getVanDrivenBy(pending.ownerId);
+      if (riddenVan) {
+        riddenVan.x = landingX + (player?.width ?? owner?.width ?? DEFAULT_PHYSICS.width) / 2 - riddenVan.width / 2;
+        riddenVan.y = Math.min(landingY + (player?.height ?? owner?.height ?? DEFAULT_PHYSICS.height) - riddenVan.height + 8, COMBAT_TUNING.projectiles.floorY - riddenVan.height);
+        riddenVan.velocityX = projectile.vx * 0.28;
+        riddenVan.velocityY = Math.min(projectile.vy * 0.18, -180);
       }
       this.addEffect("teleport", projectile.x, projectile.y, projectile.x, projectile.y, "#b096ff", "Arrival");
       this.queueSound("teleport-arrival");
@@ -5372,7 +6077,7 @@ export class CombatSystem {
     aim: Vec2,
     label: string,
     now: number,
-    extra: Partial<Pick<CombatEventPacket, "targetId" | "damage" | "kx" | "ky" | "stun" | "status" | "hitLocation">> = {},
+    extra: Partial<Pick<CombatEventPacket, "targetId" | "damage" | "kx" | "ky" | "stun" | "status" | "hitLocation" | "range">> = {},
   ): CombatEventPacket {
     return {
       t: "c",
@@ -5567,24 +6272,119 @@ function statusForHit(weaponId: WeaponId | undefined, location: HitLocation | un
 function clampSpikePoint(point: Vec2): Vec2 {
   return {
     x: clamp(point.x, DEFAULT_PHYSICS.platformLeft + spikeBoundsPadding, DEFAULT_PHYSICS.platformRight - spikeBoundsPadding),
-    y: clamp(point.y, 90, COMBAT_TUNING.projectiles.floorY),
+    y: clamp(point.y, -3200, COMBAT_TUNING.projectiles.floorY),
   };
 }
 
-function spikeCurrentHeight(spike: SpikeState): number {
-  if (spike.disintegrating) {
-    return spike.height * Math.max(0, 1 - spike.disintegrateAge / spikeDisintegrateDuration);
+function buildSpikeGeometry(player: PlayerPhysicsState, point: Vec2): { base: Vec2; tip: Vec2; direction: Vec2; length: number } {
+  const tip = clampSpikePoint(point);
+  const ownerCenter = {
+    x: player.x + player.width / 2,
+    y: player.y + player.height / 2,
+  };
+  const facing = facingFromAim(tip.x - ownerCenter.x, player.facing);
+  const floorY = COMBAT_TUNING.projectiles.floorY;
+  const fromOwner = normalize({
+    x: tip.x - ownerCenter.x || facing,
+    y: tip.y - ownerCenter.y || -0.4,
+  });
+  const heightFromFloor = floorY - tip.y;
+  let base: Vec2;
+  if (heightFromFloor <= 260) {
+    const groundDrop = clamp(78 + heightFromFloor * 0.58, 76, 230);
+    const backstep = clamp(34 + heightFromFloor * 0.16, 34, 86);
+    base = {
+      x: tip.x - facing * backstep,
+      y: Math.min(floorY + 24, tip.y + groundDrop),
+    };
+  } else {
+    const distance = Math.hypot(tip.x - ownerCenter.x, tip.y - ownerCenter.y);
+    const length = clamp(distance * 0.72, spikeMinLength, spikeMaxLength);
+    base = {
+      x: tip.x - fromOwner.x * length,
+      y: tip.y - fromOwner.y * length,
+    };
   }
-  return spike.height * easeOutCubic(clamp(spike.age / spike.growDuration, 0, 1));
+  let delta = { x: tip.x - base.x, y: tip.y - base.y };
+  let length = Math.hypot(delta.x, delta.y);
+  if (length < spikeMinLength) {
+    const fallback = normalize({ x: facing * 0.38, y: -1 });
+    base = {
+      x: tip.x - fallback.x * spikeMinLength,
+      y: tip.y - fallback.y * spikeMinLength,
+    };
+    delta = { x: tip.x - base.x, y: tip.y - base.y };
+    length = spikeMinLength;
+  }
+  const direction = normalize(delta);
+  return { base, tip, direction, length };
 }
 
-function targetIntersectsSpike(target: Combatant, spike: SpikeState): boolean {
-  const height = Math.max(18, spikeCurrentHeight(spike));
-  const top = spike.baseY - height;
-  return target.x + target.width >= spike.x - spike.width / 2
-    && target.x <= spike.x + spike.width / 2
-    && target.y + target.height >= top
-    && target.y <= spike.baseY + 6;
+function spikeCurrentLength(spike: SpikeState): number {
+  if (spike.disintegrating) {
+    return spike.length * Math.max(0, 1 - spike.disintegrateAge / spikeDisintegrateDuration);
+  }
+  return spike.length * easeOutCubic(clamp(spike.age / spike.growDuration, 0, 1));
+}
+
+function spikeCurrentTip(spike: SpikeState): Vec2 {
+  const length = Math.max(16, spikeCurrentLength(spike));
+  return {
+    x: spike.baseX + spike.dirX * length,
+    y: spike.baseY + spike.dirY * length,
+  };
+}
+
+function targetSpikeContact(target: Combatant, spike: SpikeState): { kind: "body" | "tip"; point: Vec2 } | undefined {
+  const from = { x: spike.baseX, y: spike.baseY };
+  const to = spikeCurrentTip(spike);
+  const tipDistance = distanceRectToPoint(target, to);
+  if (tipDistance <= spikeTipRadius) {
+    return { kind: "tip", point: to };
+  }
+  const closest = closestRectPointToSegment(target, from, to);
+  if (!closest || closest.distance > spike.width / 2 + 10) {
+    return undefined;
+  }
+  return { kind: "body", point: closest.point };
+}
+
+function closestRectPointToSegment(target: Combatant, from: Vec2, to: Vec2): { distance: number; point: Vec2 } | undefined {
+  const samples = [
+    { x: target.x + target.width / 2, y: target.y + target.height / 2 },
+    { x: target.x, y: target.y },
+    { x: target.x + target.width, y: target.y },
+    { x: target.x, y: target.y + target.height },
+    { x: target.x + target.width, y: target.y + target.height },
+    { x: target.x + target.width / 2, y: target.y },
+    { x: target.x + target.width / 2, y: target.y + target.height },
+  ];
+  let nearest: { distance: number; point: Vec2 } | undefined;
+  for (const sample of samples) {
+    const projected = closestPointOnSegment(sample, from, to);
+    const distance = Math.hypot(sample.x - projected.x, sample.y - projected.y);
+    if (!nearest || distance < nearest.distance) {
+      nearest = { distance, point: projected };
+    }
+  }
+  return nearest;
+}
+
+function closestPointOnSegment(point: Vec2, from: Vec2, to: Vec2): Vec2 {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const lengthSq = Math.max(1, dx * dx + dy * dy);
+  const t = clamp(((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSq, 0, 1);
+  return {
+    x: from.x + dx * t,
+    y: from.y + dy * t,
+  };
+}
+
+function distanceRectToPoint(target: Combatant, point: Vec2): number {
+  const closestX = clamp(point.x, target.x, target.x + target.width);
+  const closestY = clamp(point.y, target.y, target.y + target.height);
+  return Math.hypot(point.x - closestX, point.y - closestY);
 }
 
 function easeOutCubic(value: number): number {
@@ -5640,6 +6440,8 @@ function colorForWeapon(id: WeaponId): string {
     case "chainsaw":
       return "#b8bfd7";
     case "spikes":
+      return "#f2f2f2";
+    case "van":
       return "#f2f2f2";
     case "hands":
       return "#b8ffd0";

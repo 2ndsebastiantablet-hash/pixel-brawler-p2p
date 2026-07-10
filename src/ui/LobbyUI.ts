@@ -1090,6 +1090,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#b8bfd7";
     case "spikes":
       return "#f2f2f2";
+    case "van":
+      return "#f2f2f2";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
