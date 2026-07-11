@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(24);
+    expect(fighter.weaponInventory).toHaveLength(25);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -2387,6 +2387,166 @@ describe("combat system", () => {
     expect(van.state).toBe("destroyed");
     expect(combat.getCombatant("owner")!.hp).toBeLessThan(ownerHp);
     expect(combat.getSnapshot().effects.some((effect) => effect.label === "VAN EXPLOSION")).toBe(true);
+  });
+
+  it("balances Van gas, speed, Space entry, airborne spawn, landing damage, and driver explosion damage", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("van");
+    const owner = { ...playerState, id: "owner", x: 0, y: 112, grounded: false, velocityX: 0, velocityY: 0 };
+    const driver = { ...playerState, id: "driver", x: 42, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Owner", "#18dff5");
+    combat.syncRemotePlayer({
+      id: "driver",
+      name: "Driver",
+      color: "#ff6f91",
+      x: driver.x,
+      y: driver.y,
+      width: driver.width,
+      height: driver.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.usePrimary({ ownerId: "owner", player: owner, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    const van = combat.getSnapshot().vans[0];
+    const floorY = DEFAULT_PHYSICS.groundY - van.height;
+    expect(van.y).toBeLessThan(floorY - 120);
+    expect(van.velocityY).toBeGreaterThanOrEqual(owner.velocityY);
+    combat.update(1.15, [owner, driver]);
+    expect(van.y).toBe(floorY);
+    expect(van.health).toBeLessThan(van.maxHealth);
+
+    driver.x = van.x - driver.width - 18;
+    driver.y = van.y + van.height - driver.height;
+    const entered = combat.tryEnterVan("driver", driver, {
+      x: driver.x + driver.width / 2,
+      y: driver.y + driver.height / 2,
+    }, 1400);
+    expect(entered).toMatchObject({ kind: "utility", label: "Enter Van" });
+
+    for (let step = 0; step < 5; step += 1) {
+      combat.handleVanDriverInput("driver", { left: false, right: false, shiftPressed: true, jumpPressed: false, honkPressed: false }, driver, 1500 + step);
+    }
+    expect(van.speedLevel).toBe(5);
+    let maxObservedSpeed = 0;
+    for (let frame = 0; frame < 50 * 60; frame += 1) {
+      combat.handleVanDriverInput("driver", { left: false, right: true, shiftPressed: false, jumpPressed: false, honkPressed: false }, driver, 1600 + frame * 16);
+      combat.update(1 / 60, [owner, driver]);
+      maxObservedSpeed = Math.max(maxObservedSpeed, Math.abs(van.velocityX));
+    }
+    expect(van.gas).toBeGreaterThan(0.5);
+    expect(maxObservedSpeed).toBeGreaterThan(DEFAULT_PHYSICS.maxRunSpeed);
+
+    const driverHp = combat.getCombatant("driver")!.hp;
+    van.health = 1;
+    combat.damageVan(van.id, 999, "owner", 55_000);
+    expect(van.state).toBe("destroyed");
+    expect(combat.getCombatant("driver")!.hp).toBeLessThan(driverHp);
+    expect(combat.getCombatant("driver")!.velocityY).toBeLessThan(-100);
+  });
+
+  it("lets normal weapon and effect systems damage and shove the heavy Van", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const attacker = { ...playerState, id: "attacker", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(attacker, "Attacker", "#18dff5");
+    combat.equip("van");
+    combat.usePrimary({ ownerId: "attacker", player: attacker, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.6, [attacker]);
+    const van = combat.getSnapshot().vans[0];
+    const startHealth = van.health;
+
+    combat.equip("machete");
+    attacker.x = van.x - attacker.width - 20;
+    attacker.y = DEFAULT_PHYSICS.groundY - attacker.height;
+    attacker.facing = 1;
+    combat.syncLocalPlayer(attacker, "Attacker", "#18dff5");
+    combat.usePrimary({ ownerId: "attacker", player: attacker, aim: { x: 1, y: 0 }, now: 900, heldMs: 0, isNewPress: true });
+    combat.update(0.08, [attacker]);
+    expect(van.health).toBeLessThan(startHealth);
+
+    const afterMachete = van.health;
+    combat.equip("death-aura");
+    combat.usePrimary({ ownerId: "attacker", player: attacker, aim: { x: 1, y: 0 }, now: 1300, heldMs: 0, isNewPress: true });
+    combat.update(0.3, [attacker]);
+    expect(van.health).toBeLessThan(afterMachete);
+
+    const afterAura = van.health;
+    attacker.justSlamLanded = true;
+    attacker.x = van.x + van.width / 2 - attacker.width / 2;
+    combat.syncLocalPlayer(attacker, "Attacker", "#18dff5");
+    combat.update(0.05, [attacker]);
+    expect(van.health).toBeLessThan(afterAura);
+    expect(van.velocityY).toBeLessThan(0);
+
+    const afterSlam = van.health;
+    combat.equip("spikes");
+    combat.usePrimary({ ownerId: "attacker", player: attacker, aim: { x: 1, y: 0 }, now: 2000, heldMs: 0, isNewPress: true });
+    combat.placeSpikeAt("attacker", attacker, { x: van.x + van.width / 2, y: van.y + van.height / 2 }, 2100);
+    combat.update(0.12, [attacker]);
+    expect(van.health).toBeLessThan(afterSlam);
+  });
+
+  it("runs Spirit of a Fighter as a strict beat focus mode with Winded failure", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("spirit-fighter" as never);
+    const fighter = { ...playerState, id: "fighter", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(fighter, "Fighter", "#18dff5");
+    const target = combat.spawnTrainingDummy({ x: 70, y: playerState.y });
+
+    const activated = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(activated).toMatchObject({ kind: "utility", weaponId: "spirit-fighter", label: "Spirit Focus" });
+    expect(combat.getCombatant("fighter")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "spiritFocus" })]));
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
+      spiritActive: true,
+      spiritCombo: 0,
+    });
+
+    combat.update(0.72, [fighter]);
+    const punch = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 820, heldMs: 0, isNewPress: true });
+    expect(punch.label).toMatch(/Spirit (Perfect|Good) Punch/);
+    expect(combat.getCombatant(target.id)!.hp).toBeLessThan(100);
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritCombo).toBe(1);
+
+    const offBeat = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 900, heldMs: 0, isNewPress: true });
+    expect(offBeat).toMatchObject({ kind: "blocked", weaponId: "spirit-fighter", label: "Spirit Miss" });
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
+    expect(combat.getCombatant("fighter")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "winded" })]));
+    expect(combat.getPlayerInventory().cooldowns["spirit-fighter" as never]).toBeGreaterThan(50);
+  });
+
+  it("ends Spirit focus for no-action beats, whiffs, and incoming hits", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("spirit-fighter" as never);
+    const fighter = { ...playerState, id: "fighter", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(fighter, "Fighter", "#18dff5");
+
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(1.1, [fighter]);
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
+    expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(true);
+
+    combat.update(61, [fighter]);
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 2000, heldMs: 0, isNewPress: true });
+    combat.update(0.72, [fighter]);
+    const whiff = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 2720, heldMs: 0, isNewPress: true });
+    expect(whiff).toMatchObject({ kind: "blocked", label: "Spirit Whiff" });
+
+    combat.update(61, [fighter]);
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 4000, heldMs: 0, isNewPress: true });
+    combat.applyDamage({
+      sourceId: "dummy",
+      targetId: "fighter",
+      damage: 5,
+      knockback: { x: 0, y: -20 },
+      stun: 0.1,
+      label: "Test Hit",
+    });
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
+    expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(true);
   });
 
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {

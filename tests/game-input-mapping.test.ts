@@ -37,6 +37,20 @@ describe("game mouse weapon input mapping", () => {
     });
   });
 
+  it("keeps Grappling Hook pull priority after loadout swaps when the hook is attached", () => {
+    const loadout: LoadoutState = {
+      leftHand: "pistol",
+      rightHand: "machete",
+      attachment: "grappling-hook",
+      frontStrap: "van",
+    };
+
+    expect(resolveMouseWeaponAction("secondary", loadout, { preferGrapplePull: true })).toEqual({
+      weaponId: "grappling-hook",
+      action: "secondary",
+    });
+  });
+
   it("keeps two-handed held items on left primary and right secondary controls", () => {
     const loadout: LoadoutState = {
       leftHand: "axe",

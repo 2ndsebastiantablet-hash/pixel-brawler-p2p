@@ -54,6 +54,14 @@ describe("loadout equipment slots", () => {
     })).toEqual({
       backStrap: "van",
     });
+    expect(normalizeLoadout({
+      frontStrap: "spirit-fighter" as never,
+      rightHand: "spirit-fighter" as never,
+      attachment: "spirit-fighter" as never,
+      legs: "spirit-fighter" as never,
+    })).toEqual({
+      frontStrap: "spirit-fighter",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -103,6 +111,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("van", "rightHand")).toBe(false);
     expect(isSlotCompatible("van", "attachment")).toBe(false);
     expect(isSlotCompatible("van", "legs")).toBe(false);
+    expect(isSlotCompatible("spirit-fighter" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("spirit-fighter" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("spirit-fighter" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("spirit-fighter" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("spirit-fighter" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("spirit-fighter" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -126,6 +140,10 @@ describe("loadout equipment slots", () => {
     const withVan = assignLoadoutItem(DEFAULT_LOADOUT, "backStrap", "van");
     expect(withVan.backStrap).toBe("van");
     expect(loadoutHasWeapon(withVan, "van")).toBe(true);
+
+    const withSpirit = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "spirit-fighter" as never);
+    expect(withSpirit.frontStrap).toBe("spirit-fighter");
+    expect(loadoutHasWeapon(withSpirit, "spirit-fighter" as never)).toBe(true);
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {

@@ -111,6 +111,11 @@ export type SoundId =
   | "van-crash"
   | "van-hit"
   | "van-explode"
+  | "spirit-start"
+  | "spirit-beat"
+  | "spirit-perfect"
+  | "spirit-hit"
+  | "spirit-miss"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -237,6 +242,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "van-crash": { category: "heavy", frequency: 92, endFrequency: 32, duration: 0.28, noise: true, minInterval: 0.16 },
   "van-hit": { category: "combat", frequency: 250, endFrequency: 110, duration: 0.08, noise: true, minInterval: 0.06 },
   "van-explode": { category: "heavy", frequency: 70, endFrequency: 28, duration: 0.5, noise: true, minInterval: 0.28 },
+  "spirit-start": { category: "weapon", frequency: 260, endFrequency: 880, duration: 0.32, type: "triangle", minInterval: 0.3 },
+  "spirit-beat": { category: "weapon", frequency: 620, endFrequency: 420, duration: 0.055, type: "square", minInterval: 0.18 },
+  "spirit-perfect": { category: "combat", frequency: 980, endFrequency: 520, duration: 0.11, type: "triangle", minInterval: 0.08 },
+  "spirit-hit": { category: "combat", frequency: 420, endFrequency: 120, duration: 0.1, noise: true, minInterval: 0.06 },
+  "spirit-miss": { category: "heavy", frequency: 180, endFrequency: 48, duration: 0.28, noise: true, minInterval: 0.18 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

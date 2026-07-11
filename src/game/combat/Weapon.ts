@@ -22,6 +22,7 @@ export type WeaponId =
   | "chainsaw"
   | "spikes"
   | "van"
+  | "spirit-fighter"
   | "hands"
   | "super-legs"
   | "teleport-ball"

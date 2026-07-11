@@ -54,6 +54,12 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "van", "Van", "backStrap");
     await expectSlot(page, "backStrap", "Van");
 
+    await dragItemToSlot(page, "spirit-fighter", "Spirit of a Fighter", "frontStrap");
+    await expectSlot(page, "frontStrap", "Spirit of a Fighter");
+
+    await dragItemToSlot(page, "spirit-fighter", "Spirit of a Fighter", "backStrap");
+    await expectSlot(page, "backStrap", "Spirit of a Fighter");
+
     await dragItemToSlot(page, "wings", "Wings", "backStrap");
     await expectSlot(page, "backStrap", "Wings");
 
@@ -78,6 +84,10 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "rightHand", "Chainsaw");
     await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
 
+    await dragItemToSlot(page, "spirit-fighter", "Spirit of a Fighter", "rightHand");
+    await expectSlot(page, "rightHand", "Chainsaw");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spirit of a Fighter cannot attach");
+
     await dragItemToSlot(page, "wings", "Wings", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Wings cannot attach");
@@ -89,6 +99,10 @@ test.describe("character creator loadout drag and drop", () => {
     await dragItemToSlot(page, "van", "Van", "attachment");
     await expectSlot(page, "attachment", "Virgin Blood");
     await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
+
+    await dragItemToSlot(page, "spirit-fighter", "Spirit of a Fighter", "attachment");
+    await expectSlot(page, "attachment", "Virgin Blood");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spirit of a Fighter cannot attach");
 
     await dragItemToSlot(page, "super-legs", "Super Legs", "rightHand");
     await expectSlot(page, "rightHand", "Chainsaw");
@@ -106,8 +120,12 @@ test.describe("character creator loadout drag and drop", () => {
     await expectSlot(page, "legs", "Super Legs");
     await expect(page.locator("[data-loadout-error]")).toContainText("Van cannot attach");
 
+    await dragItemToSlot(page, "spirit-fighter", "Spirit of a Fighter", "legs");
+    await expectSlot(page, "legs", "Super Legs");
+    await expect(page.locator("[data-loadout-error]")).toContainText("Spirit of a Fighter cannot attach");
+
     await page.locator("[data-offline]").click();
-    await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Spikes");
+    await expect(page.locator(".loadout-strip")).toContainText("Q Front Strap: Spirit of a Fighter");
     await expect(page.locator(".loadout-strip")).toContainText("E Back Strap: Wings");
     await expect(page.locator(".loadout-strip")).toContainText("Left Mouse: Chainsaw");
     await expect(page.locator(".loadout-strip")).toContainText("Right Mouse: Chainsaw");

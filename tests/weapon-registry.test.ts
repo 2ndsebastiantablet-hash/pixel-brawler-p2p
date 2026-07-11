@@ -26,6 +26,7 @@ const enabledWeapons = [
   "chainsaw",
   "spikes",
   "van",
+  "spirit-fighter",
 ] as const;
 
 describe("weapon registry", () => {
@@ -55,6 +56,7 @@ describe("weapon registry", () => {
       "chainsaw",
       "spikes",
       "van",
+      "spirit-fighter",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -101,6 +103,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.chainsaw).toBeUndefined();
     expect(inventory.ammo.spikes).toBeUndefined();
     expect(inventory.ammo.van).toBeUndefined();
+    expect(inventory.ammo["spirit-fighter"]).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -124,5 +127,7 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("spikes").weight.label).toBe("Light");
     expect(weaponRegistry.get("van").description).toBe("Strap vehicle. Q/E spawns or absorbs a physics van. Anyone can drive it. Ram players, honk to stun, shoot from inside, and manage gas/health.");
     expect(weaponRegistry.get("van").weight.label).toBe("Heavy");
+    expect(weaponRegistry.get("spirit-fighter").description).toBe("High-skill rhythm fighting mode. Stay on beat to punch, counter, grab, throw, and unleash flurries. One missed beat or whiff ends the mode and makes you Winded.");
+    expect(weaponRegistry.get("spirit-fighter").weight.label).toBe("Light");
   });
 });

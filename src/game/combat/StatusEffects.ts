@@ -16,6 +16,8 @@ export type StatusEffectId =
   | "poison"
   | "spikePoison"
   | "spikeMode"
+  | "spiritFocus"
+  | "winded"
   | "scrambled"
   | "handsMissing"
   | "superLegs";

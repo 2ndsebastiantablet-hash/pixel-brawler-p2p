@@ -321,19 +321,34 @@ export class Game {
     if (movementInput.jumpPressed && this.combat.getRocketState(this.localPlayer.state.id).riding) {
       this.combat.jumpOffRocket(this.localPlayer.state.id, this.localPlayer.state);
     }
+    if (movementInput.jumpPressed && !this.combat.getRocketState(this.localPlayer.state.id).riding && !this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      const enter = this.combat.tryEnterVan(this.localPlayer.state.id, this.localPlayer.state, {
+        x: this.localPlayer.state.x + this.localPlayer.state.width / 2,
+        y: this.localPlayer.state.y + this.localPlayer.state.height / 2,
+      }, time);
+      if (enter.kind === "utility") {
+        this.recordAttack(enter, "primary");
+        movementInput = { ...movementInput, jumpPressed: false, jumpHeld: false };
+      }
+    }
     let vanConsumedSecondary = false;
     if (this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      const grappleRuntime = this.combat.getWeaponRuntimeState("grappling-hook", this.localPlayer.state.id);
+      const driverSecondaryAction = resolveMouseWeaponAction("secondary", this.loadout, {
+        preferGrapplePull: grappleRuntime.grappleActive,
+      });
+      const shouldHonk = combatInput.secondaryPressed && !driverSecondaryAction;
       const vanResult = this.combat.handleVanDriverInput(this.localPlayer.state.id, {
         left: movementInput.left,
         right: movementInput.right,
         shiftPressed: movementInput.dashPressed,
         jumpPressed: movementInput.jumpPressed,
-        honkPressed: combatInput.secondaryPressed,
+        honkPressed: shouldHonk,
       }, this.localPlayer.state, time);
       if (vanResult) {
-        this.recordAttack(vanResult, combatInput.secondaryPressed ? "secondary" : "primary");
+        this.recordAttack(vanResult, shouldHonk ? "secondary" : "primary");
       }
-      vanConsumedSecondary = combatInput.secondaryPressed;
+      vanConsumedSecondary = shouldHonk;
       if (movementInput.jumpPressed) {
         movementInput = { ...movementInput, jumpPressed: false, jumpHeld: false };
       }
@@ -348,6 +363,15 @@ export class Game {
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.combat.setEquipmentStatus(this.localPlayer.state.id, "superLegs", loadoutHasWeapon(this.loadout, "super-legs"));
     this.handleSuperLegsKick(movementInput, lockedOut, time);
+    const spiritRuntime = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
+    if (!lockedOut && spiritRuntime.spiritActive && movementInput.dashPressed) {
+      const horizontal = Number(movementInput.right) - Number(movementInput.left);
+      const vertical = Number(movementInput.down) - Number(movementInput.up);
+      this.recordAttack(this.combat.useSpiritFlashStep(this.localPlayer.state.id, this.localPlayer.state, {
+        x: horizontal || this.lastAim.x || this.localPlayer.state.facing,
+        y: vertical || this.lastAim.y,
+      }, time), "secondary");
+    }
     this.handleCombatInput({
       ...combatInput,
       secondaryPressed: vanConsumedSecondary ? false : combatInput.secondaryPressed,
@@ -572,19 +596,23 @@ export class Game {
       }, time), input.secondaryPressed ? "secondary" : "primary");
     }
 
-    let vanConsumedPrimary = false;
-    if (!spikeModeActive && input.primaryPressed && !this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
-      const enter = this.combat.tryEnterVan(this.localPlayer.state.id, this.localPlayer.state, {
-        x: this.lastMouse.x + this.camera.x,
-        y: this.lastMouse.y + this.camera.y,
-      }, time);
-      if (enter.kind === "utility") {
-        this.recordAttack(enter, "primary");
-        vanConsumedPrimary = true;
-      }
+    const spiritRuntime = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
+    const spiritActive = spiritRuntime.spiritActive;
+    if (spiritActive && !spikeModeActive && (input.primaryPressed || input.primaryReleased || input.secondaryPressed || input.secondaryReleased)) {
+      const useSecondary = input.secondaryPressed || input.secondaryReleased;
+      this.handleWeaponAction("spirit-fighter", useSecondary ? "secondary" : "primary", {
+        pressed: useSecondary ? input.secondaryPressed : input.primaryPressed,
+        held: useSecondary ? input.secondaryHeld : input.primaryHeld,
+        released: useSecondary ? input.secondaryReleased : input.primaryReleased,
+        heldMs: useSecondary ? this.secondaryHeldMs : this.primaryHeldMs,
+        isFirstHeldFrame: useSecondary ? this.secondaryHeldMs < dt * 1000 + 1 : this.primaryHeldMs < dt * 1000 + 1,
+        attackKind: useSecondary ? "secondary" : "primary",
+        now: time,
+        aim,
+      });
     }
 
-    const primaryAction = spikeModeActive || vanConsumedPrimary ? null : resolveMouseWeaponAction("primary", this.loadout);
+    const primaryAction = spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
@@ -599,7 +627,7 @@ export class Game {
     }
 
     const grappleRuntime = this.combat.getWeaponRuntimeState("grappling-hook", this.localPlayer.state.id);
-    const secondaryAction = spikeModeActive ? null : resolveMouseWeaponAction("secondary", this.loadout, {
+    const secondaryAction = spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("secondary", this.loadout, {
       preferGrapplePull: grappleRuntime.grappleActive,
     });
     if (secondaryAction && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
@@ -1064,19 +1092,22 @@ export class Game {
         : 1;
     const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
     const holy = local?.statuses.some((status) => status.id === "holyBuff") ? 1.16 : 1;
+    const spiritFocus = local?.statuses.some((status) => status.id === "spiritFocus") ? 1.1 : 1;
+    const winded = local?.statuses.some((status) => status.id === "winded") ? 0.55 : 1;
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
     const superLegs = loadoutHasWeapon(this.loadout, "super-legs");
     const superLegsMoveScale = superLegs ? 1.18 : 1;
-    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * superLegsMoveScale;
+    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * spiritFocus * winded * superLegsMoveScale;
+    const jumpStatusScale = (empowered > 1 ? 1.06 : 1) * (spiritFocus > 1 ? 1.03 : 1) * (winded < 1 ? 0.72 : 1);
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
       acceleration: DEFAULT_PHYSICS.acceleration * weight.accelerationMultiplier * movementScale * (superLegs ? 1.12 : 1),
       airAcceleration: DEFAULT_PHYSICS.airAcceleration * weight.airAccelerationMultiplier * movementScale * (superLegs ? 1.18 : 1),
-      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.08 : 1),
-      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.06 : 1) * (superLegs ? 1.1 : 1),
-      thirdJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * (empowered > 1 ? 1.04 : 1) * (superLegs ? 0.96 : 1),
+      jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 1.08 : 1),
+      doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 1.1 : 1),
+      thirdJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 0.96 : 1),
       maxAirJumps: superLegs ? 3 : 2,
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.16 : 1),
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.2 : 1),
@@ -1201,7 +1232,7 @@ export class Game {
   private drawLocalWeapon(ctx: CanvasRenderingContext2D): void {
     const weaponId = this.combat.getPlayerInventory().equippedWeapon;
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
-    if (localCombatant?.statuses.some((status) => status.id === "spikeMode")) {
+    if (localCombatant?.statuses.some((status) => status.id === "spikeMode" || status.id === "spiritFocus")) {
       return;
     }
     if (weaponId === "super-legs") {
@@ -1746,6 +1777,20 @@ export class Game {
       ctx.fillRect(x - 4, y + 19, 5, 16);
       ctx.fillRect(x + state.width - 1, y + 19, 5, 16);
     }
+    if (statuses.includes("spiritFocus")) {
+      const pulse = 0.5 + Math.sin(performance.now() * 0.014) * 0.5;
+      ctx.strokeStyle = "#ffd84d";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 10 - pulse * 3, y - 10 - pulse * 3, state.width + 20 + pulse * 6, state.height + 20 + pulse * 6);
+      ctx.fillStyle = "rgba(255, 216, 77, 0.16)";
+      ctx.fillRect(x - 7, y - 8, state.width + 14, state.height + 16);
+    }
+    if (statuses.includes("winded")) {
+      ctx.fillStyle = "rgba(255, 111, 145, 0.22)";
+      ctx.fillRect(x - 5, y + state.height - 12, state.width + 10, 14);
+      ctx.fillStyle = "#ff6f91";
+      ctx.fillRect(x + 4, y + state.height + 2, state.width - 8, 4);
+    }
     if (remote.current.rocketActive) {
       this.drawRemoteRocketState(ctx, state, remote.current.rocketLit ?? false);
     }
@@ -1765,6 +1810,24 @@ export class Game {
       const pulse = Math.round(performance.now() / 120) % 3;
       ctx.fillRect(x + 4 + pulse * 5, y - 10, 5, 5);
       ctx.fillRect(x + state.width - 8, y + 8 + pulse * 3, 4, 4);
+      ctx.restore();
+    }
+    if (statuses.includes("spiritFocus")) {
+      const pulse = 0.5 + Math.sin(performance.now() * 0.014) * 0.5;
+      ctx.save();
+      ctx.strokeStyle = "#ffd84d";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 10 - pulse * 3, y - 10 - pulse * 3, state.width + 20 + pulse * 6, state.height + 20 + pulse * 6);
+      ctx.fillStyle = "rgba(255, 216, 77, 0.16)";
+      ctx.fillRect(x - 7, y - 8, state.width + 14, state.height + 16);
+      ctx.restore();
+    }
+    if (statuses.includes("winded")) {
+      ctx.save();
+      ctx.fillStyle = "rgba(255, 111, 145, 0.22)";
+      ctx.fillRect(x - 5, y + state.height - 12, state.width + 10, 14);
+      ctx.fillStyle = "#ff6f91";
+      ctx.fillRect(x + 4, y + state.height + 2, state.width - 8, 4);
       ctx.restore();
     }
   }
@@ -1790,7 +1853,7 @@ export class Game {
 
   private drawRemoteWeapon(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
     const weaponId = remote.current.weaponId;
-    if (!weaponId || weaponId === "wings" || weaponId === "super-legs" || remote.current.statuses?.includes("spikeMode")) {
+    if (!weaponId || weaponId === "wings" || weaponId === "super-legs" || remote.current.statuses?.includes("spikeMode") || remote.current.statuses?.includes("spiritFocus")) {
       return;
     }
     const state = remote.player.state;
@@ -2772,6 +2835,7 @@ export class Game {
     const lightning = this.combat.getLightningState(this.localPlayer.state.id);
     const spikes = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
     const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
+    const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
@@ -2788,8 +2852,11 @@ export class Game {
       lightning.strain > 0 ? `Strain ${Math.round(lightning.strain * 100)}%` : "",
       spikes.spikeModeActive ? `Spikes ${spikes.spikeModeTimer.toFixed(1)}s - ${spikes.spikeCount} active` : "",
       !spikes.spikeModeActive && spikes.spikeCooldown > 0 ? `Spikes cooldown ${spikes.spikeCooldown.toFixed(1)}s` : "",
+      spirit.spiritActive ? `Spirit ${spirit.spiritTimer.toFixed(1)}s - Beat ${Math.round(spirit.spiritBeatProgress * 100)}% - Combo ${spirit.spiritCombo}${spirit.spiritFeedback ? ` - ${spirit.spiritFeedback}` : ""}` : "",
+      !spirit.spiritActive && spirit.spiritWindedTimer > 0 ? `Winded ${spirit.spiritWindedTimer.toFixed(1)}s` : "",
+      !spirit.spiritActive && spirit.spiritCooldown > 0 ? `Spirit cooldown ${spirit.spiritCooldown.toFixed(1)}s` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
-        ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : ""}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
+        ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
       superLegsText,
     ].filter(Boolean).join(" - ");
@@ -2980,6 +3047,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f2f2f2";
     case "van":
       return "#f2f2f2";
+    case "spirit-fighter":
+      return "#ffd84d";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -3074,7 +3143,13 @@ function weaponHudDetail(
         ? `Spike mode ${runtime.spikeModeTimer.toFixed(1)}s - Active spikes ${runtime.spikeCount}`
         : `Spike cooldown ${runtime.spikeCooldown.toFixed(1)}s - Active spikes ${runtime.spikeCount}`;
     case "van":
-      return `HP ${Math.ceil(runtime.vanHealth)}/${runtime.vanMaxHealth} - Gas ${Math.ceil(runtime.vanGas)}/${runtime.vanMaxGas} - Speed ${runtime.vanSpeedLevel}${runtime.vanDriving ? " - Space exits" : ""}`;
+      return `HP ${Math.ceil(runtime.vanHealth)}/${runtime.vanMaxHealth} - Gas ${Math.ceil(runtime.vanGas)}/${runtime.vanMaxGas} - Speed ${runtime.vanSpeedLevel}${runtime.vanDriving ? " - Space exits" : " - Space enters"}`;
+    case "spirit-fighter":
+      return runtime.spiritActive
+        ? `Beat ${Math.round(runtime.spiritBeatProgress * 100)}% - Combo ${runtime.spiritCombo} - ${runtime.spiritFeedback || "stay on beat"}`
+        : runtime.spiritWindedTimer > 0
+          ? `Winded ${runtime.spiritWindedTimer.toFixed(1)}s`
+          : `Cooldown ${runtime.spiritCooldown.toFixed(1)}s`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -3135,7 +3210,9 @@ function weaponHelper(id: WeaponId): string {
     case "spikes":
       return "Q/E activates 30s spike mode - click aims spike tips";
     case "van":
-      return "Q/E spawn/absorb - click enter - A/D drive - Shift speed - right honk";
+      return "Q/E spawn/absorb - Space enter/exit - A/D drive - Shift speed - right honk";
+    case "spirit-fighter":
+      return "Q/E focus mode - punch/throw on beat - one miss makes Winded";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

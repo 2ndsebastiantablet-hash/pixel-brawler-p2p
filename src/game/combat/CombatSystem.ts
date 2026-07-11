@@ -30,6 +30,8 @@ export interface Combatant {
   statuses: StatusEffect[];
 }
 
+type RectLike = Pick<Combatant, "x" | "y" | "width" | "height">;
+
 export interface DroppedWeapon {
   id: string;
   weaponId: WeaponId;
@@ -160,6 +162,21 @@ export interface VanDriverInput {
   shiftPressed: boolean;
   jumpPressed: boolean;
   honkPressed: boolean;
+}
+
+export interface SpiritFocusState {
+  ownerId: string;
+  active: boolean;
+  timer: number;
+  cooldownTimer: number;
+  windedTimer: number;
+  beatInterval: number;
+  beatTimer: number;
+  timingWindow: number;
+  combo: number;
+  perfectStreak: number;
+  feedback: string;
+  feedbackTimer: number;
 }
 
 export interface CombatEffect {
@@ -328,13 +345,13 @@ const vanMaxGas = 100;
 const vanGasRefillPerSecond = 9;
 const vanStoredRepairPerSecond = 2.5;
 const vanDestroyedRepairThreshold = 34;
-const vanDriveAcceleration = 680;
+const vanDriveAcceleration = 3600;
 const vanFriction = 2.6;
 const vanAirDrag = 0.58;
-const vanMaxSpeedBase = 210;
-const vanMaxSpeedStep = 72;
-const vanGasDrainBase = 2.4;
-const vanGasDrainStep = 1.6;
+const vanMaxSpeedBase = 660;
+const vanMaxSpeedStep = 160;
+const vanGasDrainBase = 0.9;
+const vanGasDrainStep = 0.18;
 const vanRamCooldown = 0.28;
 const vanHonkCooldownSeconds = 4.2;
 const vanHonkRange = 230;
@@ -345,6 +362,17 @@ const vanExplosionCenterKnockback = 1180;
 const vanExplosionEdgeKnockback = 520;
 const vanExplosionCenterStun = 0.72;
 const vanExplosionEdgeStun = 0.38;
+const spiritMaxDuration = 25;
+const spiritCooldownDuration = 60;
+const spiritWindedDuration = 9;
+const spiritInitialBeatInterval = 0.76;
+const spiritMinimumBeatInterval = 0.56;
+const spiritInitialTimingWindow = 0.18;
+const spiritMinimumTimingWindow = 0.1;
+const spiritPunchRange = 94;
+const spiritGrabRange = 74;
+const spiritLaneHalfWidth = 48;
+const spiritFlashStepSpeed = 760;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -467,6 +495,15 @@ export interface WeaponRuntimeState {
   vanMaxGas: number;
   vanSpeedLevel: number;
   vanHonkCooldown: number;
+  spiritActive: boolean;
+  spiritTimer: number;
+  spiritCooldown: number;
+  spiritWindedTimer: number;
+  spiritBeatProgress: number;
+  spiritBeatWindow: number;
+  spiritCombo: number;
+  spiritPerfectStreak: number;
+  spiritFeedback: string;
   zombieCount: number;
   attachedHands: number;
 }
@@ -506,6 +543,7 @@ export class CombatSystem {
   private readonly spikeParticles: SpikeParticleState[] = [];
   private readonly spikeImpales = new Map<string, SpikeImpaleState>();
   private readonly vans: VanState[] = [];
+  private readonly spiritFocusModes = new Map<string, SpiritFocusState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -545,6 +583,7 @@ export class CombatSystem {
     this.spikeParticles.length = 0;
     this.spikeImpales.clear();
     this.vans.length = 0;
+    this.spiritFocusModes.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -711,6 +750,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "van") {
       return this.toggleVan(context);
     }
+    if (this.inventory.equippedWeapon === "spirit-fighter") {
+      return this.useSpiritPrimary(context);
+    }
     if (this.inventory.equippedWeapon === "rocket") {
       return this.placeRocket(context);
     }
@@ -757,6 +799,9 @@ export class CombatSystem {
     }
     if (weapon.id === "van") {
       return { kind: "blocked", weaponId: weapon.id, label: "Van uses Q/E" };
+    }
+    if (weapon.id === "spirit-fighter") {
+      return this.useSpiritSecondary(context);
     }
     if (weapon.id === "rocket") {
       return this.lightRocket(context);
@@ -1037,6 +1082,10 @@ export class CombatSystem {
       ));
     }
 
+    if (request.sourceId !== target.id && damage > 0) {
+      this.failSpiritFocus(target.id, "HIT", true);
+    }
+
     if (target.hp <= 0) {
       if (this.consumeVirginBloodRevive(target)) {
         return { applied: true, remainingHp: target.hp, hitLocation };
@@ -1075,6 +1124,7 @@ export class CombatSystem {
 
     this.updateTimedVisuals(dt);
     this.updateInventory(dt);
+    this.updateSpiritFocusModes(dt);
     this.updateHolyBazookaAmmo(dt, players);
     this.updateGrapples(dt, players);
     this.updateChainsaws(dt);
@@ -1268,6 +1318,7 @@ export class CombatSystem {
     const ownedVan = this.getVanForOwner(ownerId);
     const drivenVan = this.getVanDrivenBy(ownerId);
     const van = ownedVan ?? drivenVan;
+    const spirit = this.getOrCreateSpiritFocus(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1312,6 +1363,15 @@ export class CombatSystem {
       vanMaxGas: van?.maxGas ?? vanMaxGas,
       vanSpeedLevel: van?.speedLevel ?? 0,
       vanHonkCooldown: van?.honkCooldown ?? 0,
+      spiritActive: spirit.active,
+      spiritTimer: spirit.active ? spirit.timer : 0,
+      spiritCooldown: spirit.cooldownTimer,
+      spiritWindedTimer: spirit.windedTimer,
+      spiritBeatProgress: spirit.active ? clamp(1 - Math.max(0, spirit.beatTimer) / Math.max(0.01, spirit.beatInterval), 0, 1) : 0,
+      spiritBeatWindow: spirit.timingWindow,
+      spiritCombo: spirit.combo,
+      spiritPerfectStreak: spirit.perfectStreak,
+      spiritFeedback: spirit.feedbackTimer > 0 ? spirit.feedback : "",
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -2045,6 +2105,332 @@ export class CombatSystem {
     return { kind: "utility", weaponId, label: "Spike Mode" };
   }
 
+  private useSpiritPrimary(context: WeaponUseContext): WeaponUseResult {
+    const state = this.getOrCreateSpiritFocus(context.ownerId);
+    if (!state.active) {
+      return this.activateSpiritFocus(context);
+    }
+    return this.resolveSpiritBeatAttack(context, "primary");
+  }
+
+  private useSpiritSecondary(context: WeaponUseContext): WeaponUseResult {
+    const state = this.getOrCreateSpiritFocus(context.ownerId);
+    if (!state.active) {
+      return this.activateSpiritFocus(context);
+    }
+    return this.resolveSpiritBeatAttack(context, "secondary");
+  }
+
+  private activateSpiritFocus(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "spirit-fighter";
+    const owner = this.combatants.get(context.ownerId);
+    const state = this.getOrCreateSpiritFocus(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No fighter" };
+    }
+    if (state.windedTimer > 0 || owner.statuses.some((status) => status.id === "winded")) {
+      return { kind: "blocked", weaponId, label: "Winded" };
+    }
+    if (state.cooldownTimer > 0 || (this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Spirit cooldown" };
+    }
+    state.active = true;
+    state.timer = spiritMaxDuration;
+    state.cooldownTimer = 0;
+    state.windedTimer = 0;
+    state.beatInterval = spiritInitialBeatInterval;
+    state.beatTimer = spiritInitialBeatInterval;
+    state.timingWindow = spiritInitialTimingWindow;
+    state.combo = 0;
+    state.perfectStreak = 0;
+    state.feedback = "FOCUS";
+    state.feedbackTimer = 0.7;
+    owner.statuses = owner.statuses.filter((status) => status.id !== "winded");
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spiritFocus"));
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    this.addEffect("aura", center.x, center.y, center.x, center.y - 70, colorForWeapon(weaponId), "BEAT FOCUS");
+    this.queueSound("spirit-start");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "equip", center, normalize(context.aim), "Spirit Focus", context.now));
+    return { kind: "utility", weaponId, label: "Spirit Focus" };
+  }
+
+  private resolveSpiritBeatAttack(context: WeaponUseContext, action: "primary" | "secondary"): WeaponUseResult {
+    const weaponId: WeaponId = "spirit-fighter";
+    const state = this.getOrCreateSpiritFocus(context.ownerId);
+    const owner = this.combatants.get(context.ownerId);
+    if (!state.active || !owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No focus" };
+    }
+    const grade = this.consumeSpiritBeat(context.ownerId);
+    if (!grade) {
+      this.failSpiritFocus(context.ownerId, "MISS", true);
+      return { kind: "blocked", weaponId, label: "Spirit Miss" };
+    }
+
+    const range = action === "secondary" ? spiritGrabRange : spiritPunchRange + Math.min(36, state.combo * 4);
+    const target = this.findSpiritTarget(context.player, context.aim, range);
+    if (!target) {
+      this.failSpiritFocus(context.ownerId, "WHIFF", true);
+      return { kind: "blocked", weaponId, label: "Spirit Whiff" };
+    }
+
+    state.combo += 1;
+    if (grade === "perfect") {
+      state.perfectStreak += 1;
+    }
+    const finisher = action === "primary" && state.combo % 3 === 0;
+    const precision = action === "primary" && state.perfectStreak >= 8;
+    const flurry = action === "primary" && context.heldMs >= 420 && state.perfectStreak >= 4;
+    const damage = action === "secondary"
+      ? (grade === "perfect" ? 18 : 12)
+      : precision
+        ? 42
+        : flurry
+          ? 20
+          : finisher
+            ? (grade === "perfect" ? 28 : 22)
+            : grade === "perfect"
+              ? 12
+              : 8;
+    const direction = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing, y: 0 });
+    const knockback = action === "secondary"
+      ? { x: direction.x * 460, y: -420 }
+      : precision
+        ? { x: direction.x * 980, y: -620 }
+        : finisher
+          ? { x: direction.x * 660, y: -460 }
+          : flurry
+            ? { x: direction.x * 300, y: -160 }
+            : { x: direction.x * (grade === "perfect" ? 360 : 260), y: -130 };
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const label = action === "secondary"
+      ? `${grade === "perfect" ? "Spirit Perfect" : "Spirit Good"} Throw`
+      : precision
+        ? "Spirit Precision Finisher"
+        : flurry
+          ? "Spirit 100-Punch Flurry"
+          : finisher
+            ? "Spirit Triple Finisher"
+            : `Spirit ${grade === "perfect" ? "Perfect" : "Good"} Punch`;
+    const hit = this.applyDamage({
+      sourceId: context.ownerId,
+      targetId: target.id,
+      weaponId,
+      damage,
+      knockback,
+      stun: precision ? 0.72 : finisher ? 0.48 : action === "secondary" ? 0.42 : 0.18,
+      label,
+      status: action === "secondary" || finisher || precision ? "daze" : undefined,
+      skipHitLocationScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+      this.failSpiritFocus(context.ownerId, "WHIFF", true);
+      return { kind: "blocked", weaponId, label: "Spirit Whiff" };
+    }
+
+    this.advanceSpiritBeat(state, grade, label);
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.45 };
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height * 0.45 };
+    this.addEffect(precision ? "shockwave" : flurry ? "whip" : "spark", ownerCenter.x, ownerCenter.y, targetCenter.x, targetCenter.y, colorForWeapon(weaponId), grade.toUpperCase());
+    this.queueSound(grade === "perfect" ? "spirit-perfect" : "spirit-hit");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, action, ownerCenter, direction, label, context.now, {
+      targetId: target.id,
+      damage,
+      kx: knockback.x,
+      ky: knockback.y,
+      stun: precision ? 0.72 : finisher ? 0.48 : 0.18,
+      status: action === "secondary" || finisher || precision ? "daze" : undefined,
+    }));
+    if (precision) {
+      this.finishSpiritFocus(context.ownerId, "FINISHER");
+    }
+    return { kind: "hitbox", weaponId, label };
+  }
+
+  useSpiritFlashStep(ownerId: string, player: PlayerPhysicsState, direction: Vec2, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "spirit-fighter";
+    const state = this.getOrCreateSpiritFocus(ownerId);
+    if (!state.active) {
+      return { kind: "blocked", weaponId, label: "No focus" };
+    }
+    const grade = this.consumeSpiritBeat(ownerId);
+    if (!grade) {
+      this.failSpiritFocus(ownerId, "MISS", true);
+      return { kind: "blocked", weaponId, label: "Spirit Miss" };
+    }
+    const step = normalize(direction.x || direction.y ? direction : { x: player.facing, y: 0 });
+    player.velocityX = step.x * spiritFlashStepSpeed;
+    player.velocityY = Math.min(player.velocityY, step.y * spiritFlashStepSpeed * 0.32 - 80);
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      owner.velocityX = player.velocityX;
+      owner.velocityY = player.velocityY;
+    }
+    this.advanceSpiritBeat(state, grade, "Spirit Flash Step");
+    this.addEffect("teleport", player.x + player.width / 2, player.y + player.height / 2, player.x + player.width / 2 + step.x * 46, player.y + player.height / 2 + step.y * 24, colorForWeapon(weaponId), "FLASH");
+    this.queueSound("dash");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", { x: player.x + player.width / 2, y: player.y + player.height / 2 }, step, "Spirit Flash Step", now));
+    return { kind: "utility", weaponId, label: "Spirit Flash Step" };
+  }
+
+  private consumeSpiritBeat(ownerId: string): "perfect" | "good" | undefined {
+    const state = this.getOrCreateSpiritFocus(ownerId);
+    const offset = Math.abs(state.beatTimer);
+    if (offset > state.timingWindow) {
+      return undefined;
+    }
+    return offset <= state.timingWindow * 0.46 ? "perfect" : "good";
+  }
+
+  private advanceSpiritBeat(state: SpiritFocusState, grade: "perfect" | "good", feedback: string): void {
+    state.beatInterval = clamp(spiritInitialBeatInterval - state.combo * 0.018, spiritMinimumBeatInterval, spiritInitialBeatInterval);
+    state.timingWindow = clamp(spiritInitialTimingWindow - state.combo * 0.006, spiritMinimumTimingWindow, spiritInitialTimingWindow);
+    state.beatTimer = state.beatInterval;
+    state.feedback = grade === "perfect" ? "PERFECT" : "GOOD";
+    if (feedback.includes("Flurry")) {
+      state.feedback = "FLURRY";
+    } else if (feedback.includes("Finisher")) {
+      state.feedback = "FINISHER";
+    }
+    state.feedbackTimer = 0.65;
+  }
+
+  private updateSpiritFocusModes(dt: number): void {
+    for (const [ownerId, state] of this.spiritFocusModes.entries()) {
+      state.cooldownTimer = Math.max(0, state.cooldownTimer - dt);
+      state.windedTimer = Math.max(0, state.windedTimer - dt);
+      state.feedbackTimer = Math.max(0, state.feedbackTimer - dt);
+      if (state.cooldownTimer > 0) {
+        this.inventory.cooldowns["spirit-fighter"] = state.cooldownTimer;
+      }
+      const owner = this.combatants.get(ownerId);
+      if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+        if (state.active) {
+          this.failSpiritFocus(ownerId, "BROKEN", false);
+        }
+        continue;
+      }
+      if (state.windedTimer <= 0 && owner.statuses.some((status) => status.id === "winded")) {
+        owner.statuses = owner.statuses.filter((status) => status.id !== "winded");
+      }
+      if (!state.active) {
+        continue;
+      }
+      state.timer = Math.max(0, state.timer - dt);
+      const previousBeatTimer = state.beatTimer;
+      state.beatTimer -= dt;
+      owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spiritFocus"));
+      if (previousBeatTimer > 0 && state.beatTimer <= 0) {
+        const cx = owner.x + owner.width / 2;
+        const cy = owner.y + owner.height / 2;
+        this.addEffect("aura", cx, cy, cx, cy - 58, colorForWeapon("spirit-fighter"), "BEAT");
+        this.queueSound("spirit-beat");
+      }
+      if (state.timer <= 0) {
+        this.finishSpiritFocus(ownerId, "COMPLETE");
+        continue;
+      }
+      if (state.beatTimer < -state.timingWindow) {
+        this.failSpiritFocus(ownerId, "MISS", true);
+      }
+    }
+  }
+
+  private failSpiritFocus(ownerId: string, feedback: string, winded: boolean): void {
+    const state = this.spiritFocusModes.get(ownerId);
+    if (!state || (!state.active && (!winded || state.windedTimer > 0))) {
+      return;
+    }
+    state.active = false;
+    state.timer = 0;
+    state.combo = 0;
+    state.perfectStreak = 0;
+    state.beatTimer = state.beatInterval;
+    state.feedback = feedback;
+    state.feedbackTimer = 1.2;
+    state.cooldownTimer = spiritCooldownDuration;
+    this.inventory.cooldowns["spirit-fighter"] = spiritCooldownDuration;
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      owner.statuses = owner.statuses.filter((status) => status.id !== "spiritFocus");
+      if (winded) {
+        state.windedTimer = spiritWindedDuration;
+        owner.statuses = upsertStatusEffect(owner.statuses, createStatus("winded"));
+      }
+      this.addEffect("aura", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2, owner.y - 36, "#ff6f91", feedback);
+    }
+    this.queueSound("spirit-miss");
+  }
+
+  private finishSpiritFocus(ownerId: string, feedback: string): void {
+    const state = this.spiritFocusModes.get(ownerId);
+    if (!state) {
+      return;
+    }
+    state.active = false;
+    state.timer = 0;
+    state.combo = 0;
+    state.perfectStreak = 0;
+    state.feedback = feedback;
+    state.feedbackTimer = 1;
+    state.cooldownTimer = spiritCooldownDuration;
+    this.inventory.cooldowns["spirit-fighter"] = spiritCooldownDuration;
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      owner.statuses = owner.statuses.filter((status) => status.id !== "spiritFocus");
+      this.addEffect("shockwave", owner.x + owner.width / 2, owner.y + owner.height / 2, owner.x + owner.width / 2 + owner.velocityX * 0.08, owner.y, colorForWeapon("spirit-fighter"), feedback);
+    }
+    this.queueSound("spirit-perfect");
+  }
+
+  private findSpiritTarget(player: PlayerPhysicsState, aim: Vec2, range: number): Combatant | undefined {
+    const direction = normalize(aim.x || aim.y ? aim : { x: player.facing, y: 0 });
+    const origin = this.muzzle(player);
+    let nearest: { target: Combatant; forward: number } | undefined;
+    for (const target of this.combatants.values()) {
+      if (target.id === player.id || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      const tx = target.x + target.width / 2;
+      const ty = target.y + target.height * 0.45;
+      const dx = tx - origin.x;
+      const dy = ty - origin.y;
+      const forward = dx * direction.x + dy * direction.y;
+      const lateral = Math.abs(-direction.y * dx + direction.x * dy);
+      if (forward < -14 || forward > range || lateral > spiritLaneHalfWidth) {
+        continue;
+      }
+      if (!nearest || forward < nearest.forward) {
+        nearest = { target, forward };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private getOrCreateSpiritFocus(ownerId: string): SpiritFocusState {
+    let state = this.spiritFocusModes.get(ownerId);
+    if (!state) {
+      state = {
+        ownerId,
+        active: false,
+        timer: 0,
+        cooldownTimer: 0,
+        windedTimer: 0,
+        beatInterval: spiritInitialBeatInterval,
+        beatTimer: spiritInitialBeatInterval,
+        timingWindow: spiritInitialTimingWindow,
+        combo: 0,
+        perfectStreak: 0,
+        feedback: "",
+        feedbackTimer: 0,
+      };
+      this.spiritFocusModes.set(ownerId, state);
+    }
+    return state;
+  }
+
   private toggleVan(context: WeaponUseContext): WeaponUseResult {
     const weaponId: WeaponId = "van";
     const owner = this.combatants.get(context.ownerId);
@@ -2067,13 +2453,15 @@ export class CombatSystem {
       return { kind: "blocked", weaponId, label: "Van wrecked" };
     }
     const facing = facingFromAim(context.aim.x, context.player.facing);
+    const floorY = COMBAT_TUNING.projectiles.floorY - van.height;
+    const bodyY = context.player.y + context.player.height / 2 - van.height / 2;
     van.state = "emerging";
     van.age = 0;
     van.facing = facing;
-    van.x = context.player.x + context.player.width / 2 + facing * 34 - van.width / 2;
-    van.y = COMBAT_TUNING.projectiles.floorY - van.height;
-    van.velocityX = facing * 290;
-    van.velocityY = -34;
+    van.x = context.player.x + context.player.width / 2 + facing * 38 - van.width / 2;
+    van.y = context.player.grounded ? floorY : Math.min(bodyY, floorY - 1);
+    van.velocityX = context.player.velocityX * 0.45 + facing * 420;
+    van.velocityY = context.player.grounded ? -34 : Math.max(0, context.player.velocityY);
     van.occupantId = undefined;
     van.speedLevel = clamp(van.speedLevel, 0, 5);
     van.damageFlash = 0;
@@ -2085,12 +2473,22 @@ export class CombatSystem {
   }
 
   tryEnterVan(driverId: string, player: PlayerPhysicsState, point: Vec2, now: number): WeaponUseResult {
+    const driverCenter = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
     const van = this.vans.find((item) =>
       (item.state === "active" || item.state === "emerging")
-      && point.x >= item.x - 18
-      && point.x <= item.x + item.width + 18
-      && point.y >= item.y - 18
-      && point.y <= item.y + item.height + 20
+      && (
+        (point.x >= item.x - 18
+          && point.x <= item.x + item.width + 18
+          && point.y >= item.y - 18
+          && point.y <= item.y + item.height + 20)
+        || distanceRectToPoint(item, driverCenter) <= 150
+        || intersectsRect(item, {
+          x: player.x - 28,
+          y: player.y - 18,
+          width: player.width + 56,
+          height: player.height + 36,
+        })
+      )
     );
     if (!van) {
       return { kind: "blocked", weaponId: "van", label: "No van" };
@@ -2102,9 +2500,8 @@ export class CombatSystem {
     if (van.occupantId && van.occupantId !== driverId) {
       return { kind: "blocked", weaponId: "van", label: "Occupied" };
     }
-    const driverCenter = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
     const vanCenter = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
-    if (Math.hypot(driverCenter.x - vanCenter.x, driverCenter.y - vanCenter.y) > 210) {
+    if (Math.hypot(driverCenter.x - vanCenter.x, driverCenter.y - vanCenter.y) > 230) {
       return { kind: "blocked", weaponId: "van", label: "Too far" };
     }
     van.occupantId = driverId;
@@ -2133,8 +2530,7 @@ export class CombatSystem {
     const throttle = Number(input.right) - Number(input.left);
     if (throttle !== 0 && van.gas > 0) {
       van.facing = throttle < 0 ? -1 : 1;
-      van.velocityX += throttle * (vanDriveAcceleration / 9.5 + van.speedLevel * 24);
-      van.gas = Math.max(0, van.gas - 0.08 * (1 + van.speedLevel * 0.35));
+      van.velocityX += throttle * (vanDriveAcceleration / 60 + van.speedLevel * 22);
       this.addEffect("tracer", van.x + van.width / 2 - van.facing * 36, van.y + van.height - 8, van.x + van.width / 2 - van.facing * 70, van.y + van.height - 5, "#b8bfd7", "DUST");
     }
     if (input.honkPressed) {
@@ -2143,14 +2539,19 @@ export class CombatSystem {
     return null;
   }
 
-  damageVan(vanId: string, damage: number, sourceId: string, now = performanceNow()): boolean {
+  damageVan(vanId: string, damage: number, sourceId: string, now = performanceNow(), force?: Vec2): boolean {
     const van = this.vans.find((item) => item.id === vanId);
     if (!van || van.state === "stored" || van.state === "destroyed" || van.health <= 0) {
       return false;
     }
     van.health = Math.max(0, van.health - damage);
     van.damageFlash = 0.22;
-    van.velocityX += Math.sign((van.x + van.width / 2) - (this.combatants.get(sourceId)?.x ?? van.x) || 1) * Math.min(260, damage * 4);
+    if (force) {
+      van.velocityX += force.x * 0.34;
+      van.velocityY += force.y * 0.34;
+    } else {
+      van.velocityX += Math.sign((van.x + van.width / 2) - (this.combatants.get(sourceId)?.x ?? van.x) || 1) * Math.min(260, damage * 4);
+    }
     this.addEffect("spark", van.x + van.width / 2, van.y + van.height * 0.45, van.x + van.width / 2, van.y, colorForWeapon("van"), "VAN HIT");
     this.queueSound("van-hit");
     if (van.health > 0) {
@@ -2967,10 +3368,12 @@ export class CombatSystem {
       }
       const falloff = 1 - distance / options.radius;
       const damage = Math.round(lerp(options.edgeDamage, options.centerDamage, falloff) * 0.82);
+      const knockback = lerp(options.edgeKnockback, options.centerKnockback, falloff);
       const direction = normalize({ x: vx - options.x || 1, y: vy - options.y || -0.2 });
-      van.velocityX += direction.x * lerp(options.edgeKnockback, options.centerKnockback, falloff) * 0.22;
-      van.velocityY += -Math.abs(direction.y) * 260 - 120 * falloff;
-      this.damageVan(van.id, damage, options.sourceId);
+      this.damageVan(van.id, damage, options.sourceId, performanceNow(), {
+        x: direction.x * knockback * 0.62,
+        y: -Math.abs(direction.y * knockback) * 0.62 - lerp(260, 520, falloff),
+      });
     }
     const holy = options.weaponId === "holy-bazooka";
     this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, holy ? "#fff4a8" : "#ff8f3d", holy ? "HOLY EXPLOSION" : "EXPLOSION");
@@ -3946,6 +4349,26 @@ export class CombatSystem {
         this.impaleTargetWithSpike(spike, target, true);
       }
     }
+    for (const van of this.damageableVans()) {
+      const contact = targetSpikeContact(van, spike);
+      if (!contact) {
+        continue;
+      }
+      const key = `${spike.id}:${van.id}:van-${contact.kind}`;
+      if (this.bodyContactCooldowns.has(key)) {
+        continue;
+      }
+      const tip = contact.kind === "tip";
+      this.damageVan(van.id, tip ? 28 : 14, spike.ownerId, performanceNow(), {
+        x: spike.dirX * (tip ? 720 : 360),
+        y: spike.dirY * (tip ? 420 : 220) - (tip ? 520 : 260),
+      });
+      this.bodyContactCooldowns.set(key, tip ? 0.72 : 0.48);
+      this.addEffect(tip ? "stun" : "spark", contact.point.x, contact.point.y, contact.point.x + spike.dirX * 24, contact.point.y + spike.dirY * 24, colorForWeapon("spikes"), tip ? "VAN SPIKED" : "VAN POISON");
+      if (tip) {
+        this.queueSound("spike-impale");
+      }
+    }
   }
 
   private applySpikeBodyPoison(spike: SpikeState, target: Combatant, point: Vec2): void {
@@ -4144,6 +4567,14 @@ export class CombatSystem {
     return van;
   }
 
+  private damageableVans(): VanState[] {
+    return this.vans.filter((van) =>
+      !van.visualOnly
+      && van.health > 0
+      && (van.state === "active" || van.state === "emerging" || van.state === "absorbing")
+    );
+  }
+
   getVanForOwner(ownerId: string): VanState | undefined {
     return this.vans.find((van) => van.ownerId === ownerId);
   }
@@ -4270,6 +4701,7 @@ export class CombatSystem {
     } else if (van.gas <= 0) {
       van.velocityX *= Math.max(0, 1 - dt * 2.2);
     }
+    this.applyVanRamContacts(van);
     van.velocityY += DEFAULT_PHYSICS.gravity * dt;
     van.velocityX *= Math.max(0, 1 - dt * vanFriction * (van.occupantId ? 0.45 : 1));
     van.velocityY *= Math.max(0, 1 - dt * vanAirDrag);
@@ -4279,7 +4711,7 @@ export class CombatSystem {
     if (van.y > floorY) {
       if (van.state === "active" && van.age > 0.8 && van.velocityY > 520) {
         this.addEffect("shockwave", van.x + van.width / 2, floorY + van.height, van.x + van.width / 2, floorY + van.height - 32, "#b8bfd7", "CRASH");
-        this.damageVan(van.id, Math.min(26, Math.round((van.velocityY - 480) / 24)), van.ownerId);
+        this.damageVan(van.id, Math.min(70, Math.round((van.velocityY - 480) / 16)), van.ownerId, performanceNow(), { x: 0, y: -Math.min(460, van.velocityY * 0.44) });
       }
       van.y = floorY;
       van.velocityY = Math.min(0, -van.velocityY * 0.16);
@@ -4340,7 +4772,7 @@ export class CombatSystem {
       if (this.bodyContactCooldowns.has(key)) {
         continue;
       }
-      const damage = clamp(Math.round((speed - 70) / 9 + van.speedLevel * 5), 4, 110);
+      const damage = clamp(Math.round((speed - 70) / 9 + van.speedLevel * 5), 4, 78);
       const knockback = clamp(speed * 1.25 + van.speedLevel * 80, 190, 1320);
       const previousInvulnerable = target.invulnerable;
       target.invulnerable = 0;
@@ -4669,6 +5101,29 @@ export class CombatSystem {
       this.addEffect("spark", ox, oy, ox + direction.x * 40, oy + direction.y * 40, colorForWeapon("grappling-hook"), "PULLED FREE");
     }
     const force = grappleHookPullForce * (activePull > 0 ? 1.05 : 0.35 + tension);
+    const drivenVan = this.getVanDrivenBy(grapple.ownerId);
+    if (drivenVan && drivenVan.state === "active") {
+      drivenVan.velocityX += direction.x * force * dt * 0.72;
+      drivenVan.velocityY += direction.y * force * dt * 0.54 - 18 * Math.max(tension, activePull * 0.35);
+      const vanSpeed = Math.hypot(drivenVan.velocityX, drivenVan.velocityY);
+      const vanMaxPullSpeed = grappleHookMaxPullSpeed * 0.9;
+      if (vanSpeed > vanMaxPullSpeed) {
+        const scale = vanMaxPullSpeed / vanSpeed;
+        drivenVan.velocityX *= scale;
+        drivenVan.velocityY *= scale;
+      }
+      if (player) {
+        player.velocityX = drivenVan.velocityX;
+        player.velocityY = drivenVan.velocityY;
+        player.grounded = false;
+      }
+      if (owner) {
+        owner.velocityX = drivenVan.velocityX;
+        owner.velocityY = drivenVan.velocityY;
+      }
+      this.addEffect("tracer", ox, oy, ox - direction.x * 56, oy - direction.y * 32, colorForWeapon("grappling-hook"), "VAN WINCH");
+      return;
+    }
     source.velocityX += direction.x * force * dt;
     source.velocityY += direction.y * force * dt - 22 * Math.max(tension, activePull * 0.35);
     const speed = Math.hypot(source.velocityX, source.velocityY);
@@ -5531,6 +5986,17 @@ export class CombatSystem {
           }
         }
       }
+      for (const van of this.damageableVans()) {
+        if (hitbox.hits.includes(van.id) || van.occupantId === hitbox.ownerId || !intersectsRect(hitbox, van)) {
+          continue;
+        }
+        const damage = Math.max(1, Math.round(hitbox.damage * (hitbox.heavy ? 1.05 : 0.85)));
+        if (this.damageVan(van.id, damage, hitbox.ownerId, performanceNow(), hitbox.knockback)) {
+          hitbox.hits.push(van.id);
+          const hitY = clamp(hitbox.y + hitbox.height / 2, van.y, van.y + van.height);
+          this.addEffect(hitbox.heavy ? "shockwave" : "spark", van.x + van.width / 2, hitY, van.x + van.width / 2 + Math.sign(hitbox.knockback.x || 1) * 30, hitY - 12, colorForWeapon(hitbox.weaponId), "VAN HIT");
+        }
+      }
     }
     removeWhere(this.hitboxes, (hitbox) => hitbox.age > hitbox.duration);
   }
@@ -5793,6 +6259,24 @@ export class CombatSystem {
         this.queueSound("death-aura");
         state.tickCooldowns.set(target.id, lerp(0.68, 0.38, power));
       }
+      const ox = owner.x + owner.width / 2;
+      const oy = owner.y + owner.height / 2;
+      for (const van of this.damageableVans()) {
+        if (state.tickCooldowns.has(van.id) || distanceRectToPoint(van, { x: ox, y: oy }) > radius) {
+          continue;
+        }
+        const vx = van.x + van.width / 2;
+        const vy = van.y + van.height / 2;
+        const direction = normalize({ x: vx - ox || owner.velocityX || 1, y: vy - oy || -0.35 });
+        const damage = Math.round(lerp(8, 26, power));
+        this.damageVan(van.id, damage, ownerId, performanceNow(), {
+          x: direction.x * (170 + power * 260),
+          y: -170 - power * 190,
+        });
+        this.addEffect("stun", vx, vy, vx, vy - 36, deathAuraColor(power), "VAN FROZEN");
+        this.queueSound("death-aura");
+        state.tickCooldowns.set(van.id, lerp(0.68, 0.38, power));
+      }
     }
   }
 
@@ -5977,6 +6461,72 @@ export class CombatSystem {
               weaponId: superLegsEquipped ? "super-legs" : undefined,
               color: superLegsEquipped ? colorForWeapon("super-legs") : undefined,
             });
+          }
+        }
+      }
+      this.applyVanBodyContacts(player, owner, superLegsEquipped);
+    }
+  }
+
+  private applyVanBodyContacts(player: PlayerPhysicsState, owner: Combatant, superLegsEquipped: boolean): void {
+    for (const van of this.damageableVans()) {
+      if (van.occupantId === player.id) {
+        continue;
+      }
+      const ownerCenterX = owner.x + owner.width / 2;
+      const vanCenterX = van.x + van.width / 2;
+      const direction = Math.sign(vanCenterX - ownerCenterX || player.facing || 1);
+
+      if ((player.sliding || player.action === "slide" || player.action === "lowSlide") && intersectsRect(owner, van)) {
+        const low = player.lowSliding || player.action === "lowSlide";
+        const key = `${player.id}:${van.id}:${low ? "van-low-slide" : "van-slide"}`;
+        if (!this.bodyContactCooldowns.has(key)) {
+          const damage = superLegsEquipped ? (low ? 24 : 16) : low ? 11 : 7;
+          this.damageVan(van.id, damage, player.id, performanceNow(), {
+            x: player.facing * (superLegsEquipped ? (low ? 900 : 680) : low ? 610 : 390),
+            y: superLegsEquipped ? (low ? -920 : -680) : low ? COMBAT_TUNING.lowSlideTripPopUpForce : COMBAT_TUNING.slideTripPopUpForce,
+          });
+          this.bodyContactCooldowns.set(key, superLegsEquipped ? 0.32 : 0.42);
+          this.addEffect("trip", vanCenterX, van.y + van.height * 0.58, vanCenterX + player.facing * 36, van.y + van.height * 0.58 - 18, superLegsEquipped ? colorForWeapon("super-legs") : "#ffffff", "VAN SLIDE");
+        }
+      }
+
+      if ((player.airDiving || player.action === "airDive") && intersectsRect(owner, van)) {
+        const key = `${player.id}:${van.id}:van-air-dive`;
+        if (!this.bodyContactCooldowns.has(key)) {
+          this.damageVan(van.id, 12, player.id, performanceNow(), { x: player.facing * 380, y: -130 });
+          this.bodyContactCooldowns.set(key, 0.34);
+          this.addEffect("spark", vanCenterX, van.y + van.height * 0.45, vanCenterX + player.facing * 28, van.y + van.height * 0.34, "#ffffff", "VAN DIVE");
+        }
+      }
+
+      if (player.groundSlamming && intersectsRect(owner, van)) {
+        const key = `${player.id}:${van.id}:van-ground-slam`;
+        if (!this.bodyContactCooldowns.has(key)) {
+          this.damageVan(van.id, superLegsEquipped ? 28 : 18, player.id, performanceNow(), {
+            x: direction * (superLegsEquipped ? 440 : 260),
+            y: superLegsEquipped ? -720 : -420,
+          });
+          this.bodyContactCooldowns.set(key, 0.36);
+          this.addEffect("slam", vanCenterX, van.y + van.height * 0.45, vanCenterX + direction * 42, van.y + van.height * 0.25, superLegsEquipped ? colorForWeapon("super-legs") : "#ffffff", "VAN SLAM");
+        }
+      }
+
+      if (player.justSlamLanded) {
+        const slamRadius = superLegsEquipped ? 250 : COMBAT_TUNING.groundSlam.radius;
+        const distance = Math.abs(vanCenterX - ownerCenterX);
+        if (distance <= slamRadius && Math.abs((van.y + van.height) - DEFAULT_PHYSICS.groundY) <= 120) {
+          const key = `${player.id}:${van.id}:van-slam-wave`;
+          if (!this.bodyContactCooldowns.has(key)) {
+            const falloff = 1 - distance / slamRadius;
+            const damage = superLegsEquipped ? Math.round(lerp(18, 48, falloff)) : Math.round(lerp(10, 24, falloff));
+            this.damageVan(van.id, damage, player.id, performanceNow(), {
+              x: direction * (superLegsEquipped ? lerp(420, 820, falloff) : lerp(260, 520, falloff)),
+              y: superLegsEquipped ? -lerp(520, 820, falloff) : -lerp(360, 620, falloff),
+            });
+            this.bodyContactCooldowns.set(key, 0.42);
+            this.addEffect("shockwave", ownerCenterX, DEFAULT_PHYSICS.groundY, vanCenterX, van.y + van.height * 0.55, superLegsEquipped ? colorForWeapon("super-legs") : "#ffffff", "VAN WAVE");
+            this.queueSound("ground-slam-impact");
           }
         }
       }
@@ -6335,7 +6885,7 @@ function spikeCurrentTip(spike: SpikeState): Vec2 {
   };
 }
 
-function targetSpikeContact(target: Combatant, spike: SpikeState): { kind: "body" | "tip"; point: Vec2 } | undefined {
+function targetSpikeContact(target: RectLike, spike: SpikeState): { kind: "body" | "tip"; point: Vec2 } | undefined {
   const from = { x: spike.baseX, y: spike.baseY };
   const to = spikeCurrentTip(spike);
   const tipDistance = distanceRectToPoint(target, to);
@@ -6349,7 +6899,7 @@ function targetSpikeContact(target: Combatant, spike: SpikeState): { kind: "body
   return { kind: "body", point: closest.point };
 }
 
-function closestRectPointToSegment(target: Combatant, from: Vec2, to: Vec2): { distance: number; point: Vec2 } | undefined {
+function closestRectPointToSegment(target: RectLike, from: Vec2, to: Vec2): { distance: number; point: Vec2 } | undefined {
   const samples = [
     { x: target.x + target.width / 2, y: target.y + target.height / 2 },
     { x: target.x, y: target.y },
@@ -6381,7 +6931,7 @@ function closestPointOnSegment(point: Vec2, from: Vec2, to: Vec2): Vec2 {
   };
 }
 
-function distanceRectToPoint(target: Combatant, point: Vec2): number {
+function distanceRectToPoint(target: RectLike, point: Vec2): number {
   const closestX = clamp(point.x, target.x, target.x + target.width);
   const closestY = clamp(point.y, target.y, target.y + target.height);
   return Math.hypot(point.x - closestX, point.y - closestY);
@@ -6443,6 +6993,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f2f2f2";
     case "van":
       return "#f2f2f2";
+    case "spirit-fighter":
+      return "#ffd84d";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -6600,6 +7152,10 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Spike Poison", duration: 18, stacks: 1, tickDamage: 4, tickEvery: 0.75, tickTimer: 0.75 };
     case "spikeMode":
       return { id, label: "Spike Mode", duration: spikeModeDuration, stacks: 1 };
+    case "spiritFocus":
+      return { id, label: "Beat Focus", duration: spiritMaxDuration, stacks: 1 };
+    case "winded":
+      return { id, label: "Winded", duration: spiritWindedDuration, stacks: 1 };
     case "scrambled":
       return { id, label: "Scrambled", duration: 7.5, stacks: 1, tickDamage: 1, tickEvery: 1 };
     case "handsMissing":
