@@ -65,6 +65,7 @@ const twoHandedWeapons = new Set<WeaponId>([
 
 const oneHandedWeapons = new Set<WeaponId>([
   "chainsaw",
+  "cross",
   "knife",
   "machete",
   "pistol",

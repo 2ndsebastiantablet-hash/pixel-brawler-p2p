@@ -23,6 +23,7 @@ export type WeaponId =
   | "spikes"
   | "van"
   | "spirit-fighter"
+  | "cross"
   | "hands"
   | "super-legs"
   | "teleport-ball"

@@ -93,6 +93,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelectorAll("[data-loadout-category]")).toHaveLength(0);
     expect(root.querySelector("[data-loadout-search]")).toBeInstanceOf(HTMLInputElement);
     expect(root.querySelector('[data-loadout-item="super-legs"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="cross"]')).toBeInstanceOf(HTMLButtonElement);
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();
     expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Wings");
@@ -157,6 +158,10 @@ describe("lobby loadout menu", () => {
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "death-aura");
     expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Death Aura");
     expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="frontStrap"]'), "cross");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Cross");
+    expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Front");
 
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "super-legs");
     expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Super Legs");

@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -1258,6 +1258,12 @@ export class Game {
   }
 
   private drawTinyLoadoutItem(ctx: CanvasRenderingContext2D, weaponId: WeaponId, x: number, y: number, size: number): void {
+    if (weaponId === "cross") {
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, Math.round(x - 2), Math.round(y - size / 2), 4, size);
+      this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - 2), size, 4);
+      return;
+    }
     ctx.fillStyle = colorForWeapon(weaponId);
     this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
     ctx.fillStyle = "#ffffff";
@@ -1545,6 +1551,7 @@ export class Game {
       && weaponId !== "lightning-rod"
       && weaponId !== "slingshot"
       && weaponId !== "whip"
+      && weaponId !== "cross"
     ) {
       return false;
     }
@@ -1644,6 +1651,20 @@ export class Game {
         this.pixelRect(ctx, -34, -8, 30 + Math.round(glow * 18), 16);
         ctx.fillStyle = "rgba(255, 255, 255, 0.42)";
         this.pixelRect(ctx, 68, -15, 26 + Math.round(glow * 10), 30);
+      }
+    } else if (weaponId === "cross") {
+      const charge = runtime ? Math.min(runtime.crossStopwatch / 10, 1) : 0.35;
+      const resting = Boolean(runtime && runtime.crossRestTimer > 0);
+      ctx.fillStyle = resting ? "#86869b" : "#fff4a8";
+      this.pixelRect(ctx, 18, -18, 8, 36);
+      this.pixelRect(ctx, 4, -5, 36, 10);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, 20, -13, 4, 8);
+      if (!resting) {
+        ctx.fillStyle = `rgba(255, 244, 168, ${0.22 + charge * 0.34})`;
+        this.pixelRect(ctx, -14 - Math.round(charge * 18), -24 - Math.round(charge * 10), 74 + Math.round(charge * 38), 48 + Math.round(charge * 20));
+        ctx.fillStyle = "#ffd84d";
+        this.pixelRect(ctx, 44, -3, 12 + Math.round(charge * 18), 6);
       }
     } else if (weaponId === "grappling-hook") {
       const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
@@ -2133,8 +2154,14 @@ export class Game {
     for (const spike of snapshot.spikes) {
       this.drawSpike(ctx, spike);
     }
+    for (const shield of snapshot.crossShields) {
+      this.drawCrossShield(ctx, shield);
+    }
     for (const particle of snapshot.spikeParticles) {
       this.drawSpikeParticle(ctx, particle);
+    }
+    for (const beam of snapshot.judgmentBeams) {
+      this.drawJudgmentBeam(ctx, beam);
     }
     for (const projectile of snapshot.projectiles) {
       this.drawProjectile(ctx, projectile);
@@ -2239,6 +2266,52 @@ export class Game {
       ctx.lineWidth = 2;
       ctx.strokeRect(-4, -half - 7, length + 12, half * 2 + 14);
     }
+    ctx.restore();
+  }
+
+  private drawCrossShield(ctx: CanvasRenderingContext2D, shield: CrossShieldState): void {
+    const progress = Math.min(1, shield.age / Math.max(0.01, shield.duration));
+    const x = Math.round(shield.x - this.camera.x);
+    const y = Math.round(shield.y - this.camera.y);
+    const radius = Math.round(shield.radius * (1 - progress * 0.18));
+    const angle = Math.atan2(shield.dirY, shield.dirX || 1);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = (shield.visualOnly ? 0.58 : 0.82) * Math.max(0.18, 1 - progress);
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.strokeStyle = "#fff4a8";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius, Math.round(radius * 0.46), 0, -Math.PI * 0.72, Math.PI * 0.72);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255, 244, 168, 0.2)";
+    ctx.fillRect(-Math.round(radius * 0.18), -Math.round(radius * 0.52), Math.round(radius * 0.62), Math.round(radius * 1.04));
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(Math.round(radius * 0.44), -4, 12, 8);
+    ctx.fillStyle = "#ffd84d";
+    ctx.fillRect(-4, -Math.round(radius * 0.42), 8, Math.round(radius * 0.84));
+    ctx.fillRect(-Math.round(radius * 0.2), -4, Math.round(radius * 0.4), 8);
+    ctx.restore();
+  }
+
+  private drawJudgmentBeam(ctx: CanvasRenderingContext2D, beam: JudgmentBeamState): void {
+    const x = Math.round(beam.x - this.camera.x);
+    const floorY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
+    const skyY = Math.round(Math.min(beam.y, DEFAULT_PHYSICS.groundY - 620) - this.camera.y);
+    const armed = beam.age >= beam.warning;
+    const warningProgress = Math.min(1, beam.age / Math.max(0.01, beam.warning));
+    const fade = Math.max(0.18, 1 - beam.age / Math.max(0.01, beam.duration));
+    const width = Math.round((armed ? beam.radius * 1.8 : 8 + warningProgress * 12));
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = beam.visualOnly ? 0.72 : 1;
+    ctx.fillStyle = armed ? `rgba(255, 244, 168, ${0.48 * fade})` : "rgba(255, 244, 168, 0.18)";
+    ctx.fillRect(x - width, skyY, width * 2, floorY - skyY + 28);
+    ctx.fillStyle = armed ? "#ffffff" : "#ffd84d";
+    ctx.fillRect(x - Math.max(3, Math.round(width * 0.22)), skyY, Math.max(6, Math.round(width * 0.44)), floorY - skyY + 34);
+    ctx.fillStyle = armed ? "rgba(90, 215, 255, 0.4)" : "rgba(255, 255, 255, 0.34)";
+    ctx.fillRect(x - width - 10, floorY - 10, width * 2 + 20, 18);
     ctx.restore();
   }
 
@@ -2586,6 +2659,12 @@ export class Game {
       ctx.fillRect(x - 8, y - 8, 16, 16);
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(x - 3, y - 3, 6, 6);
+    } else if (dropped.weaponId === "cross") {
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(x - 4, y - 16, 8, 32);
+      ctx.fillRect(x - 15, y - 5, 30, 8);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x - 2, y - 12, 4, 6);
     } else if (dropped.weaponId === "slingshot") {
       ctx.fillStyle = "#8b5a2b";
       ctx.fillRect(x - 4, y - 13, 6, 26);
@@ -2830,6 +2909,43 @@ export class Game {
     const x = Math.round(this.localPlayer.state.x - this.camera.x - 7);
     const y = Math.round(this.localPlayer.state.y - this.camera.y - 12);
     this.drawHealthBar(ctx, x, y, 46, local.hp, local.maxHp);
+    this.drawPoisonHeartUi(ctx, local);
+  }
+
+  private drawPoisonHeartUi(ctx: CanvasRenderingContext2D, combatant: Combatant): void {
+    const poison = combatant.statuses
+      .filter((status) => status.id === "poison" || status.id === "spikePoison")
+      .sort((left, right) => right.duration - left.duration)[0];
+    if (!poison) {
+      return;
+    }
+    const x = 62;
+    const y = this.canvas.height - 72;
+    const pulse = 1 + Math.sin(performance.now() * 0.012) * 0.12;
+    const block = Math.round(5 * pulse);
+    const heartPixels = [
+      [-2, -2], [-1, -3], [0, -2], [1, -3], [2, -2],
+      [-3, -1], [-2, -1], [-1, -1], [0, -1], [1, -1], [2, -1], [3, -1],
+      [-2, 0], [-1, 0], [0, 0], [1, 0], [2, 0],
+      [-1, 1], [0, 1], [1, 1],
+      [0, 2],
+    ];
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "rgba(4, 62, 24, 0.38)";
+    ctx.fillRect(x - 42, y - 42, 98, 78);
+    for (const [hx, hy] of heartPixels) {
+      ctx.fillStyle = poison.id === "spikePoison" ? "#b8ffd0" : "#7cff6b";
+      ctx.fillRect(x + hx * block, y + hy * block, block, block);
+    }
+    ctx.fillStyle = "#0f2415";
+    ctx.fillRect(x - block, y - block * 3, block, block * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText(`${poison.duration.toFixed(poison.duration >= 10 ? 0 : 1)}s`, x, y + 24);
+    ctx.restore();
   }
 
   private drawRemoteHealth(ctx: CanvasRenderingContext2D, remote: RemotePlayer): void {
@@ -2936,7 +3052,7 @@ export class Game {
       [-1, 1], [0, 1], [1, 1],
       [0, 2],
     ];
-    const brokenHeart = runtime.spiritFeedback === "MISS" || runtime.spiritFeedback === "WHIFF" || runtime.spiritFeedback === "HIT";
+    const brokenHeart = !runtime.spiritActive && (runtime.spiritFeedback === "MISS" || runtime.spiritFeedback === "WHIFF" || runtime.spiritFeedback === "HIT" || runtime.spiritFeedback === "BROKEN");
     ctx.shadowColor = runtime.spiritPerfectStreak >= 3 ? "#fff4a8" : "rgba(255, 255, 255, 0.55)";
     ctx.shadowBlur = runtime.spiritPerfectStreak >= 3 ? 18 : 8;
     for (const [hx, hy] of heartPixels) {
@@ -2953,6 +3069,15 @@ export class Game {
       ctx.lineTo(x, y);
       ctx.lineTo(x + block * 2, y + block * 2);
       ctx.stroke();
+    }
+    for (let index = 0; index < 3; index += 1) {
+      const markerX = x - 18 + index * 18;
+      const markerY = y + 44;
+      const spent = index < runtime.spiritMissesUsed;
+      ctx.fillStyle = spent ? "#ff6f91" : "rgba(255, 244, 168, 0.28)";
+      ctx.fillRect(markerX - 5, markerY - 5, 10, 10);
+      ctx.fillStyle = spent ? "#101018" : "#ffd84d";
+      ctx.fillRect(markerX - 2, markerY - 2, 4, 4);
     }
     if (runtime.spiritFeedback) {
       ctx.font = "bold 14px monospace";
@@ -2976,6 +3101,7 @@ export class Game {
     const spikes = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
     const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
     const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
+    const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
@@ -2995,6 +3121,8 @@ export class Game {
       spirit.spiritActive ? `Spirit ${spirit.spiritTimer.toFixed(1)}s - Beat ${Math.round(spirit.spiritBeatProgress * 100)}% - Combo ${spirit.spiritCombo}${spirit.spiritFeedback ? ` - ${spirit.spiritFeedback}` : ""}` : "",
       !spirit.spiritActive && spirit.spiritWindedTimer > 0 ? `Winded ${spirit.spiritWindedTimer.toFixed(1)}s` : "",
       !spirit.spiritActive && spirit.spiritCooldown > 0 ? `Spirit cooldown ${spirit.spiritCooldown.toFixed(1)}s` : "",
+      cross.crossJudgmentActive ? `Judgment Day ${cross.crossJudgmentTimer.toFixed(1)}s` : "",
+      cross.crossRestTimer > 0 ? `Cross resting ${cross.crossRestTimer.toFixed(1)}s` : loadoutHasWeapon(this.loadout, "cross") ? `Cross shield charge ${Math.round(Math.min(cross.crossStopwatch / 10, 1) * 100)}%` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -3210,6 +3338,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f2f2f2";
     case "spirit-fighter":
       return "#ffd84d";
+    case "cross":
+      return "#fff4a8";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -3307,10 +3437,16 @@ function weaponHudDetail(
       return `HP ${Math.ceil(runtime.vanHealth)}/${runtime.vanMaxHealth} - Gas ${Math.ceil(runtime.vanGas)}/${runtime.vanMaxGas} - Speed ${runtime.vanSpeedLevel}${runtime.vanDriving ? " - Space exits" : " - Space enters"}`;
     case "spirit-fighter":
       return runtime.spiritActive
-        ? `Beat ${Math.round(runtime.spiritBeatProgress * 100)}% - Combo ${runtime.spiritCombo} - ${runtime.spiritFeedback || "stay on beat"}`
+        ? `Beat ${Math.round(runtime.spiritBeatProgress * 100)}% - Combo ${runtime.spiritCombo} - Misses ${runtime.spiritMissesUsed}/3 - ${runtime.spiritFeedback || "stay on beat"}`
         : runtime.spiritWindedTimer > 0
           ? `Winded ${runtime.spiritWindedTimer.toFixed(1)}s`
           : `Cooldown ${runtime.spiritCooldown.toFixed(1)}s`;
+    case "cross":
+      return runtime.crossRestTimer > 0
+        ? `Resting ${runtime.crossRestTimer.toFixed(1)}s`
+        : runtime.crossJudgmentActive
+          ? `Judgment ${runtime.crossJudgmentTimer.toFixed(1)}s`
+          : `Shield stopwatch ${Math.round(Math.min(runtime.crossStopwatch / 10, 1) * 100)}%`;
     case "hands":
       return runtime.attachedHands > 0 ? `${runtime.attachedHands} face hands attached` : `Summon 5 - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "teleport-ball":
@@ -3366,6 +3502,8 @@ function weaponHelper(id: WeaponId): string {
       return "Right calls one map ammo pickup - Left fires homing missile";
     case "grappling-hook":
       return "Left fires/releases rope hook - hold right to pull while attached";
+    case "cross":
+      return "Left crescent shield - Right Judgment Day - 3 minute rest";
     case "chainsaw":
       return "Left runs immediately - close DPS overheats - chainsaw KOs make rising poison zombies";
     case "spikes":

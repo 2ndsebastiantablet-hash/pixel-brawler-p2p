@@ -4,7 +4,7 @@ export const spiritFighter: WeaponDefinition = {
   id: "spirit-fighter",
   name: "Spirit of a Fighter",
   kind: "utility",
-  description: "High-skill rhythm fighting mode. Stay on beat to punch, counter, grab, throw, and unleash flurries. One missed beat or whiff ends the mode and makes you Winded.",
+  description: "High-skill rhythm fighting mode. Stay on beat to punch, counter, grab, throw, and unleash flurries. Three missed beats or whiffs ends the mode and makes you Winded.",
   primary: { damage: 9, cooldown: 0, range: 92, knockback: 260, stun: 0.12 },
   secondary: { damage: 12, cooldown: 0, range: 78, knockback: 360, stun: 0.24 },
   weight: { label: "Light", moveSpeedMultiplier: 1.06, accelerationMultiplier: 1.12, airAccelerationMultiplier: 1.1, jumpMultiplier: 1.02, slideMultiplier: 1.04 },

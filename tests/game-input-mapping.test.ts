@@ -65,6 +65,17 @@ describe("game mouse weapon input mapping", () => {
     expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "axe", action: "secondary" });
   });
 
+  it("routes Cross as a normal held item for shield primary and Judgment secondary", () => {
+    const loadout: LoadoutState = {
+      leftHand: "cross" as never,
+      rightHand: "cross" as never,
+      attachment: "grappling-hook",
+    };
+
+    expect(resolveMouseWeaponAction("primary", loadout)).toEqual({ weaponId: "cross", action: "primary" });
+    expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "cross", action: "secondary" });
+  });
+
   it("resolves R reload to a held ammo weapon even when a strap item is currently equipped", () => {
     const inventory = createDefaultInventory();
     inventory.equippedWeapon = "spirit-fighter";

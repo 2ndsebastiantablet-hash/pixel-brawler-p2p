@@ -116,6 +116,10 @@ export type SoundId =
   | "spirit-perfect"
   | "spirit-hit"
   | "spirit-miss"
+  | "cross-shield"
+  | "cross-bounce"
+  | "judgment-day"
+  | "judgment-beam"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -247,6 +251,10 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "spirit-perfect": { category: "combat", frequency: 980, endFrequency: 520, duration: 0.11, type: "triangle", minInterval: 0.08 },
   "spirit-hit": { category: "combat", frequency: 420, endFrequency: 120, duration: 0.1, noise: true, minInterval: 0.06 },
   "spirit-miss": { category: "heavy", frequency: 180, endFrequency: 48, duration: 0.28, noise: true, minInterval: 0.18 },
+  "cross-shield": { category: "weapon", frequency: 520, endFrequency: 880, duration: 0.18, type: "triangle", minInterval: 0.12 },
+  "cross-bounce": { category: "combat", frequency: 860, endFrequency: 260, duration: 0.12, noise: true, minInterval: 0.08 },
+  "judgment-day": { category: "heavy", frequency: 76, endFrequency: 1040, duration: 0.72, noise: true, minInterval: 0.8 },
+  "judgment-beam": { category: "heavy", frequency: 1180, endFrequency: 180, duration: 0.24, noise: true, minInterval: 0.1 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

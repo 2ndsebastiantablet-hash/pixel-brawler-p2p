@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(25);
+    expect(fighter.weaponInventory).toHaveLength(26);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -337,6 +337,30 @@ describe("combat system", () => {
     expect(marker!.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - marker!.radius);
     combat.update(2.6, [shooter]);
     expect(shooter.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - shooter.height);
+  });
+
+  it("throws Teleporting Ball in a higher farther arc and keeps it rolling after landing", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("teleport-ball");
+    const shooter = { ...playerState, x: 0, velocityX: 0, velocityY: 0 };
+
+    combat.usePrimary({ ownerId: "local", player: shooter, aim: { x: 1, y: -0.18 }, now: 100, heldMs: 0, isNewPress: true });
+    const thrown = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "teleport-ball");
+    expect(thrown).toBeDefined();
+    expect(thrown!.vx).toBeGreaterThan(800);
+    expect(thrown!.vy).toBeLessThan(-480);
+    expect(thrown!.lifetime).toBeGreaterThan(3.9);
+
+    combat.update(0.58, [shooter]);
+    const airborne = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "teleport-ball");
+    expect(airborne?.y).toBeLessThan(playerState.y - 100);
+    combat.update(1.8, [shooter]);
+    const rolling = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === "teleport-ball");
+    expect(rolling).toBeDefined();
+    expect(rolling!.state).toBe("rolling");
+    expect(Math.abs(rolling!.vx)).toBeGreaterThan(80);
+    expect(rolling!.gravity).toBe(0);
   });
 
   it("registers remote players as real combat targets for projectiles and body attacks", () => {
@@ -1434,6 +1458,7 @@ describe("combat system", () => {
     }
 
     const grapple = combat.getSnapshot().grapples[0];
+    const attachedRopeLength = grapple.ropeLength;
     const target = combat.getCombatant(dummy.id)!;
     expect(grapple).toMatchObject({ ownerId: "peer-a", state: "attached", targetId: dummy.id });
     expect(grapple.points.length).toBeGreaterThanOrEqual(6);
@@ -1457,6 +1482,20 @@ describe("combat system", () => {
     expect(combat.getSnapshot().grapples).toHaveLength(1);
     combat.update(0.12, [player]);
     expect(player.velocityX).toBeGreaterThan(120);
+    for (let index = 0; index < 10; index += 1) {
+      combat.useSecondary({
+        ownerId: "peer-a",
+        player,
+        aim: { x: 1, y: 0 },
+        now: 820 + index * 16,
+        heldMs: 16 + index * 16,
+        isNewPress: false,
+      });
+      combat.update(1 / 60, [player]);
+    }
+    const pullingRuntime = combat.getWeaponRuntimeState("grappling-hook", "peer-a");
+    expect(pullingRuntime.grapplePulling).toBe(true);
+    expect(pullingRuntime.grappleRopeLength).toBeLessThan(attachedRopeLength);
 
     player.x = -1180;
     player.velocityX = 0;
@@ -2542,7 +2581,7 @@ describe("combat system", () => {
     expect(van.health).toBeLessThan(afterSlam);
   });
 
-  it("runs Spirit of a Fighter as a strict beat focus mode with Winded failure", () => {
+  it("runs Spirit of a Fighter with three miss chances before Winded failure", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     combat.equip("spirit-fighter" as never);
@@ -2556,6 +2595,7 @@ describe("combat system", () => {
     expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
       spiritActive: true,
       spiritCombo: 0,
+      spiritMissesRemaining: 3,
     });
 
     combat.update(0.72, [fighter]);
@@ -2566,6 +2606,16 @@ describe("combat system", () => {
 
     const offBeat = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 900, heldMs: 0, isNewPress: true });
     expect(offBeat).toMatchObject({ kind: "blocked", weaponId: "spirit-fighter", label: "Spirit Miss" });
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
+      spiritActive: true,
+      spiritMissesRemaining: 2,
+      spiritMissesUsed: 1,
+    });
+    expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(false);
+
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 920, heldMs: 0, isNewPress: true });
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritMissesRemaining).toBe(1);
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 940, heldMs: 0, isNewPress: true });
     expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
     expect(combat.getCombatant("fighter")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "winded" })]));
     expect(combat.getPlayerInventory().cooldowns["spirit-fighter" as never]).toBeGreaterThan(50);
@@ -2592,7 +2642,7 @@ describe("combat system", () => {
     expect(activeRuntime.spiritBeatLines.some((line) => line.progress > 0.75)).toBe(true);
   });
 
-  it("ends Spirit focus for no-action beats, whiffs, and incoming hits", () => {
+  it("counts no-action beats and whiffs as Spirit misses before breaking", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     combat.equip("spirit-fighter" as never);
@@ -2601,14 +2651,17 @@ describe("combat system", () => {
 
     combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
     combat.update(1.1, [fighter]);
-    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
-    expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(true);
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
+      spiritActive: true,
+      spiritMissesRemaining: 2,
+    });
+    expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(false);
 
-    combat.update(61, [fighter]);
-    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 2000, heldMs: 0, isNewPress: true });
+    combat.update(1.1, [fighter]);
     combat.update(0.72, [fighter]);
     const whiff = combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 2720, heldMs: 0, isNewPress: true });
     expect(whiff).toMatchObject({ kind: "blocked", label: "Spirit Whiff" });
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
 
     combat.update(61, [fighter]);
     combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 4000, heldMs: 0, isNewPress: true });
@@ -2666,6 +2719,67 @@ describe("combat system", () => {
 
     combat.update(40.1, [player]);
     expect(combat.getCombatant("peer-a")!.statuses.some((status) => status.id === "handsMissing")).toBe(false);
+  });
+
+  it("uses Cross stopwatch shield scaling, projectile deflection, Judgment Day, and rest lockout", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("cross" as never);
+    const player = { ...playerState, id: "cross-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Cross", "#fff4a8");
+    const dummy = combat.spawnTrainingDummy({ x: 92, y: playerState.y });
+
+    const small = combat.usePrimary({ ownerId: "cross-user", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(small).toMatchObject({ kind: "utility", weaponId: "cross", label: "Crescent Shield" });
+    const smallShield = combat.getSnapshot().crossShields.at(-1)!;
+    expect(smallShield.radius).toBeGreaterThanOrEqual(54);
+    combat.update(0.1, [player]);
+    expect(combat.getCombatant(dummy.id)!.velocityX).toBeGreaterThan(350);
+
+    combat.update(9.0, [player]);
+    combat.getPlayerInventory().cooldowns.cross = 0;
+    const charged = combat.usePrimary({ ownerId: "cross-user", player, aim: { x: 1, y: -0.15 }, now: 9300, heldMs: 0, isNewPress: true });
+    expect(charged.kind).toBe("utility");
+    const largeShield = combat.getSnapshot().crossShields.at(-1)!;
+    expect(largeShield.radius).toBeGreaterThan(smallShield.radius + 30);
+    expect(largeShield.knockback).toBeGreaterThan(smallShield.knockback + 250);
+
+    combat.equip("pistol");
+    const hostile = { ...playerState, id: "hostile", x: 260, velocityX: 0, velocityY: 0 };
+    combat.syncRemotePlayer({
+      id: "hostile",
+      name: "Hostile",
+      color: "#ff6f91",
+      x: 260,
+      y: playerState.y,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.usePrimary({ ownerId: "hostile", player: hostile, aim: { x: -1, y: 0 }, now: 9400, heldMs: 0, isNewPress: true });
+    combat.equip("cross" as never);
+    combat.update(0.18, [player]);
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === "pistol" && projectile.ownerId === "cross-user")).toBe(true);
+
+    combat.update(1.0, [player]);
+    const judgment = combat.useSecondary({ ownerId: "cross-user", player, aim: { x: 0, y: -1 }, now: 11000, heldMs: 0, isNewPress: true });
+    expect(judgment).toMatchObject({ kind: "utility", weaponId: "cross", label: "Judgment Day" });
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, timer: expect.closeTo(60, 1), ownerId: "cross-user" });
+    expect(combat.getWeaponRuntimeState("cross" as never, "cross-user")).toMatchObject({
+      crossRestTimer: expect.closeTo(180, 1),
+      crossJudgmentActive: true,
+    });
+    expect(combat.usePrimary({ ownerId: "cross-user", player, aim: { x: 1, y: 0 }, now: 11100, heldMs: 0, isNewPress: true })).toMatchObject({
+      kind: "blocked",
+      label: "Cross resting",
+    });
+    combat.update(2.0, [player]);
+    expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);
+    expect(combat.getCombatant("cross-user")?.respawnTimer).toBeGreaterThan(0);
+    expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ weaponId: "cross", action: "secondary", label: "Judgment Day" }),
+    ]));
   });
 
   it("auto-reveals sniper steady after thirty seconds and reveals immediately on shots", () => {

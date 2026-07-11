@@ -117,6 +117,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("spirit-fighter" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("spirit-fighter" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("spirit-fighter" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("cross" as never, "leftHand")).toBe(true);
+    expect(isSlotCompatible("cross" as never, "rightHand")).toBe(true);
+    expect(isSlotCompatible("cross" as never, "attachment")).toBe(true);
+    expect(isSlotCompatible("cross" as never, "frontStrap")).toBe(false);
+    expect(isSlotCompatible("cross" as never, "backStrap")).toBe(false);
+    expect(isSlotCompatible("cross" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -144,6 +150,11 @@ describe("loadout equipment slots", () => {
     const withSpirit = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "spirit-fighter" as never);
     expect(withSpirit.frontStrap).toBe("spirit-fighter");
     expect(loadoutHasWeapon(withSpirit, "spirit-fighter" as never)).toBe(true);
+
+    const withCross = assignLoadoutItem(DEFAULT_LOADOUT, "rightHand", "cross" as never);
+    expect(withCross.rightHand).toBe("cross");
+    const crossAttachment = assignLoadoutItem(withCross, "attachment", "cross" as never);
+    expect(crossAttachment.attachment).toBe("cross");
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {

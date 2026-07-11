@@ -128,6 +128,35 @@ export interface SpikeParticleState {
   angle?: number;
 }
 
+export interface CrossShieldState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  dirX: number;
+  dirY: number;
+  radius: number;
+  knockback: number;
+  age: number;
+  duration: number;
+  hits: string[];
+  visualOnly?: boolean;
+}
+
+export interface JudgmentBeamState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  radius: number;
+  age: number;
+  duration: number;
+  warning: number;
+  hits: string[];
+  fired?: boolean;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -180,6 +209,7 @@ export interface SpiritFocusState {
   heartShakeTimer: number;
   combo: number;
   perfectStreak: number;
+  missesUsed: number;
   feedback: string;
   feedbackTimer: number;
 }
@@ -248,6 +278,8 @@ export interface CombatSnapshot {
   zombies: ZombieState[];
   spikes: SpikeState[];
   spikeParticles: SpikeParticleState[];
+  crossShields: CrossShieldState[];
+  judgmentBeams: JudgmentBeamState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -285,6 +317,10 @@ const maxHp = 100;
 const respawnDelay = 2;
 const respawnInvulnerabilityDuration = 2;
 const teleportDelay = 3;
+const teleportBallUpwardBoost = 500;
+const teleportBallLifetime = teleportDelay + 2.4;
+const teleportBallRollFriction = 0.58;
+const teleportBallMinRollSpeed = 24;
 const whipComboWindow = 0.55;
 const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
@@ -400,6 +436,23 @@ const spiritPunchRange = 94;
 const spiritGrabRange = 74;
 const spiritLaneHalfWidth = 48;
 const spiritFlashStepSpeed = 760;
+const spiritMaxMisses = 3;
+const crossShieldChargeCap = 10;
+const crossShieldMinRadius = 58;
+const crossShieldMaxRadius = 126;
+const crossShieldMinKnockback = 420;
+const crossShieldMaxKnockback = 1120;
+const crossShieldMinDuration = 0.42;
+const crossShieldMaxDuration = 0.95;
+const crossShieldContactDamage = 1;
+const crossJudgmentDuration = 60;
+const crossRestDuration = 180;
+const crossJudgmentBeamCount = 200;
+const crossBeamWarningTime = 0.45;
+const crossBeamDuration = 2.4;
+const crossBeamDamage = 999;
+const crossBeamRadius = 34;
+const crossBeamTargetEvery = 9;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -457,6 +510,22 @@ interface HandAttachmentState {
   ownerId: string;
   attached: number;
   resist: number;
+}
+
+interface CrossState {
+  stopwatch: number;
+  restTimer: number;
+}
+
+interface JudgmentDayState {
+  ownerId: string;
+  seed: number;
+  timer: number;
+  duration: number;
+  beamIndex: number;
+  beamAccumulator: number;
+  beams: JudgmentBeamState[];
+  visualOnly?: boolean;
 }
 
 type ChainsawMode = "idle" | "running" | "overheated";
@@ -535,7 +604,13 @@ export interface WeaponRuntimeState {
   spiritHeartShake: number;
   spiritCombo: number;
   spiritPerfectStreak: number;
+  spiritMissesUsed: number;
+  spiritMissesRemaining: number;
   spiritFeedback: string;
+  crossStopwatch: number;
+  crossRestTimer: number;
+  crossJudgmentActive: boolean;
+  crossJudgmentTimer: number;
   zombieCount: number;
   attachedHands: number;
 }
@@ -576,6 +651,9 @@ export class CombatSystem {
   private readonly spikeImpales = new Map<string, SpikeImpaleState>();
   private readonly vans: VanState[] = [];
   private readonly spiritFocusModes = new Map<string, SpiritFocusState>();
+  private readonly crossStates = new Map<string, CrossState>();
+  private readonly crossShields: CrossShieldState[] = [];
+  private readonly judgmentDays = new Map<string, JudgmentDayState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -616,6 +694,9 @@ export class CombatSystem {
     this.spikeImpales.clear();
     this.vans.length = 0;
     this.spiritFocusModes.clear();
+    this.crossStates.clear();
+    this.crossShields.length = 0;
+    this.judgmentDays.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -732,6 +813,9 @@ export class CombatSystem {
     if (id.startsWith("zombie-")) {
       this.zombies.delete(id);
     }
+    this.crossStates.delete(id);
+    this.judgmentDays.delete(id);
+    removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
       if (zombie.targetId === id) {
         zombie.targetId = undefined;
@@ -793,6 +877,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "spirit-fighter") {
       return this.useSpiritPrimary(context);
     }
+    if (this.inventory.equippedWeapon === "cross") {
+      return this.useCrossShield(context);
+    }
     if (this.inventory.equippedWeapon === "rocket") {
       return this.placeRocket(context);
     }
@@ -842,6 +929,9 @@ export class CombatSystem {
     }
     if (weapon.id === "spirit-fighter") {
       return this.useSpiritSecondary(context);
+    }
+    if (weapon.id === "cross") {
+      return this.useCrossJudgment(context);
     }
     if (weapon.id === "rocket") {
       return this.lightRocket(context);
@@ -1177,6 +1267,7 @@ export class CombatSystem {
     this.updateVans(dt, players);
     this.updateCombatants(dt);
     this.updateProjectiles(dt, players);
+    this.updateCross(dt, players);
     this.updateTeleports(dt, players);
     this.updateAxeRushes(dt, players);
     this.updateHitboxes(dt);
@@ -1363,6 +1454,8 @@ export class CombatSystem {
     const drivenVan = this.getVanDrivenBy(ownerId);
     const van = ownedVan ?? drivenVan;
     const spirit = this.getOrCreateSpiritFocus(ownerId);
+    const cross = this.getOrCreateCrossState(ownerId);
+    const judgment = this.judgmentDays.get(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1427,10 +1520,23 @@ export class CombatSystem {
       spiritHeartShake: spirit.heartShakeTimer,
       spiritCombo: spirit.combo,
       spiritPerfectStreak: spirit.perfectStreak,
+      spiritMissesUsed: spirit.missesUsed,
+      spiritMissesRemaining: Math.max(0, spiritMaxMisses - spirit.missesUsed),
       spiritFeedback: spirit.feedbackTimer > 0 ? spirit.feedback : "",
+      crossStopwatch: cross.stopwatch,
+      crossRestTimer: cross.restTimer,
+      crossJudgmentActive: Boolean(judgment && judgment.timer > 0),
+      crossJudgmentTimer: judgment?.timer ?? 0,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
+  }
+
+  getJudgmentDayState(): { active: boolean; timer: number; ownerId?: string } {
+    const active = [...this.judgmentDays.values()]
+      .filter((state) => state.timer > 0)
+      .sort((left, right) => right.timer - left.timer)[0];
+    return { active: Boolean(active), timer: active?.timer ?? 0, ownerId: active?.ownerId };
   }
 
   activateVirginBlood(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
@@ -1492,6 +1598,321 @@ export class CombatSystem {
     this.queueSound("laser-overcharge");
     this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", center, { x: 0, y: -1 }, "Overcharge", now));
     return { kind: "utility", weaponId, label: "Overcharge" };
+  }
+
+  private getOrCreateCrossState(ownerId: string): CrossState {
+    let state = this.crossStates.get(ownerId);
+    if (!state) {
+      state = { stopwatch: 0, restTimer: 0 };
+      this.crossStates.set(ownerId, state);
+    }
+    return state;
+  }
+
+  private useCrossShield(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "cross";
+    const cross = this.getOrCreateCrossState(context.ownerId);
+    if (cross.restTimer > 0 || (this.inventory.cooldowns[weaponId] ?? 0) > 90) {
+      return { kind: "blocked", weaponId, label: "Cross resting" };
+    }
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing, y: 0 });
+    const chargeRatio = clamp(cross.stopwatch / crossShieldChargeCap, 0, 1);
+    const radius = lerp(crossShieldMinRadius, crossShieldMaxRadius, chargeRatio);
+    const knockback = lerp(crossShieldMinKnockback, crossShieldMaxKnockback, chargeRatio);
+    const duration = lerp(crossShieldMinDuration, crossShieldMaxDuration, chargeRatio);
+    const origin = {
+      x: owner.x + owner.width / 2 + aim.x * (44 + radius * 0.32),
+      y: owner.y + owner.height * 0.45 + aim.y * (24 + radius * 0.18),
+    };
+    this.crossShields.push({
+      id: this.makeId("cross-shield"),
+      ownerId: context.ownerId,
+      x: origin.x,
+      y: origin.y,
+      dirX: aim.x,
+      dirY: aim.y,
+      radius,
+      knockback,
+      age: 0,
+      duration,
+      hits: [],
+    });
+    cross.stopwatch = 0;
+    this.inventory.cooldowns[weaponId] = weaponRegistry.get(weaponId).primary.cooldown;
+    this.addEffect("aura", origin.x, origin.y, origin.x + aim.x * radius, origin.y + aim.y * radius * 0.35, colorForWeapon(weaponId), "Crescent Shield");
+    this.addEffect("shockwave", origin.x, origin.y, origin.x + radius, origin.y, colorForWeapon(weaponId), "Crescent Shield");
+    this.queueSound("cross-shield");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", origin, aim, "Crescent Shield", context.now, {
+      range: radius,
+    }));
+    return { kind: "utility", weaponId, label: "Crescent Shield" };
+  }
+
+  private useCrossJudgment(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "cross";
+    const cross = this.getOrCreateCrossState(context.ownerId);
+    if (cross.restTimer > 0 || (this.inventory.cooldowns[weaponId] ?? 0) > 90) {
+      return { kind: "blocked", weaponId, label: "Cross resting" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const seed = Math.floor((context.now || performanceNow()) + context.ownerId.length * 4099) % 1000000;
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.42 };
+    this.startJudgmentDay(context.ownerId, origin, seed, false);
+    cross.stopwatch = 0;
+    cross.restTimer = crossRestDuration;
+    this.inventory.cooldowns[weaponId] = crossRestDuration;
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", origin, normalize(context.aim.x || context.aim.y ? context.aim : { x: 0, y: -1 }), "Judgment Day", context.now, {
+      range: seed,
+    }));
+    return { kind: "utility", weaponId, label: "Judgment Day" };
+  }
+
+  private startJudgmentDay(ownerId: string, origin: Vec2, seed: number, visualOnly: boolean): void {
+    const state: JudgmentDayState = {
+      ownerId,
+      seed,
+      timer: crossJudgmentDuration,
+      duration: crossJudgmentDuration,
+      beamIndex: 0,
+      beamAccumulator: 0,
+      beams: [],
+      visualOnly,
+    };
+    this.judgmentDays.set(ownerId, state);
+    this.spawnJudgmentBeam(state, origin.x, origin.y);
+    this.addEffect("aura", origin.x, origin.y, origin.x, origin.y - 260, colorForWeapon("cross"), "JUDGMENT DAY");
+    this.addEffect("shockwave", origin.x, DEFAULT_PHYSICS.groundY, origin.x + 240, DEFAULT_PHYSICS.groundY, colorForWeapon("cross"), "JUDGMENT DAY");
+    if (!visualOnly) {
+      this.queueSound("judgment-day");
+    }
+  }
+
+  private updateCross(dt: number, _players: PlayerPhysicsState[]): void {
+    let crossCooldown = this.inventory.cooldowns.cross ?? 0;
+    for (const state of this.crossStates.values()) {
+      state.restTimer = Math.max(0, state.restTimer - dt);
+      if (state.restTimer > 0) {
+        crossCooldown = Math.max(crossCooldown, state.restTimer);
+      } else {
+        state.stopwatch = Math.min(crossShieldChargeCap, state.stopwatch + dt);
+      }
+    }
+    this.inventory.cooldowns.cross = crossCooldown;
+
+    for (const shield of this.crossShields) {
+      shield.age += dt;
+      this.applyCrossShieldContacts(shield);
+      this.deflectProjectilesWithCrossShield(shield);
+    }
+    removeWhere(this.crossShields, (shield) => shield.age >= shield.duration);
+
+    for (const [ownerId, judgment] of [...this.judgmentDays.entries()]) {
+      this.updateJudgmentDay(judgment, dt);
+      if (judgment.timer <= 0 && judgment.beams.length === 0) {
+        this.judgmentDays.delete(ownerId);
+      }
+    }
+  }
+
+  private applyCrossShieldContacts(shield: CrossShieldState): void {
+    if (shield.visualOnly) {
+      return;
+    }
+    for (const target of this.combatants.values()) {
+      if (target.id === shield.ownerId || target.respawnTimer > 0 || target.hp <= 0 || shield.hits.includes(target.id)) {
+        continue;
+      }
+      const center = { x: target.x + target.width / 2, y: target.y + target.height * 0.45 };
+      const dx = center.x - shield.x;
+      const dy = center.y - shield.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > shield.radius + Math.max(target.width, target.height) * 0.35) {
+        continue;
+      }
+      const direction = normalize({ x: dx || shield.dirX || 1, y: dy || shield.dirY || -0.2 });
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: shield.ownerId,
+        targetId: target.id,
+        weaponId: "cross",
+        damage: crossShieldContactDamage,
+        knockback: { x: direction.x * shield.knockback, y: direction.y * shield.knockback * 0.42 - 170 },
+        stun: 0.18,
+        label: "Crescent Shield",
+        status: "daze",
+        skipHitLocationScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+        continue;
+      }
+      shield.hits.push(target.id);
+      this.queueSound("cross-bounce");
+    }
+    for (const van of this.damageableVans()) {
+      if (van.ownerId === shield.ownerId || shield.hits.includes(van.id)) {
+        continue;
+      }
+      const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+      const distance = Math.hypot(center.x - shield.x, center.y - shield.y);
+      if (distance > shield.radius + van.width * 0.42) {
+        continue;
+      }
+      const direction = normalize({ x: center.x - shield.x || shield.dirX || 1, y: center.y - shield.y || -0.2 });
+      if (this.damageVan(van.id, crossShieldContactDamage, shield.ownerId, performanceNow(), {
+        x: direction.x * shield.knockback,
+        y: direction.y * shield.knockback * 0.5 - 220,
+      })) {
+        shield.hits.push(van.id);
+        this.queueSound("cross-bounce");
+      }
+    }
+  }
+
+  private deflectProjectilesWithCrossShield(shield: CrossShieldState): void {
+    if (shield.visualOnly) {
+      return;
+    }
+    for (const projectile of this.projectiles) {
+      if (projectile.ownerId === shield.ownerId || projectile.visualOnly || projectile.age > projectile.lifetime || shield.hits.includes(`projectile:${projectile.id}`)) {
+        continue;
+      }
+      const distance = Math.hypot(projectile.x - shield.x, projectile.y - shield.y);
+      if (distance > shield.radius + projectile.radius) {
+        continue;
+      }
+      const direction = normalize({ x: projectile.x - shield.x || shield.dirX || 1, y: projectile.y - shield.y || shield.dirY || -0.1 });
+      const speed = clamp(Math.hypot(projectile.vx, projectile.vy) * 1.08 + 120, 520, 1500);
+      projectile.ownerId = shield.ownerId;
+      projectile.vx = direction.x * speed;
+      projectile.vy = direction.y * speed - 70;
+      projectile.knockback = { x: direction.x * Math.max(projectile.knockback.x || 0, shield.knockback * 0.56), y: direction.y * shield.knockback * 0.22 - 80 };
+      projectile.hits = [];
+      shield.hits.push(`projectile:${projectile.id}`);
+      this.addEffect("spark", projectile.x, projectile.y, projectile.x + direction.x * 38, projectile.y + direction.y * 24, colorForWeapon("cross"), "DEFLECT");
+      this.queueSound("cross-bounce");
+    }
+  }
+
+  private updateJudgmentDay(state: JudgmentDayState, dt: number): void {
+    state.timer = Math.max(0, state.timer - dt);
+    for (const beam of state.beams) {
+      const previousAge = beam.age;
+      beam.age += dt;
+      if (!beam.fired && previousAge < beam.warning && beam.age >= beam.warning) {
+        beam.fired = true;
+        this.addEffect("lightning", beam.x, DEFAULT_PHYSICS.groundY, beam.x, DEFAULT_PHYSICS.groundY - 560, colorForWeapon("cross"), "JUDGMENT");
+        if (!beam.visualOnly) {
+          this.queueSound("judgment-beam");
+        }
+      }
+      this.applyJudgmentBeamDamage(beam);
+    }
+    removeWhere(state.beams, (beam) => beam.age >= beam.duration);
+    if (state.timer <= 0) {
+      return;
+    }
+    state.beamAccumulator += dt * (crossJudgmentBeamCount / crossJudgmentDuration);
+    let spawned = 0;
+    while (state.beamAccumulator >= 1 && spawned < 14) {
+      state.beamAccumulator -= 1;
+      this.spawnJudgmentBeam(state);
+      spawned += 1;
+    }
+  }
+
+  private spawnJudgmentBeam(state: JudgmentDayState, x?: number, y?: number): void {
+    const index = state.beamIndex;
+    state.beamIndex += 1;
+    let beamX = x;
+    if (typeof beamX !== "number") {
+      const target = index % crossBeamTargetEvery === 0 ? this.pickJudgmentTarget(state.ownerId, index) : undefined;
+      beamX = target ? target.x + target.width / 2 : lerp(DEFAULT_PHYSICS.platformLeft + 40, DEFAULT_PHYSICS.platformRight - 40, seededUnit(state.seed, index, 3));
+    }
+    const beamY = y ?? DEFAULT_PHYSICS.groundY - 260 - seededUnit(state.seed, index, 7) * 160;
+    const radius = crossBeamRadius + Math.round(seededUnit(state.seed, index, 11) * 18);
+    state.beams.push({
+      id: this.makeId("judgment"),
+      ownerId: state.ownerId,
+      x: beamX,
+      y: beamY,
+      radius,
+      age: 0,
+      duration: crossBeamDuration,
+      warning: crossBeamWarningTime,
+      hits: [],
+      visualOnly: state.visualOnly,
+    });
+  }
+
+  private pickJudgmentTarget(ownerId: string, index: number): Combatant | undefined {
+    const candidates = [...this.combatants.values()].filter((target) => target.respawnTimer <= 0 && target.hp > 0);
+    if (candidates.length === 0) {
+      return undefined;
+    }
+    const selected = Math.floor(seededUnit(ownerId.length * 9973, index, 17) * candidates.length) % candidates.length;
+    return candidates[selected];
+  }
+
+  private applyJudgmentBeamDamage(beam: JudgmentBeamState): void {
+    if (beam.visualOnly || beam.age < beam.warning) {
+      return;
+    }
+    const active = clamp((beam.age - beam.warning) / 0.18, 0, 1);
+    const radius = beam.radius * (0.75 + active * 0.8);
+    for (const target of this.combatants.values()) {
+      if (target.respawnTimer > 0 || target.hp <= 0 || beam.hits.includes(target.id)) {
+        continue;
+      }
+      const centerX = target.x + target.width / 2;
+      if (Math.abs(centerX - beam.x) > radius + target.width / 2) {
+        continue;
+      }
+      const direction = Math.sign(centerX - beam.x || seededUnit(beam.x, beam.age, 5) - 0.5 || 1);
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: beam.ownerId,
+        targetId: target.id,
+        weaponId: "cross",
+        damage: crossBeamDamage,
+        knockback: { x: direction * 1220, y: -920 },
+        stun: 1,
+        label: "Judgment Beam",
+        status: "daze",
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+        continue;
+      }
+      beam.hits.push(target.id);
+    }
+    for (const van of this.damageableVans()) {
+      if (beam.hits.includes(van.id)) {
+        continue;
+      }
+      const centerX = van.x + van.width / 2;
+      if (Math.abs(centerX - beam.x) > radius + van.width / 2) {
+        continue;
+      }
+      const direction = Math.sign(centerX - beam.x || 1);
+      if (this.damageVan(van.id, crossBeamDamage, beam.ownerId, performanceNow(), { x: direction * 1300, y: -760 })) {
+        beam.hits.push(van.id);
+      }
+    }
   }
 
   applyRemoteEvent(event: CombatEventPacket): void {
@@ -1576,6 +1997,10 @@ export class CombatSystem {
       this.spawnRemoteSpikesVisual(event);
       return;
     }
+    if (event.weaponId === "cross") {
+      this.spawnRemoteCrossVisual(event, aim);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -1590,6 +2015,31 @@ export class CombatSystem {
       return;
     }
     this.projectiles.push(this.createRemoteVisualProjectile(event, aim, speed, profile.radius ?? 6, Math.max(0.16, profile.range / speed), event.label));
+  }
+
+  private spawnRemoteCrossVisual(event: CombatEventPacket, aim: Vec2): void {
+    if (event.label === "Judgment Day") {
+      this.startJudgmentDay(event.ownerId, { x: event.x, y: event.y }, Math.floor(event.range ?? 1), true);
+      return;
+    }
+    if (event.label === "Crescent Shield") {
+      const radius = clamp(event.range ?? crossShieldMinRadius, crossShieldMinRadius, crossShieldMaxRadius);
+      this.crossShields.push({
+        id: `remote-cross-${event.id}`,
+        ownerId: event.ownerId,
+        x: event.x,
+        y: event.y,
+        dirX: aim.x,
+        dirY: aim.y,
+        radius,
+        knockback: lerp(crossShieldMinKnockback, crossShieldMaxKnockback, (radius - crossShieldMinRadius) / Math.max(1, crossShieldMaxRadius - crossShieldMinRadius)),
+        age: 0,
+        duration: crossShieldMaxDuration,
+        hits: [],
+        visualOnly: true,
+      });
+      this.addEffect("aura", event.x, event.y, event.x + aim.x * radius, event.y + aim.y * radius * 0.35, colorForWeapon("cross"), "Crescent Shield");
+    }
   }
 
   private createRemoteVisualProjectile(
@@ -1810,6 +2260,8 @@ export class CombatSystem {
       zombies: [...this.zombies.values()],
       spikes: this.spikes,
       spikeParticles: this.spikeParticles,
+      crossShields: this.crossShields,
+      judgmentBeams: [...this.judgmentDays.values()].flatMap((state) => state.beams),
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -2204,6 +2656,7 @@ export class CombatSystem {
     state.heartShakeTimer = 0;
     state.combo = 0;
     state.perfectStreak = 0;
+    state.missesUsed = 0;
     state.feedback = "FOCUS";
     state.feedbackTimer = 0.7;
     this.scheduleSpiritBeatPattern(state);
@@ -2225,14 +2678,14 @@ export class CombatSystem {
     }
     const grade = this.consumeSpiritBeat(context.ownerId);
     if (!grade) {
-      this.failSpiritFocus(context.ownerId, "MISS", true);
+      this.registerSpiritMiss(context.ownerId, "MISS", true);
       return { kind: "blocked", weaponId, label: "Spirit Miss" };
     }
 
     const range = action === "secondary" ? spiritGrabRange : spiritPunchRange + Math.min(36, state.combo * 4);
     const target = this.findSpiritTarget(context.player, context.aim, range);
     if (!target) {
-      this.failSpiritFocus(context.ownerId, "WHIFF", true);
+      this.registerSpiritMiss(context.ownerId, "WHIFF", true);
       return { kind: "blocked", weaponId, label: "Spirit Whiff" };
     }
 
@@ -2288,7 +2741,7 @@ export class CombatSystem {
     });
     if (!hit.applied) {
       target.invulnerable = previousInvulnerable;
-      this.failSpiritFocus(context.ownerId, "WHIFF", true);
+      this.registerSpiritMiss(context.ownerId, "WHIFF", true);
       return { kind: "blocked", weaponId, label: "Spirit Whiff" };
     }
 
@@ -2319,7 +2772,7 @@ export class CombatSystem {
     }
     const grade = this.consumeSpiritBeat(ownerId);
     if (!grade) {
-      this.failSpiritFocus(ownerId, "MISS", true);
+      this.registerSpiritMiss(ownerId, "MISS", true);
       return { kind: "blocked", weaponId, label: "Spirit Miss" };
     }
     const step = normalize(direction.x || direction.y ? direction : { x: player.facing, y: 0 });
@@ -2345,7 +2798,7 @@ export class CombatSystem {
     }
     const grade = this.consumeSpiritBeat(ownerId);
     if (!grade) {
-      this.failSpiritFocus(ownerId, "MISS", true);
+      this.registerSpiritMiss(ownerId, "MISS", true);
       return { kind: "blocked", weaponId, label: "Spirit Miss" };
     }
     const owner = this.combatants.get(ownerId);
@@ -2463,9 +2916,39 @@ export class CombatSystem {
       }
       this.syncSpiritBeatTimer(state);
       if (state.beatLines.some((line) => !line.fake && !line.hit && line.timeToImpact < -state.timingWindow)) {
-        this.failSpiritFocus(ownerId, "MISS", true);
+        this.registerSpiritMiss(ownerId, "MISS", true);
       }
     }
+  }
+
+  private registerSpiritMiss(ownerId: string, feedback: "MISS" | "WHIFF" | "BROKEN" | "HIT", winded: boolean): boolean {
+    const state = this.getOrCreateSpiritFocus(ownerId);
+    if (!state.active) {
+      return false;
+    }
+    state.missesUsed = Math.min(spiritMaxMisses, state.missesUsed + 1);
+    state.combo = 0;
+    state.perfectStreak = 0;
+    state.heartPulseTimer = 0;
+    state.heartShakeTimer = 0.2 + state.missesUsed * 0.08;
+    state.feedback = feedback;
+    state.feedbackTimer = 0.82;
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+      this.addEffect("aura", center.x, center.y, center.x, center.y - 28, "#ff6f91", `${feedback} ${state.missesUsed}/${spiritMaxMisses}`);
+    }
+    this.queueSound("spirit-miss");
+    if (state.missesUsed >= spiritMaxMisses) {
+      this.failSpiritFocus(ownerId, feedback, winded);
+      return true;
+    }
+    state.beatLines = [];
+    state.beatInterval = spiritInitialBeatInterval;
+    state.beatTimer = spiritInitialBeatInterval;
+    state.timingWindow = spiritInitialTimingWindow;
+    this.scheduleSpiritBeatPattern(state);
+    return false;
   }
 
   private failSpiritFocus(ownerId: string, feedback: string, winded: boolean): void {
@@ -2477,6 +2960,7 @@ export class CombatSystem {
     state.timer = 0;
     state.combo = 0;
     state.perfectStreak = 0;
+    state.missesUsed = Math.max(state.missesUsed, feedback === "MISS" || feedback === "WHIFF" || feedback === "HIT" || feedback === "BROKEN" ? spiritMaxMisses : state.missesUsed);
     state.beatTimer = state.beatInterval;
     state.beatLines = [];
     state.heartPulseTimer = 0;
@@ -2506,6 +2990,7 @@ export class CombatSystem {
     state.timer = 0;
     state.combo = 0;
     state.perfectStreak = 0;
+    state.missesUsed = 0;
     state.beatLines = [];
     state.heartPulseTimer = 0.32;
     state.heartShakeTimer = 0;
@@ -2564,6 +3049,7 @@ export class CombatSystem {
         heartShakeTimer: 0,
         combo: 0,
         perfectStreak: 0,
+        missesUsed: 0,
         feedback: "",
         feedbackTimer: 0,
       };
@@ -3731,20 +4217,24 @@ export class CombatSystem {
       const spread = pellets === 1 ? 0 : ((index - (pellets - 1) / 2) * (profile.spread ?? 0.14));
       const shot = rotate(aim, spread);
       const projectileId = this.makeId("proj");
+      const projectileSpeed = (profile.speed ?? 600) * speedBonus;
+      const isTeleportBall = weaponId === "teleport-ball";
+      const projectileVx = shot.x * projectileSpeed;
+      const projectileVy = shot.y * projectileSpeed - (isTeleportBall ? teleportBallUpwardBoost : 0);
       this.projectiles.push({
         id: projectileId,
         ownerId: context.ownerId,
         weaponId,
         x: muzzle.x,
         y: muzzle.y,
-        vx: shot.x * (profile.speed ?? 600) * speedBonus,
-        vy: shot.y * (profile.speed ?? 600) * speedBonus,
+        vx: projectileVx,
+        vy: projectileVy,
         radius: (profile.radius ?? 5) * Math.min(chargeMultiplier, 2.6),
         damage: Math.round(profile.damage * Math.min(chargeMultiplier, 3)),
         knockback: { x: shot.x * profile.knockback * speedBonus, y: shot.y * profile.knockback - 30 },
         stun: profile.stun,
         age: 0,
-        lifetime: weaponId === "teleport-ball" ? teleportDelay + 0.35 : profile.range / Math.max(profile.speed ?? 600, 1),
+        lifetime: isTeleportBall ? teleportBallLifetime : profile.range / Math.max(profile.speed ?? 600, 1),
         gravity: profile.gravity ?? 0,
         bounces: profile.bounces ?? 0,
         pierce: profile.pierce ?? 0,
@@ -3753,12 +4243,12 @@ export class CombatSystem {
         trailColor: colorForWeapon(weaponId),
         originX: muzzle.x,
         originY: muzzle.y,
-        teleportsOwner: weaponId === "teleport-ball",
+        teleportsOwner: isTeleportBall,
         pulseTimer: 0,
         status: profile.status,
         hits: [],
       });
-      if (weaponId === "teleport-ball") {
+      if (isTeleportBall) {
         this.pendingTeleports.set(context.ownerId, {
           ownerId: context.ownerId,
           projectileId,
@@ -5593,7 +6083,16 @@ export class CombatSystem {
           projectile.age = projectile.lifetime + 1;
           continue;
         }
-        if (projectile.bounces > 0) {
+        if (projectile.weaponId === "teleport-ball") {
+          if (projectile.state !== "rolling") {
+            projectile.state = "rolling";
+            projectile.vx *= 0.82;
+            projectile.vy = 0;
+            projectile.gravity = 0;
+            this.addEffect("spark", projectile.x, projectile.y, projectile.x + projectile.vx * 0.05, projectile.y - 18, colorForWeapon(projectile.weaponId), "Roll");
+            this.queueSound("teleport-pulse");
+          }
+        } else if (projectile.bounces > 0) {
           projectile.vy *= COMBAT_TUNING.projectiles.bounceVelocityMultiplier;
           projectile.vx *= COMBAT_TUNING.projectiles.bounceFriction;
           projectile.bounces -= 1;
@@ -5606,14 +6105,24 @@ export class CombatSystem {
           this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
           projectile.age = projectile.lifetime + 1;
           continue;
-        } else if (projectile.weaponId === "teleport-ball") {
-          projectile.vx = 0;
-          projectile.vy = 0;
-          projectile.gravity = 0;
         } else {
           this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 16, colorForWeapon(projectile.weaponId), "Impact");
           projectile.age = projectile.lifetime + 1;
           continue;
+        }
+      }
+      if (projectile.weaponId === "teleport-ball" && projectile.state === "rolling") {
+        projectile.y = ground;
+        projectile.vy = 0;
+        projectile.gravity = 0;
+        projectile.vx *= Math.exp(-dt * teleportBallRollFriction);
+        if (Math.abs(projectile.vx) < teleportBallMinRollSpeed) {
+          projectile.vx = 0;
+        }
+        projectile.pulseTimer = Math.max(0, (projectile.pulseTimer ?? 0) - dt);
+        if (Math.abs(projectile.vx) > 0 && projectile.pulseTimer === 0) {
+          projectile.pulseTimer = 0.18;
+          this.addEffect("spark", projectile.x, projectile.y, projectile.x - Math.sign(projectile.vx) * 18, projectile.y - 12, colorForWeapon(projectile.weaponId), "Roll");
         }
       }
       if (projectile.visualOnly) {
@@ -5717,10 +6226,15 @@ export class CombatSystem {
       }
     }
     const xLimit = 2400 + COMBAT_TUNING.projectiles.cleanupPadding;
-    removeWhere(this.projectiles, (projectile) => projectile.age > projectile.lifetime
-      || projectile.y > COMBAT_TUNING.projectiles.floorY + COMBAT_TUNING.projectiles.cleanupPadding
-      || projectile.x < -xLimit
-      || projectile.x > xLimit);
+    removeWhere(this.projectiles, (projectile) => {
+      const pendingTeleport = projectile.teleportsOwner && this.pendingTeleports.get(projectile.ownerId)?.projectileId === projectile.id;
+      return projectile.age > projectile.lifetime
+        || (!pendingTeleport && (
+          projectile.y > COMBAT_TUNING.projectiles.floorY + COMBAT_TUNING.projectiles.cleanupPadding
+          || projectile.x < -xLimit
+          || projectile.x > xLimit
+        ));
+    });
     for (const [ownerId, projectileId] of [...this.axeThrows.entries()]) {
       if (!this.projectiles.some((projectile) => projectile.id === projectileId)) {
         this.axeThrows.delete(ownerId);
@@ -6924,6 +7438,11 @@ function rotate(vector: Vec2, radians: number): Vec2 {
   };
 }
 
+function seededUnit(seed: number, index: number, salt: number): number {
+  const value = Math.sin(seed * 12.9898 + index * 78.233 + salt * 37.719) * 43758.5453;
+  return value - Math.floor(value);
+}
+
 function aimedMeleeBox(
   player: PlayerPhysicsState,
   aim: Vec2,
@@ -7221,6 +7740,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#f2f2f2";
     case "spirit-fighter":
       return "#ffd84d";
+    case "cross":
+      return "#fff4a8";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
