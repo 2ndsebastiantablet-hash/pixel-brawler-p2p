@@ -156,6 +156,57 @@ test.describe("multiplayer visibility", () => {
     }
   });
 
+  test("host browser close ends the server for remaining guests", async ({ browser }) => {
+    const hostContext = await browser.newContext();
+    const guestContext = await browser.newContext();
+    const host = await hostContext.newPage();
+    const guest = await guestContext.newPage();
+
+    try {
+      await startPrivateHost(host, "Host");
+      const roomCodeHandle = await waitForDebugValue(host, (debug) => debug.roomCode);
+      const roomCode = await roomCodeHandle.jsonValue();
+      await joinPrivateRoom(guest, "Guest", roomCode);
+      await expect.poll(() => debugValue(guest, (debug) => debug.remotePlayers.count), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+
+      await host.close();
+
+      await expect(guest.locator("[data-status]")).toHaveText("Host left. Server closed.", { timeout: 15_000 });
+    } finally {
+      await hostContext.close();
+      await guestContext.close();
+    }
+  });
+
+  test("non-host leaving keeps the host server open and joinable", async ({ browser }) => {
+    const hostContext = await browser.newContext();
+    const guestContext = await browser.newContext();
+    const secondGuestContext = await browser.newContext();
+    const host = await hostContext.newPage();
+    const guest = await guestContext.newPage();
+    const secondGuest = await secondGuestContext.newPage();
+
+    try {
+      await startPrivateHost(host, "Host");
+      const roomCodeHandle = await waitForDebugValue(host, (debug) => debug.roomCode);
+      const roomCode = await roomCodeHandle.jsonValue();
+      await joinPrivateRoom(guest, "Guest", roomCode);
+      await expect.poll(() => debugValue(host, (debug) => debug.remotePlayers.count), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+
+      await guest.keyboard.press("Escape");
+      await guest.getByRole("button", { name: "Leave" }).click();
+      await expect(guest.locator("[data-status]")).toHaveText("Left server", { timeout: 10_000 });
+      await expect(host.locator("[data-status]")).not.toHaveText("Host left. Server closed.", { timeout: 5_000 });
+
+      await joinPrivateRoom(secondGuest, "GuestTwo", roomCode);
+      await expect.poll(() => debugValue(host, (debug) => debug.remotePlayers.count), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+    } finally {
+      await hostContext.close();
+      await guestContext.close();
+      await secondGuestContext.close();
+    }
+  });
+
   test("kick returns guest to the main menu with a clear message", async ({ browser }) => {
     const hostContext = await browser.newContext();
     const guestContext = await browser.newContext();

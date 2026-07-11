@@ -5,7 +5,7 @@ import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type P
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
 import type { AmmoPickup, Combatant, CombatEffect, DroppedWeapon, GrappleState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
-import type { WeaponId, WeaponUseResult } from "./combat/Weapon";
+import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
 import { createDefaultInventory, weaponRegistry } from "./combat/WeaponRegistry";
 import {
@@ -139,6 +139,7 @@ export class Game {
   private loadout: LoadoutState = DEFAULT_LOADOUT;
   private readonly attachmentVisual: AttachmentVisual = { x: 0, y: 0, vx: 0, vy: 0, initialized: false };
   private attackVisual: AttackVisual | null = null;
+  private readonly previousSpiritBeatInput = { left: false, right: false, jumpHeld: false };
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -371,7 +372,27 @@ export class Game {
         x: horizontal || this.lastAim.x || this.localPlayer.state.facing,
         y: vertical || this.lastAim.y,
       }, time), "secondary");
+    } else if (!lockedOut && spiritRuntime.spiritActive) {
+      const moveDirection = movementInput.right && !this.previousSpiritBeatInput.right
+        ? 1
+        : movementInput.left && !this.previousSpiritBeatInput.left
+          ? -1
+          : 0;
+      if (movementInput.jumpPressed && !this.previousSpiritBeatInput.jumpHeld) {
+        this.recordAttack(this.combat.useSpiritRhythmAction(this.localPlayer.state.id, this.localPlayer.state, "jump", {
+          x: moveDirection || this.lastAim.x || this.localPlayer.state.facing,
+          y: -1,
+        }, time), "secondary");
+      } else if (moveDirection !== 0) {
+        this.recordAttack(this.combat.useSpiritRhythmAction(this.localPlayer.state.id, this.localPlayer.state, "move", {
+          x: moveDirection,
+          y: 0,
+        }, time), "secondary");
+      }
     }
+    this.previousSpiritBeatInput.left = movementInput.left;
+    this.previousSpiritBeatInput.right = movementInput.right;
+    this.previousSpiritBeatInput.jumpHeld = movementInput.jumpHeld;
     this.handleCombatInput({
       ...combatInput,
       secondaryPressed: vanConsumedSecondary ? false : combatInput.secondaryPressed,
@@ -526,11 +547,17 @@ export class Game {
       this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
+    const localStatuses = localCombatant?.statuses.map((status) => status.id) ?? [];
+    const spiritRuntime = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
+    const showSpiritFocus = localStatuses.includes("spiritFocus");
+    const showSpiritHeart = showSpiritFocus || spiritRuntime.spiritHeartShake > 0 || spiritRuntime.spiritFeedback === "MISS" || spiritRuntime.spiritFeedback === "WHIFF" || spiritRuntime.spiritFeedback === "HIT";
+    if (showSpiritFocus) {
+      this.drawSpiritFocusScreen(ctx, spiritRuntime);
+    }
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
     if (!steady) {
       this.drawInvulnerabilityGlow(ctx, this.localPlayer.state, localCombatant?.invulnerable ?? 0);
       this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      const localStatuses = localCombatant?.statuses.map((status) => status.id) ?? [];
       this.drawPlayerStatusOverlay(ctx, this.localPlayer.state, localStatuses);
       if (localStatuses.includes("spikeMode")) {
         this.drawSpikeModeHands(ctx, this.localPlayer.state);
@@ -550,12 +577,20 @@ export class Game {
     }
     this.drawLocalHealth(ctx);
     this.drawCrosshair(ctx);
+    if (showSpiritHeart) {
+      this.drawSpiritHeartUi(ctx, spiritRuntime);
+    }
     ctx.restore();
   }
 
   private handleCombatInput(input: ReturnType<InputController["consumeCombatFrame"]>, dt: number, time: number): void {
     if (input.reloadPressed) {
-      this.combat.reload(this.localPlayer.state.id, time);
+      const reloadWeaponId = resolveReloadWeapon(this.loadout, this.combat.getPlayerInventory());
+      if (reloadWeaponId) {
+        this.recordAttack(this.combat.reloadWeapon(this.localPlayer.state.id, reloadWeaponId, time), "reload");
+      } else {
+        this.recordAttack(this.combat.reload(this.localPlayer.state.id, time), "reload");
+      }
     }
     if (input.dropPressed) {
       this.combat.dropCurrentWeapon(this.localPlayer.state.id, this.localPlayer.state, this.lastAim, time);
@@ -2824,6 +2859,111 @@ export class Game {
     ctx.stroke();
   }
 
+  private drawSpiritFocusScreen(ctx: CanvasRenderingContext2D, runtime: ReturnType<CombatSystem["getWeaponRuntimeState"]>): void {
+    const player = this.localPlayer.state;
+    const px = player.x + player.width / 2 - this.camera.x;
+    const py = player.y + player.height / 2 - this.camera.y;
+    const now = performance.now();
+    ctx.save();
+    ctx.fillStyle = "rgba(138, 141, 148, 0.28)";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    const vignette = ctx.createRadialGradient(px, py, 42, px, py, Math.max(this.canvas.width, this.canvas.height) * 0.62);
+    vignette.addColorStop(0, "rgba(255, 255, 255, 0)");
+    vignette.addColorStop(0.48, "rgba(12, 13, 18, 0.16)");
+    vignette.addColorStop(1, "rgba(0, 0, 0, 0.56)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    const particleCount = 36;
+    for (let index = 0; index < particleCount; index += 1) {
+      const orbit = now * 0.0008 + index * 1.37;
+      const radius = 42 + (index % 9) * 22 + runtime.spiritBeatProgress * 20;
+      const x = Math.round(px + Math.cos(orbit) * radius + Math.sin(index * 2.1) * 9);
+      const y = Math.round(py + Math.sin(orbit * 0.74) * radius * 0.62 - 14);
+      const alpha = 0.24 + ((index % 5) / 5) * 0.46;
+      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      ctx.fillRect(x, y, 2 + (index % 2), 2 + (index % 3 === 0 ? 1 : 0));
+    }
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(Math.round(px), Math.round(py + 8), 62 + runtime.spiritBeatProgress * 18, 34 + runtime.spiritBeatProgress * 10, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawSpiritHeartUi(ctx: CanvasRenderingContext2D, runtime: ReturnType<CombatSystem["getWeaponRuntimeState"]>): void {
+    const heartX = Math.round(this.canvas.width / 2);
+    const heartY = Math.round(this.canvas.height - 72);
+    const pulse = 1 + Math.min(runtime.spiritHeartPulse, 0.42) * 0.42;
+    const shake = runtime.spiritHeartShake > 0 ? Math.sin(performance.now() * 0.08) * runtime.spiritHeartShake * 12 : 0;
+    const x = Math.round(heartX + shake);
+    const y = heartY;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (let index = 0; index < runtime.spiritBeatLines.length; index += 1) {
+      const line = runtime.spiritBeatLines[index];
+      const sideSign = line.side === "left" ? -1 : 1;
+      const startX = sideSign < 0 ? 18 : this.canvas.width - 18;
+      const endX = x + sideSign * 46;
+      const laneY = y + (index - (runtime.spiritBeatLines.length - 1) / 2) * 8;
+      const markerX = Math.round(startX + (endX - startX) * line.progress);
+      ctx.strokeStyle = line.fake ? "rgba(180, 186, 198, 0.42)" : "rgba(255, 244, 168, 0.78)";
+      ctx.lineWidth = line.fake ? 2 : 3;
+      ctx.beginPath();
+      ctx.moveTo(startX, laneY);
+      ctx.lineTo(markerX, laneY);
+      ctx.stroke();
+      ctx.fillStyle = line.fake ? "rgba(180, 186, 198, 0.62)" : "#ffffff";
+      ctx.fillRect(markerX - 5, laneY - 5, 10, 10);
+      ctx.fillStyle = line.fake ? "rgba(85, 90, 104, 0.72)" : "#ffd84d";
+      ctx.fillRect(markerX - 2, laneY - 2, 4, 4);
+    }
+    if (runtime.spiritHeartAssembling) {
+      for (let index = 0; index < 22; index += 1) {
+        const t = 1 - Math.min(1, runtime.spiritHeartPulse + runtime.spiritBeatProgress);
+        const angle = index * 0.86;
+        const scatter = 52 + (index % 5) * 12;
+        ctx.fillStyle = index % 2 === 0 ? "#ffffff" : "#ffd84d";
+        ctx.fillRect(Math.round(x + Math.cos(angle) * scatter * t), Math.round(y + Math.sin(angle) * scatter * t), 3, 3);
+      }
+    }
+    const block = Math.max(4, Math.round(5 * pulse));
+    const heartPixels = [
+      [-2, -3], [-1, -4], [0, -3], [1, -4], [2, -3],
+      [-3, -2], [-2, -2], [-1, -2], [0, -2], [1, -2], [2, -2], [3, -2],
+      [-3, -1], [-2, -1], [-1, -1], [0, -1], [1, -1], [2, -1], [3, -1],
+      [-2, 0], [-1, 0], [0, 0], [1, 0], [2, 0],
+      [-1, 1], [0, 1], [1, 1],
+      [0, 2],
+    ];
+    const brokenHeart = runtime.spiritFeedback === "MISS" || runtime.spiritFeedback === "WHIFF" || runtime.spiritFeedback === "HIT";
+    ctx.shadowColor = runtime.spiritPerfectStreak >= 3 ? "#fff4a8" : "rgba(255, 255, 255, 0.55)";
+    ctx.shadowBlur = runtime.spiritPerfectStreak >= 3 ? 18 : 8;
+    for (const [hx, hy] of heartPixels) {
+      ctx.fillStyle = hy <= -3 ? "#ffffff" : brokenHeart ? "#ff6f91" : "#ffd84d";
+      ctx.fillRect(x + hx * block, y + hy * block, block, block);
+    }
+    ctx.shadowBlur = 0;
+    if (brokenHeart) {
+      ctx.strokeStyle = "#101018";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - block, y - block * 4);
+      ctx.lineTo(x + block, y - block * 2);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + block * 2, y + block * 2);
+      ctx.stroke();
+    }
+    if (runtime.spiritFeedback) {
+      ctx.font = "bold 14px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = runtime.spiritFeedback === "MISS" || runtime.spiritFeedback === "WHIFF" ? "#ff6f91" : "#ffffff";
+      ctx.fillText(runtime.spiritFeedback, x, y + 24);
+    }
+    ctx.restore();
+  }
+
   private renderCombatHud(): void {
     const inventory = this.combat.getPlayerInventory();
     const weapon = weaponRegistry.get(inventory.equippedWeapon);
@@ -3007,6 +3147,27 @@ export function resolveMouseWeaponAction(
   }
   const weaponId = button === "primary" ? normalized.leftHand : normalized.rightHand;
   return weaponId ? { weaponId, action: button } : null;
+}
+
+export function resolveReloadWeapon(loadout: Partial<LoadoutState>, inventory: WeaponInventoryState): WeaponId | null {
+  const normalized = normalizeLoadout(loadout);
+  const canReload = (weaponId?: WeaponId): weaponId is WeaponId => {
+    if (!weaponId || !inventory.ammo[weaponId]) {
+      return false;
+    }
+    return Boolean(weaponRegistry.get(weaponId).ammo);
+  };
+  const needsReload = (weaponId: WeaponId): boolean => {
+    const ammo = inventory.ammo[weaponId];
+    const config = weaponRegistry.get(weaponId).ammo;
+    return Boolean(ammo && config && ammo.magazine < config.magazineSize && (ammo.reserve > 0 || ammo.reloadTimer > 0));
+  };
+  if (canReload(inventory.equippedWeapon)) {
+    return inventory.equippedWeapon;
+  }
+  const candidates = [normalized.leftHand, normalized.rightHand, normalized.attachment];
+  const ammoWeapons = candidates.filter(canReload);
+  return ammoWeapons.find(needsReload) ?? ammoWeapons[0] ?? null;
 }
 
 function colorForWeapon(id: WeaponId): string {

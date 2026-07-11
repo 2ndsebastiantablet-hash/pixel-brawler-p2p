@@ -93,6 +93,21 @@ describe("combat system", () => {
     expect(combat.getPlayerInventory().ammo.pistol?.magazine).toBe(20);
   });
 
+  it("reloads a selected ammo weapon even when a strap item is currently equipped", () => {
+    const combat = new CombatSystem({ mode: "offline" });
+    combat.start(createDefaultInventory());
+    combat.equip("spirit-fighter" as never);
+    const ammo = combat.getPlayerInventory().ammo.pistol!;
+    ammo.magazine = 0;
+    ammo.reserve = 20;
+
+    const reloading = combat.reloadWeapon("local", "pistol", 400);
+
+    expect(reloading).toMatchObject({ kind: "reload-started", weaponId: "pistol" });
+    combat.update(1.2, [playerState]);
+    expect(ammo.magazine).toBe(20);
+  });
+
   it("applies damage, knockback, hitstun, invulnerability, and respawn to the training dummy", () => {
     const combat = new CombatSystem({ mode: "offline" });
     combat.start(createDefaultInventory());
@@ -2198,6 +2213,45 @@ describe("combat system", () => {
     });
   });
 
+  it("removes killed Chainsaw zombies permanently instead of respawning dummy bodies", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("chainsaw");
+    const player = { ...playerState, id: "peer-a", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Host", "#18dff5");
+    const victim = combat.spawnTrainingDummy({ x: 46, y: playerState.y });
+
+    combat.usePrimary({ ownerId: "peer-a", player, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    for (let index = 0; index < 14; index += 1) {
+      combat.getCombatant(victim.id)!.invulnerable = 0;
+      combat.update(0.25, [player]);
+    }
+    combat.getCombatant(victim.id)!.hp = 1;
+    combat.getCombatant(victim.id)!.invulnerable = 0;
+    combat.update(0.25, [player]);
+
+    const zombie = combat.getSnapshot().zombies[0];
+    expect(zombie).toBeDefined();
+    combat.getCombatant(zombie.id)!.invulnerable = 0;
+    combat.applyDamage({
+      sourceId: "peer-a",
+      targetId: zombie.id,
+      weaponId: "pistol",
+      damage: 999,
+      knockback: { x: 120, y: -120 },
+      stun: 0.2,
+      label: "Zombie Cleanup Test",
+      skipHitLocationScaling: true,
+    });
+    const deathEffectShown = combat.getSnapshot().effects.some((effect) => effect.label === "ZOMBIE DOWN");
+    combat.update(3.5, [player]);
+
+    expect(combat.getSnapshot().zombies.some((item) => item.id === zombie.id)).toBe(false);
+    expect(combat.getCombatant(zombie.id)).toBeUndefined();
+    expect(combat.getSnapshot().combatants.some((item) => item.id === zombie.id)).toBe(false);
+    expect(deathEffectShown).toBe(true);
+  });
+
   it("aims Spikes tips at clicks, poisons body contact including the owner, and impales only on the tip", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -2515,6 +2569,27 @@ describe("combat system", () => {
     expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter").spiritActive).toBe(false);
     expect(combat.getCombatant("fighter")!.statuses).toEqual(expect.arrayContaining([expect.objectContaining({ id: "winded" })]));
     expect(combat.getPlayerInventory().cooldowns["spirit-fighter" as never]).toBeGreaterThan(50);
+  });
+
+  it("exposes Spirit heart beat-line UI state with varied left/right patterns", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("spirit-fighter" as never);
+    const fighter = { ...playerState, id: "fighter", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(fighter, "Fighter", "#18dff5");
+
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    const initialRuntime = combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter");
+    expect(initialRuntime.spiritHeartAssembling).toBe(true);
+    expect(initialRuntime.spiritBeatPattern).toMatch(/normal|split|fast|slow|double|burst|unsynced|fake/);
+    expect(initialRuntime.spiritBeatLines.length).toBeGreaterThanOrEqual(2);
+    expect(initialRuntime.spiritBeatLines.some((line) => line.side === "left")).toBe(true);
+    expect(initialRuntime.spiritBeatLines.some((line) => line.side === "right")).toBe(true);
+    expect(initialRuntime.spiritBeatLines.every((line) => line.progress >= 0 && line.progress <= 1)).toBe(true);
+
+    combat.update(0.72, [fighter]);
+    const activeRuntime = combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter");
+    expect(activeRuntime.spiritBeatLines.some((line) => line.progress > 0.75)).toBe(true);
   });
 
   it("ends Spirit focus for no-action beats, whiffs, and incoming hits", () => {

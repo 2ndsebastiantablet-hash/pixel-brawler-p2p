@@ -173,10 +173,37 @@ export interface SpiritFocusState {
   beatInterval: number;
   beatTimer: number;
   timingWindow: number;
+  beatPattern: SpiritBeatPattern;
+  beatLines: SpiritBeatLineState[];
+  heartAssembleTimer: number;
+  heartPulseTimer: number;
+  heartShakeTimer: number;
   combo: number;
   perfectStreak: number;
   feedback: string;
   feedbackTimer: number;
+}
+
+export type SpiritBeatSide = "left" | "right";
+export type SpiritBeatPattern = "normal" | "split" | "fast" | "slow" | "double" | "burst" | "unsynced" | "fake";
+
+export interface SpiritBeatLineState {
+  id: string;
+  side: SpiritBeatSide;
+  duration: number;
+  timeToImpact: number;
+  fake: boolean;
+  hit: boolean;
+  beatSounded: boolean;
+}
+
+export interface SpiritBeatLineRuntime {
+  id: string;
+  side: SpiritBeatSide;
+  progress: number;
+  fake: boolean;
+  hit: boolean;
+  timeToImpact: number;
 }
 
 export interface CombatEffect {
@@ -501,6 +528,11 @@ export interface WeaponRuntimeState {
   spiritWindedTimer: number;
   spiritBeatProgress: number;
   spiritBeatWindow: number;
+  spiritBeatPattern: SpiritBeatPattern;
+  spiritBeatLines: SpiritBeatLineRuntime[];
+  spiritHeartAssembling: boolean;
+  spiritHeartPulse: number;
+  spiritHeartShake: number;
   spiritCombo: number;
   spiritPerfectStreak: number;
   spiritFeedback: string;
@@ -696,6 +728,14 @@ export class CombatSystem {
     if (this.spikeModes.has(id)) {
       this.endSpikeMode(id, false);
       this.spikeModes.delete(id);
+    }
+    if (id.startsWith("zombie-")) {
+      this.zombies.delete(id);
+    }
+    for (const zombie of this.zombies.values()) {
+      if (zombie.targetId === id) {
+        zombie.targetId = undefined;
+      }
     }
     this.combatants.delete(id);
   }
@@ -914,7 +954,11 @@ export class CombatSystem {
   }
 
   reload(ownerId: string, now: number): WeaponUseResult {
-    const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
+    return this.reloadWeapon(ownerId, this.inventory.equippedWeapon, now);
+  }
+
+  reloadWeapon(ownerId: string, weaponId: WeaponId, now: number): WeaponUseResult {
+    const weapon = weaponRegistry.get(weaponId);
     if (this.hasMissingHands(ownerId)) {
       return { kind: "blocked", weaponId: weapon.id, label: "No hands" };
     }
@@ -1018,7 +1062,7 @@ export class CombatSystem {
     const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
     this.recordDeathAuraSuffering(target.id, damage);
-    const chainsawDeathSource = request.weaponId === "chainsaw" && request.label !== "Zombie Bite" && !request.sourceId.startsWith("zombie-");
+    const chainsawDeathSource = request.weaponId === "chainsaw" && request.label !== "Zombie Bite" && !request.sourceId.startsWith("zombie-") && !target.id.startsWith("zombie-");
     if (chainsawDeathSource && request.sourceId !== target.id) {
       this.recordChainsawDamage(request.sourceId, target.id, damage);
     }
@@ -1367,8 +1411,20 @@ export class CombatSystem {
       spiritTimer: spirit.active ? spirit.timer : 0,
       spiritCooldown: spirit.cooldownTimer,
       spiritWindedTimer: spirit.windedTimer,
-      spiritBeatProgress: spirit.active ? clamp(1 - Math.max(0, spirit.beatTimer) / Math.max(0.01, spirit.beatInterval), 0, 1) : 0,
+      spiritBeatProgress: spirit.active ? spiritBeatProgress(spirit) : 0,
       spiritBeatWindow: spirit.timingWindow,
+      spiritBeatPattern: spirit.beatPattern,
+      spiritBeatLines: spirit.active ? spirit.beatLines.map((line) => ({
+        id: line.id,
+        side: line.side,
+        progress: clamp(1 - Math.max(0, line.timeToImpact) / Math.max(0.01, line.duration), 0, 1),
+        fake: line.fake,
+        hit: line.hit,
+        timeToImpact: line.timeToImpact,
+      })) : [],
+      spiritHeartAssembling: spirit.active && spirit.heartAssembleTimer > 0,
+      spiritHeartPulse: spirit.heartPulseTimer,
+      spiritHeartShake: spirit.heartShakeTimer,
       spiritCombo: spirit.combo,
       spiritPerfectStreak: spirit.perfectStreak,
       spiritFeedback: spirit.feedbackTimer > 0 ? spirit.feedback : "",
@@ -2141,10 +2197,16 @@ export class CombatSystem {
     state.beatInterval = spiritInitialBeatInterval;
     state.beatTimer = spiritInitialBeatInterval;
     state.timingWindow = spiritInitialTimingWindow;
+    state.beatPattern = "normal";
+    state.beatLines = [];
+    state.heartAssembleTimer = 0.78;
+    state.heartPulseTimer = 0;
+    state.heartShakeTimer = 0;
     state.combo = 0;
     state.perfectStreak = 0;
     state.feedback = "FOCUS";
     state.feedbackTimer = 0.7;
+    this.scheduleSpiritBeatPattern(state);
     owner.statuses = owner.statuses.filter((status) => status.id !== "winded");
     owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spiritFocus"));
     const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
@@ -2275,11 +2337,58 @@ export class CombatSystem {
     return { kind: "utility", weaponId, label: "Spirit Flash Step" };
   }
 
+  useSpiritRhythmAction(ownerId: string, player: PlayerPhysicsState, action: "move" | "jump", direction: Vec2, now: number): WeaponUseResult {
+    const weaponId: WeaponId = "spirit-fighter";
+    const state = this.getOrCreateSpiritFocus(ownerId);
+    if (!state.active) {
+      return { kind: "blocked", weaponId, label: "No focus" };
+    }
+    const grade = this.consumeSpiritBeat(ownerId);
+    if (!grade) {
+      this.failSpiritFocus(ownerId, "MISS", true);
+      return { kind: "blocked", weaponId, label: "Spirit Miss" };
+    }
+    const owner = this.combatants.get(ownerId);
+    const step = normalize(direction.x || direction.y ? direction : { x: player.facing, y: 0 });
+    if (action === "jump") {
+      const lift = grade === "perfect" ? -640 : -520;
+      player.velocityY = Math.min(player.velocityY, lift);
+      player.grounded = false;
+      if (owner) {
+        owner.velocityY = player.velocityY;
+      }
+    } else {
+      const boost = grade === "perfect" ? 360 : 245;
+      player.velocityX = clamp(player.velocityX + step.x * boost, -spiritFlashStepSpeed, spiritFlashStepSpeed);
+      if (owner) {
+        owner.velocityX = player.velocityX;
+      }
+    }
+    this.advanceSpiritBeat(state, grade, action === "jump" ? "Spirit Beat Jump" : "Spirit Beat Step");
+    const center = { x: player.x + player.width / 2, y: player.y + player.height / 2 };
+    this.addEffect("teleport", center.x, center.y, center.x + step.x * 34, center.y + (action === "jump" ? -36 : 8), colorForWeapon(weaponId), grade === "perfect" ? "PERFECT STEP" : "GOOD STEP");
+    this.queueSound(grade === "perfect" ? "spirit-perfect" : "dash");
+    this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", center, step, action === "jump" ? "Spirit Beat Jump" : "Spirit Beat Step", now));
+    return { kind: "utility", weaponId, label: action === "jump" ? "Spirit Beat Jump" : "Spirit Beat Step" };
+  }
+
   private consumeSpiritBeat(ownerId: string): "perfect" | "good" | undefined {
     const state = this.getOrCreateSpiritFocus(ownerId);
-    const offset = Math.abs(state.beatTimer);
+    const candidates = state.beatLines
+      .filter((line) => !line.fake && !line.hit && Math.abs(line.timeToImpact) <= state.timingWindow)
+      .sort((left, right) => Math.abs(left.timeToImpact) - Math.abs(right.timeToImpact));
+    if (candidates.length === 0) {
+      return undefined;
+    }
+    const nearest = candidates[0];
+    const offset = Math.abs(nearest.timeToImpact);
     if (offset > state.timingWindow) {
       return undefined;
+    }
+    for (const line of state.beatLines) {
+      if (!line.fake && !line.hit && Math.abs(line.timeToImpact - nearest.timeToImpact) <= 0.085 && Math.abs(line.timeToImpact) <= state.timingWindow) {
+        line.hit = true;
+      }
     }
     return offset <= state.timingWindow * 0.46 ? "perfect" : "good";
   }
@@ -2287,7 +2396,15 @@ export class CombatSystem {
   private advanceSpiritBeat(state: SpiritFocusState, grade: "perfect" | "good", feedback: string): void {
     state.beatInterval = clamp(spiritInitialBeatInterval - state.combo * 0.018, spiritMinimumBeatInterval, spiritInitialBeatInterval);
     state.timingWindow = clamp(spiritInitialTimingWindow - state.combo * 0.006, spiritMinimumTimingWindow, spiritInitialTimingWindow);
-    state.beatTimer = state.beatInterval;
+    state.heartPulseTimer = grade === "perfect" ? 0.42 : 0.28;
+    state.heartShakeTimer = 0;
+    state.beatLines = state.beatLines.filter((line) => !line.hit && (!line.fake || line.timeToImpact > -state.timingWindow));
+    const hasPendingLine = state.beatLines.some((line) => !line.fake && !line.hit && line.timeToImpact > -state.timingWindow);
+    if (!hasPendingLine) {
+      this.scheduleSpiritBeatPattern(state);
+    } else {
+      this.syncSpiritBeatTimer(state);
+    }
     state.feedback = grade === "perfect" ? "PERFECT" : "GOOD";
     if (feedback.includes("Flurry")) {
       state.feedback = "FLURRY";
@@ -2302,6 +2419,9 @@ export class CombatSystem {
       state.cooldownTimer = Math.max(0, state.cooldownTimer - dt);
       state.windedTimer = Math.max(0, state.windedTimer - dt);
       state.feedbackTimer = Math.max(0, state.feedbackTimer - dt);
+      state.heartAssembleTimer = Math.max(0, state.heartAssembleTimer - dt);
+      state.heartPulseTimer = Math.max(0, state.heartPulseTimer - dt);
+      state.heartShakeTimer = Math.max(0, state.heartShakeTimer - dt);
       if (state.cooldownTimer > 0) {
         this.inventory.cooldowns["spirit-fighter"] = state.cooldownTimer;
       }
@@ -2319,20 +2439,30 @@ export class CombatSystem {
         continue;
       }
       state.timer = Math.max(0, state.timer - dt);
-      const previousBeatTimer = state.beatTimer;
-      state.beatTimer -= dt;
       owner.statuses = upsertStatusEffect(owner.statuses, createStatus("spiritFocus"));
-      if (previousBeatTimer > 0 && state.beatTimer <= 0) {
-        const cx = owner.x + owner.width / 2;
-        const cy = owner.y + owner.height / 2;
-        this.addEffect("aura", cx, cy, cx, cy - 58, colorForWeapon("spirit-fighter"), "BEAT");
-        this.queueSound("spirit-beat");
+      if (state.beatLines.length === 0) {
+        this.scheduleSpiritBeatPattern(state);
+      }
+      for (const line of state.beatLines) {
+        const previousTime = line.timeToImpact;
+        line.timeToImpact -= dt;
+        if (previousTime > 0 && line.timeToImpact <= 0 && !line.beatSounded) {
+          line.beatSounded = true;
+          const cx = owner.x + owner.width / 2;
+          const cy = owner.y + owner.height / 2;
+          this.addEffect("aura", cx, cy, cx + (line.side === "left" ? -42 : 42), cy - 58, line.fake ? "#8d93a3" : colorForWeapon("spirit-fighter"), line.fake ? "FEINT" : "BEAT");
+          if (!line.fake) {
+            state.heartPulseTimer = Math.max(state.heartPulseTimer, 0.18);
+            this.queueSound("spirit-beat");
+          }
+        }
       }
       if (state.timer <= 0) {
         this.finishSpiritFocus(ownerId, "COMPLETE");
         continue;
       }
-      if (state.beatTimer < -state.timingWindow) {
+      this.syncSpiritBeatTimer(state);
+      if (state.beatLines.some((line) => !line.fake && !line.hit && line.timeToImpact < -state.timingWindow)) {
         this.failSpiritFocus(ownerId, "MISS", true);
       }
     }
@@ -2348,6 +2478,9 @@ export class CombatSystem {
     state.combo = 0;
     state.perfectStreak = 0;
     state.beatTimer = state.beatInterval;
+    state.beatLines = [];
+    state.heartPulseTimer = 0;
+    state.heartShakeTimer = 0.42;
     state.feedback = feedback;
     state.feedbackTimer = 1.2;
     state.cooldownTimer = spiritCooldownDuration;
@@ -2373,6 +2506,9 @@ export class CombatSystem {
     state.timer = 0;
     state.combo = 0;
     state.perfectStreak = 0;
+    state.beatLines = [];
+    state.heartPulseTimer = 0.32;
+    state.heartShakeTimer = 0;
     state.feedback = feedback;
     state.feedbackTimer = 1;
     state.cooldownTimer = spiritCooldownDuration;
@@ -2421,6 +2557,11 @@ export class CombatSystem {
         beatInterval: spiritInitialBeatInterval,
         beatTimer: spiritInitialBeatInterval,
         timingWindow: spiritInitialTimingWindow,
+        beatPattern: "normal",
+        beatLines: [],
+        heartAssembleTimer: 0,
+        heartPulseTimer: 0,
+        heartShakeTimer: 0,
         combo: 0,
         perfectStreak: 0,
         feedback: "",
@@ -2429,6 +2570,67 @@ export class CombatSystem {
       this.spiritFocusModes.set(ownerId, state);
     }
     return state;
+  }
+
+  private scheduleSpiritBeatPattern(state: SpiritFocusState): void {
+    const difficulty = state.combo + Math.floor(state.perfectStreak / 2);
+    const patterns: SpiritBeatPattern[] = difficulty < 2
+      ? ["normal", "split", "slow"]
+      : difficulty < 5
+        ? ["normal", "split", "fast", "double", "slow"]
+        : difficulty < 9
+          ? ["split", "fast", "double", "burst", "unsynced"]
+          : ["fast", "double", "burst", "unsynced", "fake"];
+    const pattern = patterns[(state.combo + state.perfectStreak) % patterns.length];
+    const base = clamp(spiritInitialBeatInterval - difficulty * 0.022, spiritMinimumBeatInterval, spiritInitialBeatInterval);
+    const cues: Array<{ side: SpiritBeatSide; time: number; fake?: boolean }> = [];
+    switch (pattern) {
+      case "split":
+        cues.push({ side: "left", time: base * 0.86 }, { side: "right", time: base * 1.08 });
+        break;
+      case "fast":
+        cues.push({ side: "left", time: Math.max(spiritMinimumBeatInterval, base * 0.74) }, { side: "right", time: Math.max(spiritMinimumBeatInterval, base * 0.74) });
+        break;
+      case "slow":
+        cues.push({ side: "left", time: base * 1.24 }, { side: "right", time: base * 1.24 });
+        break;
+      case "double":
+        cues.push({ side: "left", time: base * 0.9 }, { side: "right", time: base * 0.9 }, { side: "left", time: base * 1.18 }, { side: "right", time: base * 1.18 });
+        break;
+      case "burst":
+        cues.push({ side: "left", time: base * 0.72 }, { side: "right", time: base * 0.9 }, { side: "left", time: base * 1.08 }, { side: "right", time: base * 1.26 });
+        break;
+      case "unsynced":
+        cues.push({ side: "left", time: base * 0.82 }, { side: "right", time: base * 1.22 });
+        break;
+      case "fake":
+        cues.push({ side: "left", time: base * 0.72, fake: true }, { side: "right", time: base }, { side: "left", time: base * 1.18 });
+        break;
+      case "normal":
+      default:
+        cues.push({ side: "left", time: base }, { side: "right", time: base });
+        break;
+    }
+    state.beatPattern = pattern;
+    state.beatInterval = Math.max(...cues.filter((cue) => !cue.fake).map((cue) => cue.time), base);
+    state.timingWindow = clamp(spiritInitialTimingWindow - difficulty * 0.006, spiritMinimumTimingWindow, spiritInitialTimingWindow);
+    state.beatLines = cues.map((cue, index) => ({
+      id: `${state.ownerId}-${state.combo}-${state.perfectStreak}-${pattern}-${index}`,
+      side: cue.side,
+      duration: cue.time,
+      timeToImpact: cue.time,
+      fake: Boolean(cue.fake),
+      hit: false,
+      beatSounded: false,
+    }));
+    this.syncSpiritBeatTimer(state);
+  }
+
+  private syncSpiritBeatTimer(state: SpiritFocusState): void {
+    const next = state.beatLines
+      .filter((line) => !line.fake && !line.hit)
+      .sort((left, right) => Math.abs(left.timeToImpact) - Math.abs(right.timeToImpact))[0];
+    state.beatTimer = next?.timeToImpact ?? state.beatInterval;
   }
 
   private toggleVan(context: WeaponUseContext): WeaponUseResult {
@@ -4102,8 +4304,12 @@ export class CombatSystem {
   private updateZombies(dt: number): void {
     for (const [id, zombie] of [...this.zombies.entries()]) {
       const body = this.combatants.get(id);
-      if (!body || body.respawnTimer > 0 || body.hp <= 0) {
+      if (!body) {
         this.zombies.delete(id);
+        continue;
+      }
+      if (body.respawnTimer > 0 || body.hp <= 0) {
+        this.removeZombiePermanently(id, "ZOMBIE DOWN");
         continue;
       }
       zombie.age += dt;
@@ -5318,7 +5524,8 @@ export class CombatSystem {
       this.endSpikeMode(target.id, false);
     }
     if (target.id.startsWith("zombie-")) {
-      this.zombies.delete(target.id);
+      this.removeZombiePermanently(target.id, "ZOMBIE DOWN");
+      return;
     }
     target.hp = 0;
     target.respawnTimer = respawnDelay;
@@ -5331,6 +5538,25 @@ export class CombatSystem {
     target.statuses = target.statuses.filter((status) => status.id === "holyBuff" || status.id === "blessed");
     this.addEffect("shockwave", target.spawnX + target.width / 2, target.spawnY + target.height / 2, target.spawnX + target.width / 2, target.spawnY - 72, "#72b7ff", label);
     this.queueSound("respawn");
+  }
+
+  private removeZombiePermanently(id: string, label: string): void {
+    const body = this.combatants.get(id);
+    const cx = (body?.x ?? 0) + (body?.width ?? DEFAULT_PHYSICS.width) / 2;
+    const cy = (body?.y ?? DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height) + (body?.height ?? DEFAULT_PHYSICS.height) / 2;
+    this.clearChainsawVictimRecords(id);
+    this.releaseSpikeImpale(id);
+    this.zombies.delete(id);
+    this.combatants.delete(id);
+    for (const zombie of this.zombies.values()) {
+      if (zombie.targetId === id) {
+        zombie.targetId = undefined;
+      }
+    }
+    this.addEffect("aura", cx, cy, cx, cy - 46, "#164f24", label);
+    this.addEffect("spark", cx - 9, cy + 14, cx - 44, cy - 4, "#0f2415", "ASH");
+    this.addEffect("spark", cx + 8, cy + 12, cx + 42, cy - 8, "#7cff6b", "ASH");
+    this.queueSound("player-stunned");
   }
 
   private updateProjectiles(dt: number, players: PlayerPhysicsState[]): void {
@@ -7054,6 +7280,16 @@ function deathAuraRadius(power: number): number {
 
 function deathAuraColor(power: number): string {
   return power > 0.72 ? "#08080c" : power > 0.38 ? "#17101d" : "#23182b";
+}
+
+function spiritBeatProgress(state: SpiritFocusState): number {
+  const next = state.beatLines
+    .filter((line) => !line.fake && !line.hit)
+    .sort((left, right) => Math.abs(left.timeToImpact) - Math.abs(right.timeToImpact))[0];
+  if (!next) {
+    return 0;
+  }
+  return clamp(1 - Math.max(0, next.timeToImpact) / Math.max(0.01, next.duration), 0, 1);
 }
 
 function facingFromAim(aimX: number, fallback: number): -1 | 1 {

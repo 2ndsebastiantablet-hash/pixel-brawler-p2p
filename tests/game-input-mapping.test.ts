@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveMouseWeaponAction } from "../src/game/Game";
+import { resolveMouseWeaponAction, resolveReloadWeapon } from "../src/game/Game";
+import { createDefaultInventory } from "../src/game/combat/WeaponRegistry";
 import type { LoadoutState } from "../src/game/loadout/Loadout";
 
 describe("game mouse weapon input mapping", () => {
@@ -62,5 +63,32 @@ describe("game mouse weapon input mapping", () => {
 
     expect(resolveMouseWeaponAction("primary", loadout)).toEqual({ weaponId: "axe", action: "primary" });
     expect(resolveMouseWeaponAction("secondary", loadout)).toEqual({ weaponId: "axe", action: "secondary" });
+  });
+
+  it("resolves R reload to a held ammo weapon even when a strap item is currently equipped", () => {
+    const inventory = createDefaultInventory();
+    inventory.equippedWeapon = "spirit-fighter";
+    inventory.ammo.pistol!.magazine = 0;
+    const loadout: LoadoutState = {
+      leftHand: "pistol",
+      rightHand: "knife",
+      frontStrap: "spirit-fighter",
+    };
+
+    expect(resolveReloadWeapon(loadout, inventory)).toBe("pistol");
+  });
+
+  it("keeps R reload on the active swapped gun after attachment/hand changes", () => {
+    const inventory = createDefaultInventory();
+    inventory.equippedWeapon = "revolver";
+    inventory.ammo.revolver!.magazine = 0;
+    const loadout: LoadoutState = {
+      leftHand: "knife",
+      rightHand: "revolver",
+      attachment: "pistol",
+      frontStrap: "wings",
+    };
+
+    expect(resolveReloadWeapon(loadout, inventory)).toBe("revolver");
   });
 });
