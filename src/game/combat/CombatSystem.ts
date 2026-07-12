@@ -157,6 +157,25 @@ export interface JudgmentBeamState {
   visualOnly?: boolean;
 }
 
+export type JudgmentDayPhase = "countdown" | "active";
+export type MoonSide = "bottom" | "top";
+
+export interface MoonEventState {
+  id: string;
+  ownerId: string;
+  timer: number;
+  duration: number;
+  age: number;
+  userSide: MoonSide;
+  switching: boolean;
+  targetSide?: MoonSide;
+  switchFromSide: MoonSide;
+  switchToSide: MoonSide;
+  switchTimer: number;
+  switchDuration: number;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -280,6 +299,7 @@ export interface CombatSnapshot {
   spikeParticles: SpikeParticleState[];
   crossShields: CrossShieldState[];
   judgmentBeams: JudgmentBeamState[];
+  moonEvents: MoonEventState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -445,14 +465,21 @@ const crossShieldMaxKnockback = 1120;
 const crossShieldMinDuration = 0.42;
 const crossShieldMaxDuration = 0.95;
 const crossShieldContactDamage = 1;
+const crossJudgmentCountdownDuration = 60;
 const crossJudgmentDuration = 60;
 const crossRestDuration = 180;
 const crossJudgmentBeamCount = 200;
-const crossBeamWarningTime = 0.45;
+const crossBeamWarningTime = 1;
 const crossBeamDuration = 2.4;
 const crossBeamDamage = 999;
 const crossBeamRadius = 34;
 const crossBeamTargetEvery = 9;
+const crossMaxActiveBeams = 20;
+const moonEventDuration = 60;
+const moonSwitchDuration = 0.82;
+const moonTopFloorY = DEFAULT_PHYSICS.groundY - 430;
+const moonTransitionSpeed = 980;
+const moonWindSpeed = 340;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -520,8 +547,11 @@ interface CrossState {
 interface JudgmentDayState {
   ownerId: string;
   seed: number;
+  phase: JudgmentDayPhase;
   timer: number;
   duration: number;
+  activeDuration: number;
+  countdownDuration: number;
   beamIndex: number;
   beamAccumulator: number;
   beams: JudgmentBeamState[];
@@ -611,6 +641,12 @@ export interface WeaponRuntimeState {
   crossRestTimer: number;
   crossJudgmentActive: boolean;
   crossJudgmentTimer: number;
+  crossJudgmentPhase: JudgmentDayPhase | "idle";
+  moonActive: boolean;
+  moonTimer: number;
+  moonUserSide: MoonSide;
+  moonTargetSide?: MoonSide;
+  moonSwitching: boolean;
   zombieCount: number;
   attachedHands: number;
 }
@@ -654,6 +690,7 @@ export class CombatSystem {
   private readonly crossStates = new Map<string, CrossState>();
   private readonly crossShields: CrossShieldState[] = [];
   private readonly judgmentDays = new Map<string, JudgmentDayState>();
+  private readonly moonEvents: MoonEventState[] = [];
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -697,6 +734,7 @@ export class CombatSystem {
     this.crossStates.clear();
     this.crossShields.length = 0;
     this.judgmentDays.clear();
+    this.moonEvents.length = 0;
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -815,6 +853,7 @@ export class CombatSystem {
     }
     this.crossStates.delete(id);
     this.judgmentDays.delete(id);
+    removeWhere(this.moonEvents, (event) => event.ownerId === id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
       if (zombie.targetId === id) {
@@ -858,6 +897,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
+    }
+    if (this.inventory.equippedWeapon === "moon") {
+      return this.activateMoonEvent(context);
     }
     if (this.inventory.equippedWeapon === "super-legs") {
       return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
@@ -911,6 +953,9 @@ export class CombatSystem {
     }
     if (weapon.id === "wings") {
       return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
+    }
+    if (weapon.id === "moon") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Moon uses Q/E" };
     }
     if (weapon.id === "super-legs") {
       return { kind: "blocked", weaponId: weapon.id, label: "Super Legs passive" };
@@ -1266,6 +1311,7 @@ export class CombatSystem {
     this.updateSpikes(dt, players);
     this.updateVans(dt, players);
     this.updateCombatants(dt);
+    this.updateMoonEvents(dt, players);
     this.updateProjectiles(dt, players);
     this.updateCross(dt, players);
     this.updateTeleports(dt, players);
@@ -1456,6 +1502,7 @@ export class CombatSystem {
     const spirit = this.getOrCreateSpiritFocus(ownerId);
     const cross = this.getOrCreateCrossState(ownerId);
     const judgment = this.judgmentDays.get(ownerId);
+    const moon = this.getMoonEventForOwner(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1527,16 +1574,118 @@ export class CombatSystem {
       crossRestTimer: cross.restTimer,
       crossJudgmentActive: Boolean(judgment && judgment.timer > 0),
       crossJudgmentTimer: judgment?.timer ?? 0,
+      crossJudgmentPhase: judgment?.phase ?? "idle",
+      moonActive: Boolean(moon && moon.timer > 0),
+      moonTimer: moon?.timer ?? 0,
+      moonUserSide: moon?.userSide ?? "bottom",
+      moonTargetSide: moon?.switching ? moon.switchToSide : undefined,
+      moonSwitching: moon?.switching ?? false,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
   }
 
-  getJudgmentDayState(): { active: boolean; timer: number; ownerId?: string } {
+  getJudgmentDayState(): { active: boolean; phase: JudgmentDayPhase | "idle"; timer: number; ownerId?: string } {
     const active = [...this.judgmentDays.values()]
       .filter((state) => state.timer > 0)
       .sort((left, right) => right.timer - left.timer)[0];
-    return { active: Boolean(active), timer: active?.timer ?? 0, ownerId: active?.ownerId };
+    return { active: Boolean(active), phase: active?.phase ?? "idle", timer: active?.timer ?? 0, ownerId: active?.ownerId };
+  }
+
+  getMoonEventState(ownerId?: string): { active: boolean; timer: number; ownerId?: string; userSide: MoonSide; targetSide?: MoonSide; switching: boolean } {
+    const active = ownerId
+      ? this.getMoonEventForOwner(ownerId)
+      : [...this.moonEvents].filter((state) => state.timer > 0).sort((left, right) => right.timer - left.timer)[0];
+    return {
+      active: Boolean(active && active.timer > 0),
+      timer: active?.timer ?? 0,
+      ownerId: active?.ownerId,
+      userSide: active?.userSide ?? "bottom",
+      targetSide: active?.switching ? active.switchToSide : undefined,
+      switching: active?.switching ?? false,
+    };
+  }
+
+  switchMoonSide(ownerId: string, now: number): WeaponUseResult {
+    return this.switchMoonSideInternal(ownerId, now, false);
+  }
+
+  private activateMoonEvent(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "moon";
+    const existing = this.getMoonEventForOwner(context.ownerId);
+    if (existing && existing.timer > 0) {
+      return { kind: "blocked", weaponId, label: "Moon active" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    this.startMoonEvent(context.ownerId, origin, false);
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", origin, { x: 0, y: -1 }, "Moonfall", context.now, {
+      range: moonEventDuration,
+    }));
+    return { kind: "utility", weaponId, label: "Moonfall" };
+  }
+
+  private startMoonEvent(ownerId: string, origin: Vec2, visualOnly: boolean): MoonEventState {
+    const existing = this.getMoonEventForOwner(ownerId);
+    if (existing && existing.timer > 0) {
+      return existing;
+    }
+    const state: MoonEventState = {
+      id: this.makeId(visualOnly ? "remote-moon" : "moon"),
+      ownerId,
+      timer: moonEventDuration,
+      duration: moonEventDuration,
+      age: 0,
+      userSide: "bottom",
+      switching: false,
+      switchFromSide: "bottom",
+      switchToSide: "top",
+      switchTimer: 0,
+      switchDuration: moonSwitchDuration,
+      visualOnly,
+    };
+    this.moonEvents.push(state);
+    this.addEffect("aura", origin.x, origin.y, origin.x, moonTopFloorY, colorForWeapon("moon"), "MOONFALL");
+    this.addEffect("shockwave", origin.x, DEFAULT_PHYSICS.groundY, origin.x + 260, DEFAULT_PHYSICS.groundY, colorForWeapon("moon"), "MAP FLIP");
+    if (!visualOnly) {
+      this.queueSound("moon-activate");
+    }
+    return state;
+  }
+
+  private switchMoonSideInternal(ownerId: string, now: number, visualOnly: boolean): WeaponUseResult {
+    const weaponId: WeaponId = "moon";
+    const state = this.getMoonEventForOwner(ownerId);
+    if (!state || state.timer <= 0) {
+      return { kind: "blocked", weaponId, label: "Moon inactive" };
+    }
+    const owner = this.combatants.get(ownerId);
+    const origin = owner
+      ? { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 }
+      : { x: 0, y: DEFAULT_PHYSICS.groundY };
+    if (state.switching) {
+      const progress = clamp(state.switchTimer / Math.max(0.01, state.switchDuration), 0, 1);
+      const previousFrom = state.switchFromSide;
+      state.switchFromSide = state.switchToSide;
+      state.switchToSide = previousFrom;
+      state.targetSide = state.switchToSide;
+      state.switchTimer = state.switchDuration * (1 - progress);
+    } else {
+      state.switchFromSide = state.userSide;
+      state.switchToSide = state.userSide === "bottom" ? "top" : "bottom";
+      state.targetSide = state.switchToSide;
+      state.switchTimer = 0;
+      state.switching = true;
+    }
+    this.addEffect("teleport", origin.x, origin.y, origin.x, moonFloorYForSide(state.switchToSide, DEFAULT_PHYSICS.height), colorForWeapon("moon"), "MOON SWITCH");
+    if (!visualOnly) {
+      this.queueSound("moon-switch");
+      this.recentEvents.push(this.createEvent(ownerId, weaponId, "secondary", origin, { x: 0, y: state.switchToSide === "top" ? -1 : 1 }, "Moon Switch", now));
+    }
+    return { kind: "utility", weaponId, label: "Moon Switch" };
   }
 
   activateVirginBlood(ownerId: string, player: PlayerPhysicsState, now: number): WeaponUseResult {
@@ -1681,15 +1830,17 @@ export class CombatSystem {
     const state: JudgmentDayState = {
       ownerId,
       seed,
-      timer: crossJudgmentDuration,
-      duration: crossJudgmentDuration,
+      phase: "countdown",
+      timer: crossJudgmentCountdownDuration,
+      duration: crossJudgmentCountdownDuration,
+      activeDuration: crossJudgmentDuration,
+      countdownDuration: crossJudgmentCountdownDuration,
       beamIndex: 0,
       beamAccumulator: 0,
       beams: [],
       visualOnly,
     };
     this.judgmentDays.set(ownerId, state);
-    this.spawnJudgmentBeam(state, origin.x, origin.y);
     this.addEffect("aura", origin.x, origin.y, origin.x, origin.y - 260, colorForWeapon("cross"), "JUDGMENT DAY");
     this.addEffect("shockwave", origin.x, DEFAULT_PHYSICS.groundY, origin.x + 240, DEFAULT_PHYSICS.groundY, colorForWeapon("cross"), "JUDGMENT DAY");
     if (!visualOnly) {
@@ -1807,6 +1958,17 @@ export class CombatSystem {
 
   private updateJudgmentDay(state: JudgmentDayState, dt: number): void {
     state.timer = Math.max(0, state.timer - dt);
+    if (state.phase === "countdown") {
+      if (state.timer > 0) {
+        return;
+      }
+      state.phase = "active";
+      state.timer = state.activeDuration;
+      state.duration = state.activeDuration;
+      state.beamAccumulator = 0;
+      const owner = this.combatants.get(state.ownerId);
+      this.spawnJudgmentBeam(state, owner ? owner.x + owner.width / 2 : undefined, owner ? owner.y + owner.height * 0.42 : undefined);
+    }
     for (const beam of state.beams) {
       const previousAge = beam.age;
       beam.age += dt;
@@ -1825,7 +1987,7 @@ export class CombatSystem {
     }
     state.beamAccumulator += dt * (crossJudgmentBeamCount / crossJudgmentDuration);
     let spawned = 0;
-    while (state.beamAccumulator >= 1 && spawned < 14) {
+    while (state.beamAccumulator >= 1 && spawned < 14 && state.beams.length < crossMaxActiveBeams) {
       state.beamAccumulator -= 1;
       this.spawnJudgmentBeam(state);
       spawned += 1;
@@ -1915,6 +2077,120 @@ export class CombatSystem {
     }
   }
 
+  private getMoonEventForOwner(ownerId: string): MoonEventState | undefined {
+    return [...this.moonEvents].reverse().find((event) => event.ownerId === ownerId && event.timer > 0);
+  }
+
+  private updateMoonEvents(dt: number, players: PlayerPhysicsState[]): void {
+    if (this.moonEvents.length === 0) {
+      return;
+    }
+    const playersById = new Map(players.map((player) => [player.id, player] as const));
+    const ended: MoonEventState[] = [];
+    for (const event of this.moonEvents) {
+      event.age += dt;
+      event.timer = Math.max(0, event.timer - dt);
+      if (event.switching) {
+        event.switchTimer = Math.min(event.switchDuration, event.switchTimer + dt);
+        if (event.switchTimer >= event.switchDuration) {
+          event.userSide = event.switchToSide;
+          event.targetSide = undefined;
+          event.switching = false;
+          event.switchTimer = 0;
+        }
+      }
+      if (event.timer <= 0) {
+        ended.push(event);
+        continue;
+      }
+      this.applyMoonEvent(event, dt, playersById);
+    }
+    for (const event of ended) {
+      this.finishMoonEvent(event, playersById);
+    }
+  }
+
+  private applyMoonEvent(event: MoonEventState, dt: number, playersById: Map<string, PlayerPhysicsState>): void {
+    for (const combatant of this.combatants.values()) {
+      if (combatant.respawnTimer > 0 || combatant.hp <= 0) {
+        continue;
+      }
+      const player = playersById.get(combatant.id);
+      const targetY = this.moonTargetYForCombatant(event, combatant);
+      const targetSide = targetY <= moonTopFloorY + 2 ? "top" : "bottom";
+      this.moveCombatantTowardMoonFloor(combatant, player, targetY, targetSide, event.ownerId === combatant.id && event.switching, dt);
+    }
+  }
+
+  private moonTargetYForCombatant(event: MoonEventState, combatant: Combatant): number {
+    if (combatant.id !== event.ownerId) {
+      return moonFloorYForSide("top", combatant.height);
+    }
+    if (!event.switching) {
+      return moonFloorYForSide(event.userSide, combatant.height);
+    }
+    const progress = easeInOutSine(event.switchTimer / Math.max(0.01, event.switchDuration));
+    return lerp(moonFloorYForSide(event.switchFromSide, combatant.height), moonFloorYForSide(event.switchToSide, combatant.height), progress);
+  }
+
+  private moveCombatantTowardMoonFloor(
+    combatant: Combatant,
+    player: PlayerPhysicsState | undefined,
+    targetY: number,
+    targetSide: MoonSide,
+    switching: boolean,
+    dt: number,
+  ): void {
+    const currentY = combatant.y;
+    const maxStep = switching ? Number.POSITIVE_INFINITY : moonTransitionSpeed * dt;
+    const nextY = switching ? targetY : approach(currentY, targetY, maxStep);
+    const delta = targetY - currentY;
+    combatant.y = nextY;
+    combatant.velocityY = Math.abs(targetY - nextY) <= 1
+      ? 0
+      : targetSide === "top"
+        ? -moonWindSpeed
+        : moonWindSpeed;
+    combatant.hitstun = Math.max(0, combatant.hitstun - dt * 0.5);
+    if (player) {
+      player.y = nextY;
+      player.velocityY = combatant.velocityY;
+      player.grounded = Math.abs(targetY - nextY) <= 2;
+      player.airDiving = false;
+      player.groundSlamming = false;
+      player.action = player.grounded ? "idle" : "jump";
+    }
+    if (Math.abs(delta) > 28 && !switching) {
+      this.addEffect("tracer", combatant.x + combatant.width / 2, combatant.y + combatant.height / 2, combatant.x + combatant.width / 2, targetY, colorForWeapon("moon"), targetSide === "top" ? "UPDRAFT" : "DROP");
+    }
+  }
+
+  private finishMoonEvent(event: MoonEventState, playersById: Map<string, PlayerPhysicsState>): void {
+    removeWhere(this.moonEvents, (item) => item.id === event.id);
+    if (this.moonEvents.some((item) => item.timer > 0)) {
+      return;
+    }
+    for (const combatant of this.combatants.values()) {
+      if (combatant.respawnTimer > 0 || combatant.hp <= 0) {
+        continue;
+      }
+      const floorY = moonFloorYForSide("bottom", combatant.height);
+      combatant.y = floorY;
+      combatant.velocityY = 0;
+      const player = playersById.get(combatant.id);
+      if (player) {
+        player.y = floorY;
+        player.velocityY = 0;
+        player.grounded = true;
+        player.action = "idle";
+      }
+    }
+    this.addEffect("shockwave", 0, DEFAULT_PHYSICS.groundY, 260, DEFAULT_PHYSICS.groundY, colorForWeapon("moon"), "MOON SET");
+    if (!event.visualOnly) {
+      this.queueSound("moon-end");
+    }
+  }
+
   applyRemoteEvent(event: CombatEventPacket): void {
     const weapon = weaponRegistry.get(event.weaponId);
     if (event.action === "hit" && event.targetId && typeof event.damage === "number" && !this.appliedRemoteEvents.has(event.id)) {
@@ -2001,6 +2277,10 @@ export class CombatSystem {
       this.spawnRemoteCrossVisual(event, aim);
       return;
     }
+    if (event.weaponId === "moon") {
+      this.spawnRemoteMoonVisual(event);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -2039,6 +2319,16 @@ export class CombatSystem {
         visualOnly: true,
       });
       this.addEffect("aura", event.x, event.y, event.x + aim.x * radius, event.y + aim.y * radius * 0.35, colorForWeapon("cross"), "Crescent Shield");
+    }
+  }
+
+  private spawnRemoteMoonVisual(event: CombatEventPacket): void {
+    if (event.label === "Moonfall") {
+      this.startMoonEvent(event.ownerId, { x: event.x, y: event.y }, true);
+      return;
+    }
+    if (event.label === "Moon Switch") {
+      this.switchMoonSideInternal(event.ownerId, event.ts, true);
     }
   }
 
@@ -2262,6 +2552,7 @@ export class CombatSystem {
       spikeParticles: this.spikeParticles,
       crossShields: this.crossShields,
       judgmentBeams: [...this.judgmentDays.values()].flatMap((state) => state.beams),
+      moonEvents: this.moonEvents,
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -7687,6 +7978,25 @@ function easeOutCubic(value: number): number {
   return 1 - (1 - t) ** 3;
 }
 
+function easeInOutSine(value: number): number {
+  const t = clamp(value, 0, 1);
+  return -(Math.cos(Math.PI * t) - 1) / 2;
+}
+
+function approach(current: number, target: number, amount: number): number {
+  if (current < target) {
+    return Math.min(current + amount, target);
+  }
+  if (current > target) {
+    return Math.max(current - amount, target);
+  }
+  return target;
+}
+
+function moonFloorYForSide(side: MoonSide, height: number): number {
+  return side === "top" ? moonTopFloorY : DEFAULT_PHYSICS.groundY - height;
+}
+
 function isBackstab(owner: Combatant, target: Combatant, attackDirection: number): boolean {
   const direction = Math.sign(attackDirection || target.x - owner.x || 1);
   const ownerCenter = owner.x + owner.width / 2;
@@ -7742,6 +8052,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffd84d";
     case "cross":
       return "#fff4a8";
+    case "moon":
+      return "#d6f2ff";
     case "hands":
       return "#b8ffd0";
     case "super-legs":

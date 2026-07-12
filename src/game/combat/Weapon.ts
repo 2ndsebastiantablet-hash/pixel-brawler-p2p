@@ -24,6 +24,7 @@ export type WeaponId =
   | "van"
   | "spirit-fighter"
   | "cross"
+  | "moon"
   | "hands"
   | "super-legs"
   | "teleport-ball"

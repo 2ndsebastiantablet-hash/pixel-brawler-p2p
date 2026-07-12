@@ -94,6 +94,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector("[data-loadout-search]")).toBeInstanceOf(HTMLInputElement);
     expect(root.querySelector('[data-loadout-item="super-legs"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="cross"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="moon"]')).toBeInstanceOf(HTMLButtonElement);
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();
     expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Wings");
@@ -135,6 +136,40 @@ describe("lobby loadout menu", () => {
         rightHand: "rocket",
         attachment: "virgin-blood",
         legs: "super-legs",
+      }),
+    }));
+  });
+
+  it("equips The Moon only on front or back strap slots", () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const startOffline = vi.fn();
+    const ui = new LobbyUI(root, createProfile(), createActions({ startOffline }));
+
+    ui.showSetup();
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="frontStrap"]'), "moon");
+    expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("The Moon");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "moon");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("The Moon");
+    expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="attachment"]'), "moon");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("The Moon");
+    expect(root.querySelector('[data-loadout-drop-slot="attachment"]')?.textContent).toContain("F");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="legs"]'), "moon");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("The Moon");
+    expect(root.querySelector('[data-loadout-drop-slot="legs"]')?.textContent).toContain("Legs");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="backStrap"]'), "moon");
+    root.querySelector<HTMLButtonElement>("[data-offline]")?.click();
+
+    expect(startOffline).toHaveBeenCalledWith(expect.objectContaining({
+      loadout: expect.objectContaining({
+        frontStrap: "moon",
+        backStrap: "moon",
       }),
     }));
   });

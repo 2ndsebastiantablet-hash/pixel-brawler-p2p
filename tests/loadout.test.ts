@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LOADOUT,
   STARTER_LOADOUT,
+  LOADOUT_ITEMS,
   assignLoadoutItem,
   assignHeldLoadoutItem,
   clearLoadoutSlot,
@@ -61,6 +62,14 @@ describe("loadout equipment slots", () => {
       legs: "spirit-fighter" as never,
     })).toEqual({
       frontStrap: "spirit-fighter",
+    });
+    expect(normalizeLoadout({
+      backStrap: "moon" as never,
+      rightHand: "moon" as never,
+      attachment: "moon" as never,
+      legs: "moon" as never,
+    })).toEqual({
+      backStrap: "moon",
     });
   });
 
@@ -123,6 +132,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("cross" as never, "frontStrap")).toBe(false);
     expect(isSlotCompatible("cross" as never, "backStrap")).toBe(false);
     expect(isSlotCompatible("cross" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("moon" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("moon" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("moon" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("moon" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("moon" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("moon" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -155,6 +170,15 @@ describe("loadout equipment slots", () => {
     expect(withCross.rightHand).toBe("cross");
     const crossAttachment = assignLoadoutItem(withCross, "attachment", "cross" as never);
     expect(crossAttachment.attachment).toBe("cross");
+
+    const withMoon = assignLoadoutItem(DEFAULT_LOADOUT, "backStrap", "moon" as never);
+    expect(withMoon.backStrap).toBe("moon");
+    expect(loadoutHasWeapon(withMoon, "moon" as never)).toBe(true);
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("moon" as never))).toMatchObject({
+      category: "space",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
+    });
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {

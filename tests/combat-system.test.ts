@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(26);
+    expect(fighter.weaponInventory).toHaveLength(27);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -2677,6 +2677,37 @@ describe("combat system", () => {
     expect(combat.getCombatant("fighter")!.statuses.some((status) => status.id === "winded")).toBe(true);
   });
 
+  it("does not count passive Spirit movement as off-beat input", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("spirit-fighter" as never);
+    const fighter = {
+      ...playerState,
+      id: "fighter",
+      y: playerState.y - 140,
+      grounded: false,
+      velocityX: 280,
+      velocityY: 640,
+    };
+    combat.syncLocalPlayer(fighter, "Fighter", "#18dff5");
+
+    combat.usePrimary({ ownerId: "fighter", player: fighter, aim: { x: 1, y: 0 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(0.24, [fighter]);
+
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
+      spiritActive: true,
+      spiritMissesRemaining: 3,
+      spiritMissesUsed: 0,
+    });
+
+    combat.update(0.92, [fighter]);
+    expect(combat.getWeaponRuntimeState("spirit-fighter" as never, "fighter")).toMatchObject({
+      spiritActive: true,
+      spiritMissesRemaining: 2,
+      spiritMissesUsed: 1,
+    });
+  });
+
   it("summons five Hands, disables the summoner's hand use, scrambles targets, and lets spam shake them off", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -2765,21 +2796,107 @@ describe("combat system", () => {
     combat.update(1.0, [player]);
     const judgment = combat.useSecondary({ ownerId: "cross-user", player, aim: { x: 0, y: -1 }, now: 11000, heldMs: 0, isNewPress: true });
     expect(judgment).toMatchObject({ kind: "utility", weaponId: "cross", label: "Judgment Day" });
-    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, timer: expect.closeTo(60, 1), ownerId: "cross-user" });
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "countdown", timer: expect.closeTo(60, 1), ownerId: "cross-user" });
+    expect(combat.getSnapshot().judgmentBeams).toHaveLength(0);
     expect(combat.getWeaponRuntimeState("cross" as never, "cross-user")).toMatchObject({
       crossRestTimer: expect.closeTo(180, 1),
       crossJudgmentActive: true,
+      crossJudgmentPhase: "countdown",
     });
     expect(combat.usePrimary({ ownerId: "cross-user", player, aim: { x: 1, y: 0 }, now: 11100, heldMs: 0, isNewPress: true })).toMatchObject({
       kind: "blocked",
       label: "Cross resting",
     });
-    combat.update(2.0, [player]);
-    expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);
+    combat.update(59.4, [player]);
+    expect(combat.getSnapshot().judgmentBeams).toHaveLength(0);
+    expect(combat.getCombatant("cross-user")?.respawnTimer).toBe(0);
+
+    combat.update(0.7, [player]);
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "active" });
+    const warningBeam = combat.getSnapshot().judgmentBeams.at(0);
+    expect(warningBeam).toMatchObject({
+      ownerId: "cross-user",
+      warning: expect.closeTo(1, 2),
+    });
+    expect(warningBeam?.fired).not.toBe(true);
+
+    const skyDummy = combat.spawnTrainingDummy({ x: player.x, y: playerState.y - 900 });
+    skyDummy.invulnerable = 0;
+    combat.update(1.05, [player]);
     expect(combat.getCombatant("cross-user")?.respawnTimer).toBeGreaterThan(0);
+    expect(combat.getCombatant(skyDummy.id)?.respawnTimer).toBeGreaterThan(0);
     expect(combat.consumeEvents()).toEqual(expect.arrayContaining([
       expect.objectContaining({ weaponId: "cross", action: "secondary", label: "Judgment Day" }),
     ]));
+  });
+
+  it("activates The Moon as an independent one-minute map event with reversible user side switching", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("moon" as never);
+    const moonUser = { ...playerState, id: "moon-user", x: 0, velocityX: 0, velocityY: 0 };
+    const otherPlayer = { ...playerState, id: "other-player", x: 92, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(moonUser, "Moon", "#d6f2ff");
+    combat.syncRemotePlayer({
+      id: "other-player",
+      name: "Other",
+      color: "#ff6f91",
+      x: otherPlayer.x,
+      y: otherPlayer.y,
+      width: otherPlayer.width,
+      height: otherPlayer.height,
+      velocityX: otherPlayer.velocityX,
+      velocityY: otherPlayer.velocityY,
+    });
+
+    const started = combat.usePrimary({ ownerId: "moon-user", player: moonUser, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(started).toMatchObject({ kind: "utility", weaponId: "moon", label: "Moonfall" });
+    expect(combat.getMoonEventState("moon-user")).toMatchObject({
+      active: true,
+      timer: expect.closeTo(60, 1),
+      userSide: "bottom",
+      ownerId: "moon-user",
+    });
+    expect(combat.getSnapshot().moonEvents).toHaveLength(1);
+
+    combat.update(0.5, [moonUser, otherPlayer]);
+    expect(combat.getCombatant("moon-user")!.y).toBeCloseTo(DEFAULT_PHYSICS.groundY - moonUser.height, 1);
+    expect(combat.getCombatant("other-player")!.y).toBeLessThan(playerState.y - 120);
+
+    const switching = combat.switchMoonSide("moon-user", 700);
+    expect(switching).toMatchObject({ kind: "utility", weaponId: "moon", label: "Moon Switch" });
+    combat.update(0.25, [moonUser, otherPlayer]);
+    expect(combat.getMoonEventState("moon-user")).toMatchObject({ active: true, switching: true, targetSide: "top" });
+
+    const reversed = combat.switchMoonSide("moon-user", 820);
+    expect(reversed).toMatchObject({ kind: "utility", weaponId: "moon", label: "Moon Switch" });
+    combat.update(0.9, [moonUser, otherPlayer]);
+    expect(combat.getMoonEventState("moon-user")).toMatchObject({ active: true, userSide: "bottom", switching: false });
+
+    combat.update(60.2, [moonUser, otherPlayer]);
+    expect(combat.getMoonEventState("moon-user")).toMatchObject({ active: false, timer: 0 });
+    expect(combat.getCombatant("other-player")!.y).toBeCloseTo(DEFAULT_PHYSICS.groundY - otherPlayer.height, 1);
+  });
+
+  it("lets Moon and Judgment Day timers stack without cleaning each other up", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState, id: "event-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Events", "#fff4a8");
+
+    combat.equip("cross" as never);
+    combat.useSecondary({ ownerId: "event-user", player, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.equip("moon" as never);
+    combat.usePrimary({ ownerId: "event-user", player, aim: { x: 0, y: -1 }, now: 120, heldMs: 0, isNewPress: true });
+
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "countdown" });
+    expect(combat.getMoonEventState("event-user")).toMatchObject({ active: true });
+
+    combat.update(60.2, [player]);
+
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "active" });
+    expect(combat.getMoonEventState("event-user")).toMatchObject({ active: false });
+    expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);
   });
 
   it("auto-reveals sniper steady after thirty seconds and reveals immediately on shots", () => {

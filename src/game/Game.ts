@@ -12,6 +12,7 @@ import {
   DEFAULT_LOADOUT,
   LOADOUT_SLOT_LABELS,
   assignLoadoutItem,
+  clearLoadoutSlot,
   isSlotCompatible,
   isTwoHandedWeapon,
   loadoutHasWeapon,
@@ -140,6 +141,7 @@ export class Game {
   private readonly attachmentVisual: AttachmentVisual = { x: 0, y: 0, vx: 0, vy: 0, initialized: false };
   private attackVisual: AttackVisual | null = null;
   private readonly previousSpiritBeatInput = { left: false, right: false, jumpHeld: false };
+  private moonChordHeld = false;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -517,6 +519,7 @@ export class Game {
     }
 
     this.drawGrid(ctx);
+    this.drawMoonEventWorld(ctx);
     this.drawPlatform(ctx);
     this.drawBursts(ctx);
     this.drawCombatEntities(ctx);
@@ -577,6 +580,7 @@ export class Game {
     }
     this.drawLocalHealth(ctx);
     this.drawCrosshair(ctx);
+    this.drawEventOverlays(ctx);
     if (showSpiritHeart) {
       this.drawSpiritHeartUi(ctx, spiritRuntime);
     }
@@ -622,9 +626,17 @@ export class Game {
       this.useAttachmentSlot();
     }
 
+    const moonState = this.combat.getMoonEventState(this.localPlayer.state.id);
+    const moonChordActive = moonState.active && input.primaryHeld && input.secondaryHeld;
+    const moonChordStarted = moonChordActive && !this.moonChordHeld && (input.primaryPressed || input.secondaryPressed);
+    if (moonChordStarted) {
+      this.recordAttack(this.combat.switchMoonSide(this.localPlayer.state.id, time), "secondary");
+    }
+    this.moonChordHeld = moonChordActive;
+
     const spikeRuntime = this.combat.getWeaponRuntimeState("spikes", this.localPlayer.state.id);
     const spikeModeActive = spikeRuntime.spikeModeActive;
-    if (spikeModeActive && (input.primaryPressed || input.secondaryPressed)) {
+    if (!moonChordActive && spikeModeActive && (input.primaryPressed || input.secondaryPressed)) {
       this.recordAttack(this.combat.placeSpikeAt(this.localPlayer.state.id, this.localPlayer.state, {
         x: this.lastMouse.x + this.camera.x,
         y: this.lastMouse.y + this.camera.y,
@@ -633,7 +645,7 @@ export class Game {
 
     const spiritRuntime = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const spiritActive = spiritRuntime.spiritActive;
-    if (spiritActive && !spikeModeActive && (input.primaryPressed || input.primaryReleased || input.secondaryPressed || input.secondaryReleased)) {
+    if (!moonChordActive && spiritActive && !spikeModeActive && (input.primaryPressed || input.primaryReleased || input.secondaryPressed || input.secondaryReleased)) {
       const useSecondary = input.secondaryPressed || input.secondaryReleased;
       this.handleWeaponAction("spirit-fighter", useSecondary ? "secondary" : "primary", {
         pressed: useSecondary ? input.secondaryPressed : input.primaryPressed,
@@ -647,7 +659,7 @@ export class Game {
       });
     }
 
-    const primaryAction = spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("primary", this.loadout);
+    const primaryAction = moonChordActive || spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
@@ -662,7 +674,7 @@ export class Game {
     }
 
     const grappleRuntime = this.combat.getWeaponRuntimeState("grappling-hook", this.localPlayer.state.id);
-    const secondaryAction = spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("secondary", this.loadout, {
+    const secondaryAction = moonChordActive || spikeModeActive || spiritActive ? null : resolveMouseWeaponAction("secondary", this.loadout, {
       preferGrapplePull: grappleRuntime.grappleActive,
     });
     if (secondaryAction && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
@@ -728,9 +740,15 @@ export class Game {
       heldMs: 0,
       isNewPress: true,
     };
-    this.recordAttack(action === "primary" ? this.combat.usePrimary(context) : this.combat.useSecondary(context), action);
+    const result = action === "primary" ? this.combat.usePrimary(context) : this.combat.useSecondary(context);
+    this.recordAttack(result, action);
+    if ((slot === "frontStrap" || slot === "backStrap") && weaponId === "moon" && result.kind === "utility" && result.label === "Moonfall") {
+      this.loadout = clearLoadoutSlot(this.loadout, slot);
+    }
     if ((slot === "frontStrap" || slot === "backStrap") && previousWeapon) {
-      this.combat.setEquippedWeapon(previousWeapon);
+      const fallback = this.loadout.leftHand ?? this.loadout.rightHand ?? this.loadout.frontStrap ?? this.loadout.backStrap ?? "pistol";
+      const consumedPrevious = previousWeapon === weaponId && !loadoutHasWeapon(this.loadout, weaponId);
+      this.combat.setEquippedWeapon(consumedPrevious ? fallback : previousWeapon);
     }
   }
 
@@ -960,7 +978,8 @@ export class Game {
       case "rocket-explode":
       case "holy-bazooka-explode":
       case "van-explode":
-        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : 0.22);
+      case "moon-activate":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : 0.22);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -1262,6 +1281,13 @@ export class Game {
       ctx.fillStyle = "#fff4a8";
       this.pixelRect(ctx, Math.round(x - 2), Math.round(y - size / 2), 4, size);
       this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - 2), size, 4);
+      return;
+    }
+    if (weaponId === "moon") {
+      ctx.fillStyle = "#d6f2ff";
+      this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+      ctx.fillStyle = "#05060a";
+      this.pixelRect(ctx, Math.round(x), Math.round(y - size / 2), Math.round(size / 2), size);
       return;
     }
     ctx.fillStyle = colorForWeapon(weaponId);
@@ -2277,28 +2303,34 @@ export class Game {
     const angle = Math.atan2(shield.dirY, shield.dirX || 1);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = (shield.visualOnly ? 0.58 : 0.82) * Math.max(0.18, 1 - progress);
+    ctx.globalAlpha = (shield.visualOnly ? 0.62 : 0.9) * Math.max(0.2, 1 - progress);
     ctx.translate(x, y);
     ctx.rotate(angle);
-    ctx.strokeStyle = "#fff4a8";
-    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.92)";
+    ctx.lineWidth = Math.max(18, Math.round(radius * 0.22));
     ctx.beginPath();
-    ctx.ellipse(0, 0, radius, Math.round(radius * 0.46), 0, -Math.PI * 0.72, Math.PI * 0.72);
+    ctx.ellipse(0, 0, radius, Math.round(radius * 0.58), 0, -Math.PI * 0.78, Math.PI * 0.78);
     ctx.stroke();
-    ctx.fillStyle = "rgba(255, 244, 168, 0.2)";
-    ctx.fillRect(-Math.round(radius * 0.18), -Math.round(radius * 0.52), Math.round(radius * 0.62), Math.round(radius * 1.04));
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(Math.round(radius * 0.44), -4, 12, 8);
-    ctx.fillStyle = "#ffd84d";
-    ctx.fillRect(-4, -Math.round(radius * 0.42), 8, Math.round(radius * 0.84));
-    ctx.fillRect(-Math.round(radius * 0.2), -4, Math.round(radius * 0.4), 8);
+    ctx.strokeStyle = "#fff4a8";
+    ctx.lineWidth = Math.max(5, Math.round(radius * 0.055));
+    ctx.beginPath();
+    ctx.ellipse(2, 0, Math.max(8, radius - 8), Math.round(radius * 0.5), 0, -Math.PI * 0.74, Math.PI * 0.74);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(8, 0, Math.max(6, radius - 22), Math.round(radius * 0.4), 0, -Math.PI * 0.66, Math.PI * 0.66);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255, 244, 168, 0.18)";
+    ctx.fillRect(Math.round(radius * 0.2), -Math.round(radius * 0.45), Math.round(radius * 0.18), Math.round(radius * 0.9));
     ctx.restore();
   }
 
   private drawJudgmentBeam(ctx: CanvasRenderingContext2D, beam: JudgmentBeamState): void {
     const x = Math.round(beam.x - this.camera.x);
     const floorY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
-    const skyY = Math.round(Math.min(beam.y, DEFAULT_PHYSICS.groundY - 620) - this.camera.y);
+    const skyY = -this.canvas.height * 2;
     const armed = beam.age >= beam.warning;
     const warningProgress = Math.min(1, beam.age / Math.max(0.01, beam.warning));
     const fade = Math.max(0.18, 1 - beam.age / Math.max(0.01, beam.duration));
@@ -2306,6 +2338,23 @@ export class Game {
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = beam.visualOnly ? 0.72 : 1;
+    if (!armed) {
+      const warnRadius = Math.round(beam.radius * (1.1 + warningProgress * 0.35));
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.22 + warningProgress * 0.18})`;
+      ctx.beginPath();
+      ctx.ellipse(x, floorY + 4, warnRadius, Math.round(warnRadius * 0.34), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 244, 168, ${0.36 + warningProgress * 0.46})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(x, floorY + 3, warnRadius + 8, Math.round(warnRadius * 0.4), 0, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let index = 0; index < 4; index += 1) {
+        const offset = Math.round((index - 1.5) * warnRadius * 0.42);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.34)";
+        ctx.fillRect(x + offset - 2, floorY - 24 - index * 6, 4, 14);
+      }
+    }
     ctx.fillStyle = armed ? `rgba(255, 244, 168, ${0.48 * fade})` : "rgba(255, 244, 168, 0.18)";
     ctx.fillRect(x - width, skyY, width * 2, floorY - skyY + 28);
     ctx.fillStyle = armed ? "#ffffff" : "#ffd84d";
@@ -3102,6 +3151,9 @@ export class Game {
     const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
     const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
+    const judgment = this.combat.getJudgmentDayState();
+    const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
+    const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     const ammoText = ammo
       ? `Ammo ${ammo.magazine}/${ammo.reserve}${ammo.reloadTimer > 0 ? ` Reload ${ammo.reloadTimer.toFixed(1)}s` : ""}${ammo.perfectWindow > 0 ? " PERFECT R" : ""}${ammo.perfectShots > 0 ? ` Perfect x${ammo.perfectShots}` : ""}`
       : "No ammo";
@@ -3121,8 +3173,9 @@ export class Game {
       spirit.spiritActive ? `Spirit ${spirit.spiritTimer.toFixed(1)}s - Beat ${Math.round(spirit.spiritBeatProgress * 100)}% - Combo ${spirit.spiritCombo}${spirit.spiritFeedback ? ` - ${spirit.spiritFeedback}` : ""}` : "",
       !spirit.spiritActive && spirit.spiritWindedTimer > 0 ? `Winded ${spirit.spiritWindedTimer.toFixed(1)}s` : "",
       !spirit.spiritActive && spirit.spiritCooldown > 0 ? `Spirit cooldown ${spirit.spiritCooldown.toFixed(1)}s` : "",
-      cross.crossJudgmentActive ? `Judgment Day ${cross.crossJudgmentTimer.toFixed(1)}s` : "",
+      judgment.active ? `Judgment Day ${judgment.phase === "countdown" ? "countdown" : "active"} ${judgment.timer.toFixed(1)}s` : "",
       cross.crossRestTimer > 0 ? `Cross resting ${cross.crossRestTimer.toFixed(1)}s` : loadoutHasWeapon(this.loadout, "cross") ? `Cross shield charge ${Math.round(Math.min(cross.crossStopwatch / 10, 1) * 100)}%` : "",
+      moon.active ? `Moon ${moon.timer.toFixed(1)}s - ${localMoon.active ? localMoon.switching ? `switching to ${localMoon.targetSide}` : `side ${localMoon.userSide}` : "map inverted"}` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -3201,6 +3254,88 @@ export class Game {
     for (let tileX = x; tileX < x + width; tileX += 32) {
       ctx.fillRect(tileX, y + 14, 24, 2);
     }
+  }
+
+  private drawMoonEventWorld(ctx: CanvasRenderingContext2D): void {
+    const moon = this.combat.getMoonEventState();
+    if (!moon.active) {
+      return;
+    }
+    const topY = Math.round(DEFAULT_PHYSICS.groundY - 430 - this.camera.y);
+    const x = Math.round(PLATFORM_LEFT - this.camera.x);
+    const width = PLATFORM_RIGHT - PLATFORM_LEFT;
+    const pulse = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = "rgba(214, 242, 255, 0.16)";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.fillStyle = "#d6f2ff";
+    ctx.fillRect(x, topY - 12, width, 12);
+    ctx.fillStyle = "#748096";
+    ctx.fillRect(x, topY - 30, width, 18);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
+    for (let tileX = x; tileX < x + width; tileX += 32) {
+      ctx.fillRect(tileX, topY - 17, 24, 2);
+    }
+    const moonX = this.canvas.width - 88;
+    const moonY = 74;
+    ctx.globalAlpha = 0.52 + pulse * 0.18;
+    ctx.fillStyle = "#d6f2ff";
+    ctx.fillRect(moonX - 28, moonY - 28, 56, 56);
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(moonX - 8, moonY - 29, 38, 58);
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#ffffff";
+    for (let index = 0; index < 9; index += 1) {
+      const sx = Math.round((index * 173 + performance.now() * 0.018) % this.canvas.width);
+      ctx.fillRect(sx, 24 + index * 43, 42, 3);
+    }
+    ctx.restore();
+  }
+
+  private drawEventOverlays(ctx: CanvasRenderingContext2D): void {
+    const judgment = this.combat.getJudgmentDayState();
+    const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
+    const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    if (judgment.active) {
+      const countdown = judgment.phase === "countdown";
+      ctx.font = countdown ? "bold 44px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" : "bold 20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.shadowColor = "rgba(255, 255, 255, 0.9)";
+      ctx.shadowBlur = countdown ? 18 : 8;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("JUDGMENT DAY", this.canvas.width / 2, countdown ? 92 : 44);
+      ctx.shadowColor = "rgba(199, 25, 67, 0.9)";
+      ctx.shadowBlur = countdown ? 14 : 6;
+      ctx.font = countdown ? "bold 32px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" : "bold 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ff3d54";
+      ctx.fillText(formatClock(judgment.timer), this.canvas.width / 2, countdown ? 136 : 72);
+    }
+    if (moon.active) {
+      const side = localMoon.active
+        ? localMoon.switching
+          ? "switching"
+          : localMoon.userSide
+        : "inverted";
+      const x = this.canvas.width - 154;
+      const y = judgment.active && judgment.phase === "countdown" ? 174 : 92;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(5, 6, 10, 0.78)";
+      ctx.fillRect(x - 118, y - 25, 236, 50);
+      ctx.strokeStyle = "rgba(214, 242, 255, 0.65)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 118, y - 25, 236, 50);
+      ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillText(`MOON ${moon.timer.toFixed(1)}s`, x, y - 7);
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(`SIDE ${side.toUpperCase()}`, x, y + 12);
+    }
+    ctx.restore();
   }
 
   private drawInvulnerabilityGlow(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, seconds: number): void {
@@ -3320,6 +3455,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "moon":
+      return "#d6f2ff";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -3354,6 +3491,13 @@ function colorForWeapon(id: WeaponId): string {
     default:
       return "#ffffff";
   }
+}
+
+function formatClock(seconds: number): string {
+  const clamped = Math.max(0, Math.ceil(seconds));
+  const minutes = Math.floor(clamped / 60);
+  const remainder = clamped % 60;
+  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
 function machetePowerColor(redness: number): string {
@@ -3417,6 +3561,10 @@ function weaponHudDetail(
       return `Click bless/heal - Cooldown ${runtime.chamber.toFixed(1)}s`;
     case "death-aura":
       return runtime.deathAuraActive ? "Aura active - missing HP strengthens" : "Click pulse aura";
+    case "moon":
+      return runtime.moonActive
+        ? `Moon ${runtime.moonTimer.toFixed(1)}s - ${runtime.moonSwitching ? `switching to ${runtime.moonTargetSide}` : runtime.moonUserSide}`
+        : "Q/E one-use map flip - both mouse buttons switch sides";
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
     case "holy-bazooka":

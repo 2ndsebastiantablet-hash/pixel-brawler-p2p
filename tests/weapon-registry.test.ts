@@ -28,6 +28,7 @@ const enabledWeapons = [
   "van",
   "spirit-fighter",
   "cross",
+  "moon",
 ] as const;
 
 describe("weapon registry", () => {
@@ -59,6 +60,7 @@ describe("weapon registry", () => {
       "van",
       "spirit-fighter",
       "cross",
+      "moon",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -107,6 +109,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.van).toBeUndefined();
     expect(inventory.ammo["spirit-fighter"]).toBeUndefined();
     expect(inventory.ammo.cross).toBeUndefined();
+    expect(inventory.ammo.moon).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -132,7 +135,10 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("van").weight.label).toBe("Heavy");
     expect(weaponRegistry.get("spirit-fighter").description).toBe("High-skill rhythm fighting mode. Stay on beat to punch, counter, grab, throw, and unleash flurries. Three missed beats or whiffs ends the mode and makes you Winded.");
     expect(weaponRegistry.get("spirit-fighter").weight.label).toBe("Light");
-    expect(weaponRegistry.get("cross").description).toBe("Holy Cross. Left click creates a mouse-aimed crescent shield that gets bigger the longer its stopwatch charges. Right click starts Judgment Day: a one-minute storm of lethal holy beams. Cross rests for 3 minutes after.");
+    expect(weaponRegistry.get("cross").description).toBe("Holy Cross. Left click creates a mouse-aimed crescent shield that gets bigger the longer its stopwatch charges. Right click starts Judgment Day: a one-minute countdown, then one minute of warned lethal holy beams. Cross rests for 3 minutes after.");
     expect(weaponRegistry.get("cross").weight.label).toBe("Light");
+    expect(weaponRegistry.get("moon").name).toBe("The Moon");
+    expect(weaponRegistry.get("moon").description).toBe("Space event item. One use. Q/E flips the map upside down for 1 minute. User stays on bottom invisible floor and can switch sides by pressing both mouse buttons.");
+    expect(weaponRegistry.get("moon").weight.label).toBe("Light");
   });
 });

@@ -632,6 +632,7 @@ export class LobbyUI {
       { id: "throwables", label: "Throw" },
       { id: "body", label: "Body" },
       { id: "mobility", label: "Move" },
+      { id: "space", label: "Space" },
       { id: "summons", label: "Summon" },
       { id: "consumables", label: "Items" },
       { id: "utility", label: "Utility" },
@@ -1076,6 +1077,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "moon":
+      return "#d6f2ff";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":

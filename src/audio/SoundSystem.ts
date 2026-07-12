@@ -120,6 +120,9 @@ export type SoundId =
   | "cross-bounce"
   | "judgment-day"
   | "judgment-beam"
+  | "moon-activate"
+  | "moon-switch"
+  | "moon-end"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -255,6 +258,9 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "cross-bounce": { category: "combat", frequency: 860, endFrequency: 260, duration: 0.12, noise: true, minInterval: 0.08 },
   "judgment-day": { category: "heavy", frequency: 76, endFrequency: 1040, duration: 0.72, noise: true, minInterval: 0.8 },
   "judgment-beam": { category: "heavy", frequency: 1180, endFrequency: 180, duration: 0.24, noise: true, minInterval: 0.1 },
+  "moon-activate": { category: "heavy", frequency: 72, endFrequency: 680, duration: 0.66, noise: true, minInterval: 0.7 },
+  "moon-switch": { category: "movement", frequency: 520, endFrequency: 120, duration: 0.18, noise: true, minInterval: 0.12 },
+  "moon-end": { category: "heavy", frequency: 220, endFrequency: 76, duration: 0.34, noise: true, minInterval: 0.4 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

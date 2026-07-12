@@ -10,6 +10,7 @@ export type LoadoutCategory =
   | "throwables"
   | "body"
   | "mobility"
+  | "space"
   | "summons"
   | "consumables"
   | "utility";
@@ -83,6 +84,7 @@ const strapWeapons = new Set<WeaponId>([
   "spirit-fighter",
   "van",
   "wings",
+  "moon",
 ]);
 
 const legWeapons = new Set<WeaponId>([
@@ -353,6 +355,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   }
   if (id === "spikes" || id === "van" || id === "spirit-fighter") {
     return "body";
+  }
+  if (id === "moon") {
+    return "space";
   }
   if (id === "wings") {
     return "mobility";
