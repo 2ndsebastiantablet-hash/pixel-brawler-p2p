@@ -71,6 +71,14 @@ describe("loadout equipment slots", () => {
     })).toEqual({
       backStrap: "moon",
     });
+    expect(normalizeLoadout({
+      frontStrap: "jupiter" as never,
+      rightHand: "jupiter" as never,
+      attachment: "jupiter" as never,
+      legs: "jupiter" as never,
+    })).toEqual({
+      frontStrap: "jupiter",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -138,6 +146,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("moon" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("moon" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("moon" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("jupiter" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("jupiter" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("jupiter" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("jupiter" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("jupiter" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("jupiter" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -175,6 +189,14 @@ describe("loadout equipment slots", () => {
     expect(withMoon.backStrap).toBe("moon");
     expect(loadoutHasWeapon(withMoon, "moon" as never)).toBe(true);
     expect(LOADOUT_ITEMS.find((item) => item.id === ("moon" as never))).toMatchObject({
+      category: "space",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
+    });
+    const withJupiter = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "jupiter" as never);
+    expect(withJupiter.frontStrap).toBe("jupiter");
+    expect(loadoutHasWeapon(withJupiter, "jupiter" as never)).toBe(true);
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("jupiter" as never))).toMatchObject({
       category: "space",
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],

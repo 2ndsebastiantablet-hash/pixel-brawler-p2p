@@ -123,6 +123,11 @@ export type SoundId =
   | "moon-activate"
   | "moon-switch"
   | "moon-end"
+  | "jupiter-activate"
+  | "jupiter-quake"
+  | "jupiter-tornado"
+  | "jupiter-shark"
+  | "jupiter-end"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -261,6 +266,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "moon-activate": { category: "heavy", frequency: 72, endFrequency: 680, duration: 0.66, noise: true, minInterval: 0.7 },
   "moon-switch": { category: "movement", frequency: 520, endFrequency: 120, duration: 0.18, noise: true, minInterval: 0.12 },
   "moon-end": { category: "heavy", frequency: 220, endFrequency: 76, duration: 0.34, noise: true, minInterval: 0.4 },
+  "jupiter-activate": { category: "heavy", frequency: 58, endFrequency: 920, duration: 0.72, noise: true, minInterval: 0.7 },
+  "jupiter-quake": { category: "heavy", frequency: 70, endFrequency: 34, duration: 0.24, noise: true, minInterval: 0.18 },
+  "jupiter-tornado": { category: "heavy", frequency: 160, endFrequency: 42, duration: 0.38, noise: true, minInterval: 0.35 },
+  "jupiter-shark": { category: "combat", frequency: 520, endFrequency: 170, duration: 0.12, noise: true, minInterval: 0.1 },
+  "jupiter-end": { category: "heavy", frequency: 320, endFrequency: 72, duration: 0.34, noise: true, minInterval: 0.35 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

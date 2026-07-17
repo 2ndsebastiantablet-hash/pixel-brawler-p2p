@@ -12,6 +12,7 @@ import { lightningRod } from "./weapons/LightningRod";
 import { machete } from "./weapons/Machete";
 import { minigun } from "./weapons/Minigun";
 import { moon } from "./weapons/Moon";
+import { jupiter } from "./weapons/Jupiter";
 import { pistol } from "./weapons/Pistol";
 import { revolver } from "./weapons/Revolver";
 import { rocket } from "./weapons/Rocket";
@@ -56,6 +57,7 @@ export const WEAPON_IDS = [
   "spirit-fighter",
   "cross",
   "moon",
+  "jupiter",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -86,6 +88,7 @@ const ALL_WEAPON_IDS = [
   "spirit-fighter",
   "cross",
   "moon",
+  "jupiter",
 ] as const satisfies readonly WeaponId[];
 
 const weaponDefinitions: WeaponDefinition[] = [
@@ -111,6 +114,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   spiritFighter,
   cross,
   moon,
+  jupiter,
   hands,
   superLegs,
   teleportBall,

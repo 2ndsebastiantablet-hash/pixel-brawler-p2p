@@ -29,6 +29,7 @@ const enabledWeapons = [
   "spirit-fighter",
   "cross",
   "moon",
+  "jupiter",
 ] as const;
 
 describe("weapon registry", () => {
@@ -61,6 +62,7 @@ describe("weapon registry", () => {
       "spirit-fighter",
       "cross",
       "moon",
+      "jupiter",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -110,6 +112,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo["spirit-fighter"]).toBeUndefined();
     expect(inventory.ammo.cross).toBeUndefined();
     expect(inventory.ammo.moon).toBeUndefined();
+    expect((inventory.ammo as Record<string, unknown>).jupiter).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -140,5 +143,8 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("moon").name).toBe("The Moon");
     expect(weaponRegistry.get("moon").description).toBe("Space event item. One use. Q/E flips the map upside down for 1 minute. User stays on bottom invisible floor and can switch sides by pressing both mouse buttons.");
     expect(weaponRegistry.get("moon").weight.label).toBe("Light");
+    expect(weaponRegistry.get("jupiter" as never).name).toBe("Jupiter");
+    expect(weaponRegistry.get("jupiter" as never).description).toBe("Space event item. One use. Q/E starts Jupiter: earthquake cracks the ground, orange gas creates floaty gravity, and a shark tornado releases flying homing sharks.");
+    expect(weaponRegistry.get("jupiter" as never).weight.label).toBe("Light");
   });
 });

@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterHoleState, JupiterSharkState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -521,6 +521,7 @@ export class Game {
     this.drawGrid(ctx);
     this.drawMoonEventWorld(ctx);
     this.drawPlatform(ctx);
+    this.drawJupiterEventWorld(ctx);
     this.drawBursts(ctx);
     this.drawCombatEntities(ctx);
     for (const remote of this.remotes.values()) {
@@ -579,6 +580,7 @@ export class Game {
       this.drawLocalWeapon(ctx);
     }
     this.drawLocalHealth(ctx);
+    this.drawJupiterGasOverlay(ctx);
     this.drawCrosshair(ctx);
     this.drawEventOverlays(ctx);
     if (showSpiritHeart) {
@@ -742,7 +744,12 @@ export class Game {
     };
     const result = action === "primary" ? this.combat.usePrimary(context) : this.combat.useSecondary(context);
     this.recordAttack(result, action);
-    if ((slot === "frontStrap" || slot === "backStrap") && weaponId === "moon" && result.kind === "utility" && result.label === "Moonfall") {
+    if (
+      (slot === "frontStrap" || slot === "backStrap")
+      && (weaponId === "moon" || weaponId === "jupiter")
+      && result.kind === "utility"
+      && (result.label === "Moonfall" || result.label === "Jupiter")
+    ) {
       this.loadout = clearLoadoutSlot(this.loadout, slot);
     }
     if ((slot === "frontStrap" || slot === "backStrap") && previousWeapon) {
@@ -979,7 +986,10 @@ export class Game {
       case "holy-bazooka-explode":
       case "van-explode":
       case "moon-activate":
-        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : 0.22);
+      case "jupiter-activate":
+      case "jupiter-quake":
+      case "jupiter-tornado":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : sound === "jupiter-activate" ? 0.34 : sound === "jupiter-tornado" ? 0.26 : 0.22);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -1170,7 +1180,18 @@ export class Game {
       groundSlamVelocity: DEFAULT_PHYSICS.groundSlamVelocity * (superLegs ? 1.28 : 1),
       slamLandingDuration: DEFAULT_PHYSICS.slamLandingDuration * (superLegs ? 0.72 : 1),
     };
-    return weapon.id === "wings" || strappedWings || angelWings ? { ...physics, wingFlight: WING_FLIGHT_CONFIG } : physics;
+    const jupiter = this.combat.getJupiterEventState();
+    const eventPhysics = jupiter.active
+      ? {
+        ...physics,
+        gravity: physics.gravity * 0.42,
+        airAcceleration: physics.airAcceleration * 0.86,
+        jumpVelocity: physics.jumpVelocity * 1.16,
+        doubleJumpVelocity: physics.doubleJumpVelocity * 1.08,
+        groundSlamVelocity: physics.groundSlamVelocity * 0.68,
+      }
+      : physics;
+    return weapon.id === "wings" || strappedWings || angelWings ? { ...eventPhysics, wingFlight: WING_FLIGHT_CONFIG } : eventPhysics;
   }
 
   private updateAttachmentVisual(dt: number): void {
@@ -1288,6 +1309,13 @@ export class Game {
       this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
       ctx.fillStyle = "#05060a";
       this.pixelRect(ctx, Math.round(x), Math.round(y - size / 2), Math.round(size / 2), size);
+      return;
+    }
+    if (weaponId === "jupiter") {
+      ctx.fillStyle = "#ff9f3d";
+      this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2 + 1), size, Math.max(2, size - 2));
+      ctx.fillStyle = "#1f5f32";
+      this.pixelRect(ctx, Math.round(x - size / 3), Math.round(y - 1), Math.round(size * 0.7), 2);
       return;
     }
     ctx.fillStyle = colorForWeapon(weaponId);
@@ -2155,11 +2183,15 @@ export class Game {
 
   private drawCombatEntities(ctx: CanvasRenderingContext2D): void {
     const snapshot = this.combat.getSnapshot();
+    const jupiterSharkIds = new Set(snapshot.jupiterSharks.map((shark) => shark.id));
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
     }
+    for (const shark of snapshot.jupiterSharks) {
+      this.drawJupiterShark(ctx, shark);
+    }
     for (const combatant of snapshot.combatants) {
-      if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id)) {
+      if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id) && !jupiterSharkIds.has(combatant.id)) {
         const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
         if (zombie) {
           this.drawZombieCombatant(ctx, combatant, zombie);
@@ -2212,6 +2244,59 @@ export class Game {
       ctx.fillStyle = number.color;
       ctx.fillText(text, Math.round(number.x - this.camera.x), Math.round(number.y - this.camera.y));
     }
+  }
+
+  private drawJupiterShark(ctx: CanvasRenderingContext2D, shark: JupiterSharkState): void {
+    const x = Math.round(shark.x + shark.width / 2 - this.camera.x);
+    const y = Math.round(shark.y + shark.height / 2 - this.camera.y);
+    const facing = shark.vx >= 0 ? 1 : -1;
+    const flash = shark.hp < shark.maxHp ? Math.sin(performance.now() * 0.05) > 0 : false;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(x, y);
+    ctx.rotate(shark.angle * 0.35);
+    ctx.scale(facing, 1);
+    ctx.globalAlpha = shark.visualOnly ? 0.68 : 1;
+    ctx.fillStyle = flash ? "#ffffff" : "#6a7478";
+    ctx.beginPath();
+    ctx.moveTo(-30, -8);
+    ctx.lineTo(18, -14);
+    ctx.lineTo(34, -2);
+    ctx.lineTo(16, 12);
+    ctx.lineTo(-28, 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = flash ? "#d6f2ff" : "#3f4e52";
+    ctx.beginPath();
+    ctx.moveTo(-30, -8);
+    ctx.lineTo(-48, -20);
+    ctx.lineTo(-42, 0);
+    ctx.lineTo(-50, 18);
+    ctx.lineTo(-28, 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#1f5f32";
+    ctx.beginPath();
+    ctx.moveTo(-4, -12);
+    ctx.lineTo(8, -32);
+    ctx.lineTo(18, -10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-2, 10);
+    ctx.lineTo(12, 26);
+    ctx.lineTo(18, 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(18, -8, 5, 5);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(28, 0, 4, 3);
+    ctx.fillRect(23, 4, 4, 3);
+    ctx.strokeStyle = "rgba(124, 255, 107, 0.66)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-34, -17, 70, 34);
+    ctx.restore();
   }
 
   private drawGrapple(ctx: CanvasRenderingContext2D, grapple: GrappleState): void {
@@ -3152,6 +3237,7 @@ export class Game {
     const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
     const judgment = this.combat.getJudgmentDayState();
+    const jupiter = this.combat.getJupiterEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     const ammoText = ammo
@@ -3176,6 +3262,7 @@ export class Game {
       judgment.active ? `Judgment Day ${judgment.phase === "countdown" ? "countdown" : "active"} ${judgment.timer.toFixed(1)}s` : "",
       cross.crossRestTimer > 0 ? `Cross resting ${cross.crossRestTimer.toFixed(1)}s` : loadoutHasWeapon(this.loadout, "cross") ? `Cross shield charge ${Math.round(Math.min(cross.crossStopwatch / 10, 1) * 100)}%` : "",
       moon.active ? `Moon ${moon.timer.toFixed(1)}s - ${localMoon.active ? localMoon.switching ? `switching to ${localMoon.targetSide}` : `side ${localMoon.userSide}` : "map inverted"}` : "",
+      jupiter.active ? `Jupiter ${jupiter.timer.toFixed(1)}s - gas ${Math.round(jupiter.gasAlpha * 100)}% - sharks ${jupiter.sharkCount} - holes ${jupiter.holeCount}` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -3261,10 +3348,19 @@ export class Game {
     if (!moon.active) {
       return;
     }
-    const topY = Math.round(DEFAULT_PHYSICS.groundY - 430 - this.camera.y);
+    const topY = Math.round(moon.topFloorY - this.camera.y);
     const x = Math.round(PLATFORM_LEFT - this.camera.x);
     const width = PLATFORM_RIGHT - PLATFORM_LEFT;
     const pulse = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
+    const rise = easeOutCubicNumber(moon.moonRiseProgress);
+    const descend = easeInCubicNumber(moon.moonDescendProgress);
+    const hiddenMoonY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y + moon.moonRadius + 112);
+    const centerMoonY = Math.round(this.canvas.height * 0.43);
+    const moonY = moon.moonVisualPhase === "descending"
+      ? Math.round(lerpNumber(centerMoonY, hiddenMoonY, descend))
+      : Math.round(lerpNumber(hiddenMoonY, centerMoonY, rise));
+    const moonX = Math.round(this.canvas.width / 2);
+    const radius = Math.round(moon.moonRadius);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = 0.72;
@@ -3278,13 +3374,18 @@ export class Game {
     for (let tileX = x; tileX < x + width; tileX += 32) {
       ctx.fillRect(tileX, topY - 17, 24, 2);
     }
-    const moonX = this.canvas.width - 88;
-    const moonY = 74;
-    ctx.globalAlpha = 0.52 + pulse * 0.18;
+    ctx.globalAlpha = 0.32 + pulse * 0.16;
+    ctx.fillStyle = "rgba(214, 242, 255, 0.38)";
+    ctx.fillRect(moonX - radius - 22, moonY - radius - 22, (radius + 22) * 2, (radius + 22) * 2);
+    ctx.globalAlpha = 0.88;
     ctx.fillStyle = "#d6f2ff";
-    ctx.fillRect(moonX - 28, moonY - 28, 56, 56);
+    ctx.fillRect(moonX - radius, moonY - radius, radius * 2, radius * 2);
+    ctx.fillStyle = "#aab9c8";
+    ctx.fillRect(moonX - 34, moonY - 24, 16, 14);
+    ctx.fillRect(moonX + 18, moonY + 4, 22, 18);
+    ctx.fillRect(moonX - 6, moonY + 32, 14, 12);
     ctx.fillStyle = "#05060a";
-    ctx.fillRect(moonX - 8, moonY - 29, 38, 58);
+    ctx.fillRect(moonX + Math.round(radius * 0.18), moonY - radius - 1, Math.round(radius * 0.86), radius * 2 + 2);
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#ffffff";
     for (let index = 0; index < 9; index += 1) {
@@ -3294,8 +3395,111 @@ export class Game {
     ctx.restore();
   }
 
+  private drawJupiterEventWorld(ctx: CanvasRenderingContext2D): void {
+    const snapshot = this.combat.getSnapshot();
+    if (snapshot.jupiterEvents.length === 0) {
+      return;
+    }
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (const hole of snapshot.jupiterHoles) {
+      this.drawJupiterHole(ctx, hole);
+    }
+    for (const event of snapshot.jupiterEvents) {
+      this.drawJupiterTornado(ctx, event);
+    }
+    ctx.restore();
+  }
+
+  private drawJupiterHole(ctx: CanvasRenderingContext2D, hole: JupiterHoleState): void {
+    const x = Math.round(hole.x - this.camera.x);
+    const y = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
+    const width = Math.round(hole.width);
+    const depth = Math.round(hole.depth);
+    ctx.globalAlpha = hole.visualOnly ? 0.68 : 0.92;
+    ctx.fillStyle = hole.deadly ? "#05060a" : "rgba(12, 12, 18, 0.82)";
+    ctx.fillRect(x, y - 2, width, depth);
+    ctx.fillStyle = hole.deadly ? "#ff9f3d" : "#6a4a32";
+    ctx.fillRect(x - 4, y - 5, width + 8, 4);
+    ctx.strokeStyle = hole.deadly ? "rgba(255, 159, 61, 0.84)" : "rgba(160, 126, 88, 0.66)";
+    ctx.lineWidth = hole.deadly ? 3 : 2;
+    ctx.beginPath();
+    const crackCount = hole.deadly ? 5 : 3;
+    for (let index = 0; index < crackCount; index += 1) {
+      const startX = x + width * (index + 0.5) / crackCount;
+      ctx.moveTo(startX, y - 4);
+      ctx.lineTo(startX + (index % 2 === 0 ? -22 : 24), y - 12 - (index % 3) * 6);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  private drawJupiterTornado(ctx: CanvasRenderingContext2D, event: JupiterEventState): void {
+    const x = Math.round(event.tornado.x - this.camera.x);
+    const y = Math.round(event.tornado.y - this.camera.y);
+    const radius = Math.round(event.tornado.radius);
+    const core = Math.round(event.tornado.coreRadius);
+    const time = performance.now() * 0.004 + event.tornado.angle;
+    ctx.save();
+    ctx.globalAlpha = event.visualOnly ? 0.58 : 0.78;
+    ctx.strokeStyle = "rgba(31, 95, 50, 0.76)";
+    ctx.lineWidth = 7;
+    for (let ring = 0; ring < 7; ring += 1) {
+      const progress = ring / 6;
+      const ringY = y + Math.round((progress - 0.5) * radius * 1.05);
+      const ringW = Math.round(core + radius * (0.26 + progress * 0.72));
+      const offset = Math.sin(time * 2 + ring) * 28;
+      ctx.beginPath();
+      ctx.ellipse(x + offset, ringY, ringW / 2, 18 + progress * 18, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = event.visualOnly ? 0.46 : 0.64;
+    ctx.fillStyle = "rgba(4, 25, 18, 0.72)";
+    ctx.fillRect(x - core, y - radius / 2, core * 2, radius);
+    ctx.fillStyle = "#7cff6b";
+    for (let index = 0; index < 18; index += 1) {
+      const angle = time + index * 0.83;
+      const particleRadius = core + (index % 5) * 28;
+      const px = x + Math.cos(angle) * particleRadius;
+      const py = y + Math.sin(angle * 1.2) * radius * 0.44;
+      ctx.fillRect(Math.round(px), Math.round(py), 6 + (index % 3), 3);
+    }
+    ctx.strokeStyle = "rgba(255, 159, 61, 0.45)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(x, y, radius, radius * 0.62, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawJupiterGasOverlay(ctx: CanvasRenderingContext2D): void {
+    const events = this.combat.getSnapshot().jupiterEvents;
+    if (events.length === 0) {
+      return;
+    }
+    const alpha = Math.min(0.46, Math.max(...events.map((event) => event.gasAlpha)));
+    if (alpha <= 0) {
+      return;
+    }
+    const time = performance.now() * 0.001;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "rgba(255, 127, 36, 0.48)";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.globalAlpha = Math.min(0.34, alpha * 0.8);
+    ctx.fillStyle = "rgba(255, 199, 92, 0.8)";
+    for (let index = 0; index < 42; index += 1) {
+      const x = Math.round((index * 137 + time * 64 + Math.sin(index * 9.1) * 40) % (this.canvas.width + 90) - 45);
+      const y = Math.round((index * 71 + Math.sin(time * 1.7 + index) * 38) % this.canvas.height);
+      ctx.fillRect(x, y, 26 + (index % 5) * 8, 3);
+    }
+    ctx.restore();
+  }
+
   private drawEventOverlays(ctx: CanvasRenderingContext2D): void {
     const judgment = this.combat.getJudgmentDayState();
+    const jupiter = this.combat.getJupiterEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     ctx.save();
@@ -3334,6 +3538,22 @@ export class Game {
       ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.fillStyle = "#ffffff";
       ctx.fillText(`SIDE ${side.toUpperCase()}`, x, y + 12);
+    }
+    if (jupiter.active) {
+      const x = 154;
+      const y = judgment.active && judgment.phase === "countdown" ? 174 : 92;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(22, 11, 4, 0.76)";
+      ctx.fillRect(x - 118, y - 25, 236, 50);
+      ctx.strokeStyle = "rgba(255, 159, 61, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 118, y - 25, 236, 50);
+      ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ff9f3d";
+      ctx.fillText(`JUPITER ${jupiter.timer.toFixed(1)}s`, x, y - 7);
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(`SHARKS ${jupiter.sharkCount}  HOLES ${jupiter.holeCount}`, x, y + 12);
     }
     ctx.restore();
   }
@@ -3457,6 +3677,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#d9f7ff";
     case "moon":
       return "#d6f2ff";
+    case "jupiter":
+      return "#ff9f3d";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -3565,6 +3787,10 @@ function weaponHudDetail(
       return runtime.moonActive
         ? `Moon ${runtime.moonTimer.toFixed(1)}s - ${runtime.moonSwitching ? `switching to ${runtime.moonTargetSide}` : runtime.moonUserSide}`
         : "Q/E one-use map flip - both mouse buttons switch sides";
+    case "jupiter":
+      return runtime.jupiterActive
+        ? `Jupiter ${runtime.jupiterTimer.toFixed(1)}s - Gas ${Math.round(runtime.jupiterGasAlpha * 100)}% - Sharks ${runtime.jupiterSharkCount}`
+        : "Q/E one-use quake gas and shark tornado";
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
     case "holy-bazooka":
@@ -3660,6 +3886,8 @@ function weaponHelper(id: WeaponId): string {
       return "Q/E spawn/absorb - Space enter/exit - A/D drive - Shift speed - right honk";
     case "spirit-fighter":
       return "Q/E focus mode - punch/throw on beat - one miss makes Winded";
+    case "jupiter":
+      return "Q/E one-use Jupiter event - floaty gas, deadly cracks, shark tornado";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:
@@ -3683,6 +3911,24 @@ function attachmentAnchor(state: PlayerPhysicsState): { x: number; y: number } {
 
 function isMovementInputActive(input: InputFrame): boolean {
   return input.left || input.right || input.up || input.down || input.jumpPressed || input.jumpHeld || input.dashPressed || input.downPressed;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function lerpNumber(start: number, end: number, amount: number): number {
+  return start + (end - start) * clampNumber(amount, 0, 1);
+}
+
+function easeOutCubicNumber(value: number): number {
+  const t = clampNumber(value, 0, 1);
+  return 1 - (1 - t) ** 3;
+}
+
+function easeInCubicNumber(value: number): number {
+  const t = clampNumber(value, 0, 1);
+  return t ** 3;
 }
 
 function scrambledInput(input: InputFrame): InputFrame {

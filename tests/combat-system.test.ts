@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(27);
+    expect(fighter.weaponInventory).toHaveLength(28);
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -2878,6 +2878,150 @@ describe("combat system", () => {
     expect(combat.getCombatant("other-player")!.y).toBeCloseTo(DEFAULT_PHYSICS.groundY - otherPlayer.height, 1);
   });
 
+  it("moves The Moon top floor to the screen top band and exposes rise/hold/descent animation state", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("moon" as never);
+    const moonUser = { ...playerState, id: "moon-anim-user", x: 0, velocityX: 0, velocityY: 0 };
+    const otherPlayer = { ...playerState, id: "moon-anim-other", x: 92, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(moonUser, "Moon", "#d6f2ff");
+    combat.syncRemotePlayer({
+      id: "moon-anim-other",
+      name: "Other",
+      color: "#ff6f91",
+      x: otherPlayer.x,
+      y: otherPlayer.y,
+      width: otherPlayer.width,
+      height: otherPlayer.height,
+      velocityX: otherPlayer.velocityX,
+      velocityY: otherPlayer.velocityY,
+    });
+
+    combat.usePrimary({ ownerId: "moon-anim-user", player: moonUser, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    let moon = combat.getSnapshot().moonEvents[0] as unknown as {
+      topFloorY: number;
+      moonVisualPhase: "rising" | "holding" | "descending";
+      moonRiseProgress: number;
+      moonDescendProgress: number;
+    };
+
+    expect(moon.topFloorY).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - 620);
+    expect(moon.moonVisualPhase).toBe("rising");
+    expect(moon.moonRiseProgress).toBeCloseTo(0, 1);
+
+    combat.update(1.25, [moonUser, otherPlayer]);
+    moon = combat.getSnapshot().moonEvents[0] as typeof moon;
+    expect(moon.moonVisualPhase).toBe("holding");
+    expect(moon.moonRiseProgress).toBe(1);
+    expect(combat.getCombatant("moon-anim-other")!.y).toBeLessThanOrEqual(DEFAULT_PHYSICS.groundY - 610);
+
+    combat.update(55.2, [moonUser, otherPlayer]);
+    moon = combat.getSnapshot().moonEvents[0] as typeof moon;
+    expect(moon.moonVisualPhase).toBe("descending");
+    expect(moon.moonDescendProgress).toBeGreaterThan(0);
+  });
+
+  it("activates Jupiter as a one-minute Space event with cracks, holes, gas, and floaty gravity", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("jupiter" as never);
+    const player = { ...playerState, id: "jupiter-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Jupiter", "#ff9f3d");
+
+    const started = combat.usePrimary({ ownerId: "jupiter-user", player, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(started).toMatchObject({ kind: "utility", weaponId: "jupiter", label: "Jupiter" });
+
+    let snapshot = combat.getSnapshot() as unknown as {
+      jupiterEvents: Array<{ ownerId: string; timer: number; gasAlpha: number; tornado: { x: number; y: number; radius: number; coreRadius: number } }>;
+      jupiterHoles: Array<{ x: number; width: number; deadly: boolean }>;
+      jupiterSharks: unknown[];
+    };
+    expect(snapshot.jupiterEvents).toHaveLength(1);
+    expect(snapshot.jupiterEvents[0]).toMatchObject({ ownerId: "jupiter-user", timer: expect.closeTo(60, 1) });
+    expect(snapshot.jupiterEvents[0].gasAlpha).toBeGreaterThan(0);
+    expect(snapshot.jupiterHoles.some((hole) => hole.deadly)).toBe(true);
+    expect(snapshot.jupiterSharks).toHaveLength(0);
+
+    combat.update(1, [player]);
+    expect(combat.getCombatant("jupiter-user")!.velocityY).toBeLessThan(0);
+
+    snapshot = combat.getSnapshot() as typeof snapshot;
+    const hole = snapshot.jupiterHoles.find((item) => item.deadly);
+    expect(hole).toBeDefined();
+    combat.syncRemotePlayer({
+      id: "jupiter-hole-victim",
+      name: "Hole",
+      color: "#ff6f91",
+      x: hole!.x + hole!.width / 2 - DEFAULT_PHYSICS.width / 2,
+      y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.update(0.1, [player]);
+    expect(combat.getCombatant("jupiter-hole-victim")!.respawnTimer).toBeGreaterThan(0);
+  });
+
+  it("runs Jupiter tornado suction and killable homing sharks with cleanup", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("jupiter" as never);
+    const owner = { ...playerState, id: "jupiter-owner", x: -180, velocityX: 0, velocityY: 0 };
+    const target = { ...playerState, id: "jupiter-target", x: 260, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Jupiter", "#ff9f3d");
+    combat.syncRemotePlayer({
+      id: "jupiter-target",
+      name: "Target",
+      color: "#ff6f91",
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    combat.usePrimary({ ownerId: "jupiter-owner", player: owner, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(3.2, [owner, target]);
+    let snapshot = combat.getSnapshot() as unknown as {
+      jupiterEvents: Array<{ tornado: { x: number; y: number; radius: number; coreRadius: number } }>;
+      jupiterSharks: Array<{ id: string; targetId?: string; x: number; y: number; hp: number }>;
+    };
+    expect(snapshot.jupiterSharks.length).toBeGreaterThan(0);
+    const shark = snapshot.jupiterSharks[0];
+    expect(shark).toMatchObject({ targetId: "jupiter-target", hp: expect.any(Number) });
+    expect(combat.getCombatant(shark.id)).toBeDefined();
+
+    const targetBody = combat.getCombatant("jupiter-target")!;
+    const beforeDistance = Math.hypot(shark.x - targetBody.x, shark.y - targetBody.y);
+    combat.update(0.5, [owner, target]);
+    snapshot = combat.getSnapshot() as typeof snapshot;
+    const movedShark = snapshot.jupiterSharks.find((item) => item.id === shark.id)!;
+    const afterDistance = Math.hypot(movedShark.x - targetBody.x, movedShark.y - targetBody.y);
+    expect(afterDistance).toBeLessThan(beforeDistance);
+
+    combat.applyDamage({ sourceId: "jupiter-owner", targetId: shark.id, weaponId: "pistol", damage: 999, knockback: { x: 0, y: -100 }, stun: 0.1, label: "Shark Hit" });
+    combat.update(0.1, [owner, target]);
+    expect((combat.getSnapshot() as typeof snapshot).jupiterSharks.find((item) => item.id === shark.id)).toBeUndefined();
+    expect(combat.getCombatant(shark.id)).toBeUndefined();
+
+    const tornado = (combat.getSnapshot() as typeof snapshot).jupiterEvents[0].tornado;
+    combat.syncRemotePlayer({
+      id: "jupiter-core-victim",
+      name: "Core",
+      color: "#ff6f91",
+      x: tornado.x - DEFAULT_PHYSICS.width / 2,
+      y: tornado.y - DEFAULT_PHYSICS.height / 2,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.update(0.1, [owner, target]);
+    expect(combat.getCombatant("jupiter-core-victim")!.respawnTimer).toBeGreaterThan(0);
+  });
+
   it("lets Moon and Judgment Day timers stack without cleaning each other up", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -2896,6 +3040,34 @@ describe("combat system", () => {
 
     expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "active" });
     expect(combat.getMoonEventState("event-user")).toMatchObject({ active: false });
+    expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);
+  });
+
+  it("lets Jupiter stack with Moon and Judgment Day while cleaning up only its own state", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const player = { ...playerState, id: "space-stack-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Space", "#d6f2ff");
+
+    combat.equip("moon" as never);
+    combat.usePrimary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.equip("jupiter" as never);
+    combat.usePrimary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 120, heldMs: 0, isNewPress: true });
+    combat.equip("cross" as never);
+    combat.useSecondary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 140, heldMs: 0, isNewPress: true });
+
+    expect(combat.getMoonEventState("space-stack-user")).toMatchObject({ active: true });
+    expect((combat.getSnapshot() as unknown as { jupiterEvents: unknown[] }).jupiterEvents).toHaveLength(1);
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "countdown" });
+
+    combat.update(60.2, [player]);
+
+    const snapshot = combat.getSnapshot() as unknown as { jupiterEvents: unknown[]; jupiterHoles: unknown[]; jupiterSharks: unknown[] };
+    expect(snapshot.jupiterEvents).toHaveLength(0);
+    expect(snapshot.jupiterHoles).toHaveLength(0);
+    expect(snapshot.jupiterSharks).toHaveLength(0);
+    expect(combat.getMoonEventState("space-stack-user")).toMatchObject({ active: false });
+    expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "active" });
     expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);
   });
 

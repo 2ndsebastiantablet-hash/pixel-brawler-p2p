@@ -159,6 +159,7 @@ export interface JudgmentBeamState {
 
 export type JudgmentDayPhase = "countdown" | "active";
 export type MoonSide = "bottom" | "top";
+export type MoonVisualPhase = "rising" | "holding" | "descending";
 
 export interface MoonEventState {
   id: string;
@@ -173,6 +174,67 @@ export interface MoonEventState {
   switchToSide: MoonSide;
   switchTimer: number;
   switchDuration: number;
+  topFloorY: number;
+  moonVisualPhase: MoonVisualPhase;
+  moonRiseProgress: number;
+  moonDescendProgress: number;
+  moonRadius: number;
+  visualOnly?: boolean;
+}
+
+export interface JupiterTornadoState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  coreRadius: number;
+  angle: number;
+}
+
+export interface JupiterEventState {
+  id: string;
+  ownerId: string;
+  timer: number;
+  duration: number;
+  age: number;
+  seed: number;
+  earthquakeTimer: number;
+  gasAlpha: number;
+  tornado: JupiterTornadoState;
+  sharkSpawnTimer: number;
+  visualOnly?: boolean;
+}
+
+export interface JupiterHoleState {
+  id: string;
+  eventId: string;
+  ownerId: string;
+  x: number;
+  width: number;
+  depth: number;
+  deadly: boolean;
+  age: number;
+  visualOnly?: boolean;
+}
+
+export interface JupiterSharkState {
+  id: string;
+  eventId: string;
+  ownerId: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  hp: number;
+  maxHp: number;
+  age: number;
+  lifetime: number;
+  biteCooldown: number;
+  angle: number;
   visualOnly?: boolean;
 }
 
@@ -300,6 +362,9 @@ export interface CombatSnapshot {
   crossShields: CrossShieldState[];
   judgmentBeams: JudgmentBeamState[];
   moonEvents: MoonEventState[];
+  jupiterEvents: JupiterEventState[];
+  jupiterHoles: JupiterHoleState[];
+  jupiterSharks: JupiterSharkState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -477,9 +542,25 @@ const crossBeamTargetEvery = 9;
 const crossMaxActiveBeams = 20;
 const moonEventDuration = 60;
 const moonSwitchDuration = 0.82;
-const moonTopFloorY = DEFAULT_PHYSICS.groundY - 430;
+const moonTopFloorY = DEFAULT_PHYSICS.groundY - 650;
+const moonRiseDuration = 1.15;
+const moonDescentDuration = 4.5;
+const moonRadius = 72;
 const moonTransitionSpeed = 980;
 const moonWindSpeed = 340;
+const jupiterEventDuration = 60;
+const jupiterEarthquakeDuration = 3.2;
+const jupiterGasMaxAlpha = 0.5;
+const jupiterHoleCount = 15;
+const jupiterTornadoRadius = 280;
+const jupiterTornadoCoreRadius = 62;
+const jupiterSharkSpawnInterval = 1.35;
+const jupiterInitialSharkDelay = 2.15;
+const jupiterMaxActiveSharks = 14;
+const jupiterSharkHp = 30;
+const jupiterSharkLifetime = 13.5;
+const jupiterSharkDamage = 26;
+const jupiterSharkBiteCooldown = 0.65;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -647,6 +728,10 @@ export interface WeaponRuntimeState {
   moonUserSide: MoonSide;
   moonTargetSide?: MoonSide;
   moonSwitching: boolean;
+  jupiterActive: boolean;
+  jupiterTimer: number;
+  jupiterGasAlpha: number;
+  jupiterSharkCount: number;
   zombieCount: number;
   attachedHands: number;
 }
@@ -691,6 +776,9 @@ export class CombatSystem {
   private readonly crossShields: CrossShieldState[] = [];
   private readonly judgmentDays = new Map<string, JudgmentDayState>();
   private readonly moonEvents: MoonEventState[] = [];
+  private readonly jupiterEvents: JupiterEventState[] = [];
+  private readonly jupiterHoles: JupiterHoleState[] = [];
+  private readonly jupiterSharks: JupiterSharkState[] = [];
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -735,6 +823,9 @@ export class CombatSystem {
     this.crossShields.length = 0;
     this.judgmentDays.clear();
     this.moonEvents.length = 0;
+    this.jupiterEvents.length = 0;
+    this.jupiterHoles.length = 0;
+    this.jupiterSharks.length = 0;
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -854,6 +945,7 @@ export class CombatSystem {
     this.crossStates.delete(id);
     this.judgmentDays.delete(id);
     removeWhere(this.moonEvents, (event) => event.ownerId === id);
+    this.removeJupiterStateForOwner(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
       if (zombie.targetId === id) {
@@ -900,6 +992,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "moon") {
       return this.activateMoonEvent(context);
+    }
+    if (this.inventory.equippedWeapon === "jupiter") {
+      return this.activateJupiterEvent(context);
     }
     if (this.inventory.equippedWeapon === "super-legs") {
       return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
@@ -956,6 +1051,9 @@ export class CombatSystem {
     }
     if (weapon.id === "moon") {
       return { kind: "blocked", weaponId: weapon.id, label: "Moon uses Q/E" };
+    }
+    if (weapon.id === "jupiter") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Jupiter uses Q/E" };
     }
     if (weapon.id === "super-legs") {
       return { kind: "blocked", weaponId: weapon.id, label: "Super Legs passive" };
@@ -1312,6 +1410,7 @@ export class CombatSystem {
     this.updateVans(dt, players);
     this.updateCombatants(dt);
     this.updateMoonEvents(dt, players);
+    this.updateJupiterEvents(dt, players);
     this.updateProjectiles(dt, players);
     this.updateCross(dt, players);
     this.updateTeleports(dt, players);
@@ -1503,6 +1602,7 @@ export class CombatSystem {
     const cross = this.getOrCreateCrossState(ownerId);
     const judgment = this.judgmentDays.get(ownerId);
     const moon = this.getMoonEventForOwner(ownerId);
+    const jupiter = this.getJupiterEventForOwner(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1580,6 +1680,10 @@ export class CombatSystem {
       moonUserSide: moon?.userSide ?? "bottom",
       moonTargetSide: moon?.switching ? moon.switchToSide : undefined,
       moonSwitching: moon?.switching ?? false,
+      jupiterActive: Boolean(jupiter && jupiter.timer > 0),
+      jupiterTimer: jupiter?.timer ?? 0,
+      jupiterGasAlpha: jupiter?.gasAlpha ?? 0,
+      jupiterSharkCount: this.jupiterSharks.filter((shark) => shark.ownerId === ownerId).length,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -1592,7 +1696,19 @@ export class CombatSystem {
     return { active: Boolean(active), phase: active?.phase ?? "idle", timer: active?.timer ?? 0, ownerId: active?.ownerId };
   }
 
-  getMoonEventState(ownerId?: string): { active: boolean; timer: number; ownerId?: string; userSide: MoonSide; targetSide?: MoonSide; switching: boolean } {
+  getMoonEventState(ownerId?: string): {
+    active: boolean;
+    timer: number;
+    ownerId?: string;
+    userSide: MoonSide;
+    targetSide?: MoonSide;
+    switching: boolean;
+    topFloorY: number;
+    moonVisualPhase: MoonVisualPhase;
+    moonRiseProgress: number;
+    moonDescendProgress: number;
+    moonRadius: number;
+  } {
     const active = ownerId
       ? this.getMoonEventForOwner(ownerId)
       : [...this.moonEvents].filter((state) => state.timer > 0).sort((left, right) => right.timer - left.timer)[0];
@@ -1603,6 +1719,25 @@ export class CombatSystem {
       userSide: active?.userSide ?? "bottom",
       targetSide: active?.switching ? active.switchToSide : undefined,
       switching: active?.switching ?? false,
+      topFloorY: active?.topFloorY ?? moonTopFloorY,
+      moonVisualPhase: active?.moonVisualPhase ?? "holding",
+      moonRiseProgress: active?.moonRiseProgress ?? 1,
+      moonDescendProgress: active?.moonDescendProgress ?? 0,
+      moonRadius: active?.moonRadius ?? moonRadius,
+    };
+  }
+
+  getJupiterEventState(ownerId?: string): { active: boolean; timer: number; ownerId?: string; gasAlpha: number; sharkCount: number; holeCount: number } {
+    const active = ownerId
+      ? this.getJupiterEventForOwner(ownerId)
+      : [...this.jupiterEvents].filter((state) => state.timer > 0).sort((left, right) => right.timer - left.timer)[0];
+    return {
+      active: Boolean(active && active.timer > 0),
+      timer: active?.timer ?? 0,
+      ownerId: active?.ownerId,
+      gasAlpha: active?.gasAlpha ?? 0,
+      sharkCount: active ? this.jupiterSharks.filter((shark) => shark.eventId === active.id).length : 0,
+      holeCount: active ? this.jupiterHoles.filter((hole) => hole.eventId === active.id).length : 0,
     };
   }
 
@@ -1645,6 +1780,11 @@ export class CombatSystem {
       switchToSide: "top",
       switchTimer: 0,
       switchDuration: moonSwitchDuration,
+      topFloorY: moonTopFloorY,
+      moonVisualPhase: "rising",
+      moonRiseProgress: 0,
+      moonDescendProgress: 0,
+      moonRadius,
       visualOnly,
     };
     this.moonEvents.push(state);
@@ -1654,6 +1794,89 @@ export class CombatSystem {
       this.queueSound("moon-activate");
     }
     return state;
+  }
+
+  private activateJupiterEvent(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "jupiter";
+    const existing = this.getJupiterEventForOwner(context.ownerId);
+    if (existing && existing.timer > 0) {
+      return { kind: "blocked", weaponId, label: "Jupiter active" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const seed = Math.floor((context.now || performanceNow()) + context.ownerId.length * 6299) % 1000000;
+    this.startJupiterEvent(context.ownerId, origin, false, seed);
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", origin, { x: 0, y: -1 }, "Jupiter", context.now, {
+      range: seed,
+    }));
+    return { kind: "utility", weaponId, label: "Jupiter" };
+  }
+
+  private startJupiterEvent(ownerId: string, origin: Vec2, visualOnly: boolean, seed: number): JupiterEventState {
+    const existing = this.getJupiterEventForOwner(ownerId);
+    if (existing && existing.timer > 0) {
+      return existing;
+    }
+    const arenaCenter = (DEFAULT_PHYSICS.platformLeft + DEFAULT_PHYSICS.platformRight) / 2;
+    const tornadoSide = origin.x <= arenaCenter ? 1 : -1;
+    const tornadoX = clamp(origin.x + tornadoSide * 260, DEFAULT_PHYSICS.platformLeft + 150, DEFAULT_PHYSICS.platformRight - 150);
+    const event: JupiterEventState = {
+      id: this.makeId(visualOnly ? "remote-jupiter" : "jupiter"),
+      ownerId,
+      timer: jupiterEventDuration,
+      duration: jupiterEventDuration,
+      age: 0,
+      seed,
+      earthquakeTimer: jupiterEarthquakeDuration,
+      gasAlpha: 0.16,
+      tornado: {
+        x: tornadoX,
+        y: DEFAULT_PHYSICS.groundY - 190,
+        vx: 0,
+        vy: 0,
+        radius: jupiterTornadoRadius,
+        coreRadius: jupiterTornadoCoreRadius,
+        angle: 0,
+      },
+      sharkSpawnTimer: jupiterInitialSharkDelay,
+      visualOnly,
+    };
+    this.jupiterEvents.push(event);
+    this.generateJupiterHoles(event, origin.x);
+    this.addEffect("shockwave", origin.x, DEFAULT_PHYSICS.groundY, origin.x + 320, DEFAULT_PHYSICS.groundY, colorForWeapon("jupiter"), "JUPITER QUAKE");
+    this.addEffect("aura", event.tornado.x, event.tornado.y, event.tornado.x, event.tornado.y - 220, "#1f5f32", "SHARK TORNADO");
+    if (!visualOnly) {
+      this.queueSound("jupiter-activate");
+      this.queueSound("jupiter-quake");
+    }
+    return event;
+  }
+
+  private generateJupiterHoles(event: JupiterEventState, protectedX: number): void {
+    const span = DEFAULT_PHYSICS.platformRight - DEFAULT_PHYSICS.platformLeft - 160;
+    for (let index = 0; index < jupiterHoleCount; index += 1) {
+      const width = 34 + Math.floor(seededUnit(event.seed, index, 3) * 54);
+      const jitter = (seededUnit(event.seed, index, 7) - 0.5) * 90;
+      let centerX = DEFAULT_PHYSICS.platformLeft + 80 + span * ((index + 0.5) / jupiterHoleCount) + jitter;
+      if (Math.abs(centerX - protectedX) < 135) {
+        centerX += centerX <= protectedX ? -150 : 150;
+      }
+      centerX = clamp(centerX, DEFAULT_PHYSICS.platformLeft + 50, DEFAULT_PHYSICS.platformRight - 50);
+      this.jupiterHoles.push({
+        id: this.makeId("jupiter-hole"),
+        eventId: event.id,
+        ownerId: event.ownerId,
+        x: centerX - width / 2,
+        width,
+        depth: 18 + Math.floor(seededUnit(event.seed, index, 11) * 34),
+        deadly: index % 3 === 1 || index === jupiterHoleCount - 2,
+        age: 0,
+        visualOnly: event.visualOnly,
+      });
+    }
   }
 
   private switchMoonSideInternal(ownerId: string, now: number, visualOnly: boolean): WeaponUseResult {
@@ -2090,6 +2313,7 @@ export class CombatSystem {
     for (const event of this.moonEvents) {
       event.age += dt;
       event.timer = Math.max(0, event.timer - dt);
+      this.updateMoonVisualState(event);
       if (event.switching) {
         event.switchTimer = Math.min(event.switchDuration, event.switchTimer + dt);
         if (event.switchTimer >= event.switchDuration) {
@@ -2108,6 +2332,16 @@ export class CombatSystem {
     for (const event of ended) {
       this.finishMoonEvent(event, playersById);
     }
+  }
+
+  private updateMoonVisualState(event: MoonEventState): void {
+    event.moonRiseProgress = clamp(event.age / moonRiseDuration, 0, 1);
+    event.moonDescendProgress = clamp((moonDescentDuration - event.timer) / moonDescentDuration, 0, 1);
+    event.moonVisualPhase = event.moonRiseProgress < 1
+      ? "rising"
+      : event.moonDescendProgress > 0
+        ? "descending"
+        : "holding";
   }
 
   private applyMoonEvent(event: MoonEventState, dt: number, playersById: Map<string, PlayerPhysicsState>): void {
@@ -2188,6 +2422,350 @@ export class CombatSystem {
     this.addEffect("shockwave", 0, DEFAULT_PHYSICS.groundY, 260, DEFAULT_PHYSICS.groundY, colorForWeapon("moon"), "MOON SET");
     if (!event.visualOnly) {
       this.queueSound("moon-end");
+    }
+  }
+
+  private getJupiterEventForOwner(ownerId: string): JupiterEventState | undefined {
+    return [...this.jupiterEvents].reverse().find((event) => event.ownerId === ownerId && event.timer > 0);
+  }
+
+  private updateJupiterEvents(dt: number, _players: PlayerPhysicsState[]): void {
+    if (this.jupiterEvents.length === 0) {
+      return;
+    }
+    const ended: JupiterEventState[] = [];
+    for (const event of this.jupiterEvents) {
+      event.age += dt;
+      event.timer = Math.max(0, event.timer - dt);
+      event.earthquakeTimer = Math.max(0, event.earthquakeTimer - dt);
+      event.gasAlpha = jupiterGasMaxAlpha * Math.min(clamp(event.age / 1.1, 0, 1), clamp(event.timer / 4, 0, 1));
+      this.updateJupiterTornado(event, dt);
+      for (const hole of this.jupiterHoles) {
+        if (hole.eventId === event.id) {
+          hole.age += dt;
+        }
+      }
+      if (event.timer <= 0) {
+        ended.push(event);
+        continue;
+      }
+      this.applyJupiterForces(event, dt);
+      this.updateJupiterSharks(event, dt);
+      this.spawnDueJupiterSharks(event, dt);
+      if (event.earthquakeTimer > 0 && Math.floor(event.age * 8) !== Math.floor((event.age - dt) * 8)) {
+        this.addEffect("trip", DEFAULT_PHYSICS.platformLeft + seededUnit(event.seed, Math.floor(event.age * 10), 23) * (DEFAULT_PHYSICS.platformRight - DEFAULT_PHYSICS.platformLeft), DEFAULT_PHYSICS.groundY, event.tornado.x, DEFAULT_PHYSICS.groundY - 30, colorForWeapon("jupiter"), "CRACK");
+        if (!event.visualOnly) {
+          this.queueSound("jupiter-quake");
+        }
+      }
+    }
+    for (const event of ended) {
+      this.finishJupiterEvent(event);
+    }
+  }
+
+  private updateJupiterTornado(event: JupiterEventState, dt: number): void {
+    const travel = (DEFAULT_PHYSICS.platformRight - DEFAULT_PHYSICS.platformLeft) * 0.34;
+    const baseX = (DEFAULT_PHYSICS.platformLeft + DEFAULT_PHYSICS.platformRight) / 2;
+    const targetX = baseX + Math.sin(event.age * 0.42 + event.seed * 0.001) * travel;
+    const targetY = DEFAULT_PHYSICS.groundY - 190 - Math.abs(Math.sin(event.age * 0.58 + event.seed * 0.002)) * 130;
+    event.tornado.vx = lerp(event.tornado.vx, (targetX - event.tornado.x) * 1.25, clamp(dt * 2.4, 0, 1));
+    event.tornado.vy = lerp(event.tornado.vy, (targetY - event.tornado.y) * 1.2, clamp(dt * 2.2, 0, 1));
+    event.tornado.x = clamp(event.tornado.x + event.tornado.vx * dt, DEFAULT_PHYSICS.platformLeft + 120, DEFAULT_PHYSICS.platformRight - 120);
+    event.tornado.y = clamp(event.tornado.y + event.tornado.vy * dt, DEFAULT_PHYSICS.groundY - 420, DEFAULT_PHYSICS.groundY - 90);
+    event.tornado.angle += dt * 7.5;
+  }
+
+  private applyJupiterForces(event: JupiterEventState, dt: number): void {
+    for (const combatant of this.combatants.values()) {
+      if (combatant.respawnTimer > 0 || combatant.hp <= 0 || this.isJupiterSharkCombatant(combatant.id)) {
+        continue;
+      }
+      this.applyJupiterHoleHazards(event, combatant);
+      if (combatant.respawnTimer > 0 || combatant.hp <= 0) {
+        continue;
+      }
+      const feetY = combatant.y + combatant.height;
+      const onGround = Math.abs(feetY - DEFAULT_PHYSICS.groundY) <= 4 && isOverPlatform(combatant);
+      const lift = (780 + event.gasAlpha * 1180) * dt;
+      combatant.velocityY -= lift;
+      if (onGround) {
+        combatant.velocityY = Math.min(combatant.velocityY, -190 - event.gasAlpha * 190);
+      }
+      combatant.velocityY = clamp(combatant.velocityY, -640, 540);
+      combatant.velocityX += Math.sin(event.age * 2.7 + combatant.x * 0.013 + event.seed) * 72 * dt;
+      this.applyJupiterTornadoToCombatant(event, combatant, dt);
+    }
+    for (const van of this.damageableVans()) {
+      this.applyJupiterTornadoToVan(event, van, dt);
+      if (event.gasAlpha > 0.05 && van.state === "active") {
+        van.velocityY -= 170 * event.gasAlpha * dt;
+      }
+    }
+  }
+
+  private applyJupiterHoleHazards(event: JupiterEventState, combatant: Combatant): void {
+    if (event.visualOnly) {
+      return;
+    }
+    const feetY = combatant.y + combatant.height;
+    if (Math.abs(feetY - DEFAULT_PHYSICS.groundY) > 42) {
+      return;
+    }
+    const centerX = combatant.x + combatant.width / 2;
+    const hole = this.jupiterHoles.find((candidate) => (
+      candidate.eventId === event.id
+      && candidate.deadly
+      && centerX >= candidate.x
+      && centerX <= candidate.x + candidate.width
+    ));
+    if (!hole) {
+      return;
+    }
+    if (this.applyJupiterFatalHit(event, combatant, "JUPITER HOLE", { x: 0, y: -620 })) {
+      this.addEffect("shockwave", centerX, DEFAULT_PHYSICS.groundY, centerX, DEFAULT_PHYSICS.groundY - 90, colorForWeapon("jupiter"), "FALLEN");
+    }
+  }
+
+  private applyJupiterTornadoToCombatant(event: JupiterEventState, combatant: Combatant, dt: number): void {
+    const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+    const dx = event.tornado.x - center.x;
+    const dy = event.tornado.y - center.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > event.tornado.radius) {
+      return;
+    }
+    if (!event.visualOnly && distance <= event.tornado.coreRadius) {
+      const direction = normalize({ x: center.x - event.tornado.x || 1, y: center.y - event.tornado.y || -1 });
+      if (this.applyJupiterFatalHit(event, combatant, "JUPITER CORE", { x: direction.x * 960, y: -820 })) {
+        this.addEffect("explosion", center.x, center.y, center.x, center.y - 80, colorForWeapon("jupiter"), "TORNADO CORE");
+        this.queueSound("jupiter-tornado");
+      }
+      return;
+    }
+    const direction = normalize({ x: dx || 1, y: dy || -1 });
+    const force = (1 - distance / Math.max(1, event.tornado.radius)) ** 1.35;
+    combatant.velocityX += direction.x * (980 * force) * dt + Math.sin(event.tornado.angle + distance * 0.025) * 90 * force * dt;
+    combatant.velocityY += direction.y * (760 * force) * dt - 150 * force * dt;
+    combatant.hitstun = Math.max(combatant.hitstun, 0.04 * force);
+  }
+
+  private applyJupiterFatalHit(event: JupiterEventState, target: Combatant, label: string, knockback: Vec2): boolean {
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: event.ownerId,
+      targetId: target.id,
+      weaponId: "jupiter",
+      damage: 999,
+      knockback,
+      stun: 0.55,
+      label,
+      status: "daze",
+      skipHitLocationScaling: true,
+      skipSourceScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+    }
+    return hit.applied;
+  }
+
+  private applyJupiterTornadoToVan(event: JupiterEventState, van: VanState, dt: number): void {
+    const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+    const dx = event.tornado.x - center.x;
+    const dy = event.tornado.y - center.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > event.tornado.radius + van.width * 0.35) {
+      return;
+    }
+    const direction = normalize({ x: dx || 1, y: dy || -0.4 });
+    const force = (1 - clamp(distance / Math.max(1, event.tornado.radius + van.width * 0.35), 0, 1)) ** 1.2;
+    van.velocityX += direction.x * 330 * force * dt;
+    van.velocityY += direction.y * 270 * force * dt - 70 * force * dt;
+    if (!event.visualOnly && distance <= event.tornado.coreRadius + van.width * 0.2) {
+      this.damageVan(van.id, 999, event.ownerId, performanceNow(), { x: direction.x * 820, y: -620 });
+    }
+  }
+
+  private updateJupiterSharks(event: JupiterEventState, dt: number): void {
+    for (const shark of [...this.jupiterSharks]) {
+      if (shark.eventId !== event.id) {
+        continue;
+      }
+      const body = this.combatants.get(shark.id);
+      if (!body || body.respawnTimer > 0 || body.hp <= 0 || shark.age >= shark.lifetime) {
+        this.removeJupiterShark(shark, true);
+        continue;
+      }
+      shark.age += dt;
+      shark.hp = body.hp;
+      shark.biteCooldown = Math.max(0, shark.biteCooldown - dt);
+      const target = this.resolveJupiterSharkTarget(shark);
+      if (target) {
+        shark.targetId = target.id;
+        const center = { x: shark.x + shark.width / 2, y: shark.y + shark.height / 2 };
+        const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height * 0.45 };
+        const delta = normalize({ x: targetCenter.x - center.x, y: targetCenter.y - center.y });
+        const speed = 430 + Math.sin(event.age * 3 + shark.age) * 35;
+        shark.vx = lerp(shark.vx, delta.x * speed, clamp(dt * 3.3, 0, 1));
+        shark.vy = lerp(shark.vy, delta.y * speed, clamp(dt * 3.3, 0, 1));
+        if (!event.visualOnly && shark.biteCooldown <= 0 && Math.hypot(targetCenter.x - center.x, targetCenter.y - center.y) < 46) {
+          const previousInvulnerable = target.invulnerable;
+          target.invulnerable = 0;
+          const hit = this.applyDamage({
+            sourceId: event.ownerId,
+            targetId: target.id,
+            weaponId: "jupiter",
+            damage: jupiterSharkDamage,
+            knockback: { x: delta.x * 520, y: delta.y * 260 - 210 },
+            stun: 0.32,
+            label: "Jupiter Shark",
+            status: "daze",
+            skipHitLocationScaling: true,
+          });
+          if (!hit.applied) {
+            target.invulnerable = previousInvulnerable;
+          }
+          shark.biteCooldown = jupiterSharkBiteCooldown;
+          this.queueSound("jupiter-shark");
+        }
+      } else {
+        shark.targetId = undefined;
+        shark.vx = lerp(shark.vx, Math.sin(event.age + shark.age) * 220, clamp(dt * 1.8, 0, 1));
+        shark.vy = lerp(shark.vy, -60 + Math.cos(event.age * 0.7) * 100, clamp(dt * 1.8, 0, 1));
+      }
+      shark.x += shark.vx * dt;
+      shark.y += shark.vy * dt;
+      shark.y = clamp(shark.y, DEFAULT_PHYSICS.groundY - 520, DEFAULT_PHYSICS.groundY - 28);
+      shark.angle = Math.atan2(shark.vy, shark.vx || 1);
+      this.syncJupiterSharkCombatant(shark);
+    }
+  }
+
+  private spawnDueJupiterSharks(event: JupiterEventState, dt: number): void {
+    event.sharkSpawnTimer -= dt;
+    let spawned = 0;
+    while (event.sharkSpawnTimer <= 0 && spawned < 3 && this.jupiterSharks.filter((shark) => shark.eventId === event.id).length < jupiterMaxActiveSharks) {
+      this.spawnJupiterShark(event);
+      event.sharkSpawnTimer += jupiterSharkSpawnInterval;
+      spawned += 1;
+    }
+  }
+
+  private spawnJupiterShark(event: JupiterEventState): void {
+    const target = this.pickJupiterSharkTarget(event.ownerId, event.seed + this.jupiterSharks.length);
+    const index = this.jupiterSharks.length + 1;
+    const angle = event.tornado.angle + seededUnit(event.seed, index, 31) * Math.PI * 2;
+    const shark: JupiterSharkState = {
+      id: this.makeId("jupiter-shark"),
+      eventId: event.id,
+      ownerId: event.ownerId,
+      targetId: target?.id,
+      x: event.tornado.x + Math.cos(angle) * 42,
+      y: event.tornado.y + Math.sin(angle) * 70,
+      vx: Math.cos(angle) * 180,
+      vy: Math.sin(angle) * 160,
+      width: 58,
+      height: 34,
+      hp: jupiterSharkHp,
+      maxHp: jupiterSharkHp,
+      age: 0,
+      lifetime: jupiterSharkLifetime,
+      biteCooldown: 0,
+      angle,
+      visualOnly: event.visualOnly,
+    };
+    this.jupiterSharks.push(shark);
+    this.syncJupiterSharkCombatant(shark);
+    this.addEffect("spark", shark.x + shark.width / 2, shark.y + shark.height / 2, event.tornado.x, event.tornado.y, "#7cff6b", "SHARK");
+    if (!event.visualOnly) {
+      this.queueSound("jupiter-shark");
+    }
+  }
+
+  private syncJupiterSharkCombatant(shark: JupiterSharkState): void {
+    const existing = this.combatants.get(shark.id);
+    const hp = Math.min(shark.maxHp, existing?.hp ?? shark.hp);
+    shark.hp = hp;
+    this.combatants.set(shark.id, {
+      id: shark.id,
+      name: "Jupiter Shark",
+      x: shark.x,
+      y: shark.y,
+      width: shark.width,
+      height: shark.height,
+      spawnX: shark.x,
+      spawnY: shark.y,
+      hp,
+      maxHp: shark.maxHp,
+      velocityX: shark.vx,
+      velocityY: shark.vy,
+      hitstun: existing?.hitstun ?? 0,
+      invulnerable: existing?.invulnerable ?? 0,
+      respawnTimer: existing?.respawnTimer ?? 0,
+      color: "#7cff6b",
+      statuses: existing?.statuses ?? [],
+    });
+  }
+
+  private resolveJupiterSharkTarget(shark: JupiterSharkState): Combatant | undefined {
+    const current = shark.targetId ? this.combatants.get(shark.targetId) : undefined;
+    if (current && current.respawnTimer <= 0 && current.hp > 0 && !this.isJupiterSharkCombatant(current.id)) {
+      return current;
+    }
+    return this.pickJupiterSharkTarget(shark.ownerId, shark.age + shark.x);
+  }
+
+  private pickJupiterSharkTarget(ownerId: string, seed: number): Combatant | undefined {
+    const candidates = [...this.combatants.values()].filter((target) => (
+      target.id !== ownerId
+      && target.respawnTimer <= 0
+      && target.hp > 0
+      && !this.isJupiterSharkCombatant(target.id)
+    ));
+    if (candidates.length === 0) {
+      return undefined;
+    }
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      candidates.sort((left, right) => Math.hypot(left.x - owner.x, left.y - owner.y) - Math.hypot(right.x - owner.x, right.y - owner.y));
+      return candidates[0];
+    }
+    const index = Math.floor(seededUnit(seed, candidates.length, 41) * candidates.length) % candidates.length;
+    return candidates[index];
+  }
+
+  private removeJupiterShark(shark: JupiterSharkState, effect: boolean): void {
+    removeWhere(this.jupiterSharks, (candidate) => candidate.id === shark.id);
+    this.combatants.delete(shark.id);
+    if (effect) {
+      this.addEffect("aura", shark.x + shark.width / 2, shark.y + shark.height / 2, shark.x + shark.width / 2, shark.y - 42, "#1f5f32", "SHARK DOWN");
+    }
+  }
+
+  private isJupiterSharkCombatant(id: string): boolean {
+    return this.jupiterSharks.some((shark) => shark.id === id);
+  }
+
+  private finishJupiterEvent(event: JupiterEventState): void {
+    removeWhere(this.jupiterEvents, (item) => item.id === event.id);
+    removeWhere(this.jupiterHoles, (hole) => hole.eventId === event.id);
+    for (const shark of [...this.jupiterSharks].filter((item) => item.eventId === event.id)) {
+      this.removeJupiterShark(shark, false);
+    }
+    this.addEffect("shockwave", event.tornado.x, DEFAULT_PHYSICS.groundY, event.tornado.x + 190, DEFAULT_PHYSICS.groundY, colorForWeapon("jupiter"), "JUPITER SET");
+    if (!event.visualOnly) {
+      this.queueSound("jupiter-end");
+    }
+  }
+
+  private removeJupiterStateForOwner(ownerId: string): void {
+    const eventIds = this.jupiterEvents.filter((event) => event.ownerId === ownerId).map((event) => event.id);
+    removeWhere(this.jupiterEvents, (event) => event.ownerId === ownerId);
+    removeWhere(this.jupiterHoles, (hole) => hole.ownerId === ownerId || eventIds.includes(hole.eventId));
+    for (const shark of [...this.jupiterSharks].filter((item) => item.ownerId === ownerId || eventIds.includes(item.eventId))) {
+      this.removeJupiterShark(shark, false);
     }
   }
 
@@ -2281,6 +2859,10 @@ export class CombatSystem {
       this.spawnRemoteMoonVisual(event);
       return;
     }
+    if (event.weaponId === "jupiter") {
+      this.spawnRemoteJupiterVisual(event);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -2329,6 +2911,12 @@ export class CombatSystem {
     }
     if (event.label === "Moon Switch") {
       this.switchMoonSideInternal(event.ownerId, event.ts, true);
+    }
+  }
+
+  private spawnRemoteJupiterVisual(event: CombatEventPacket): void {
+    if (event.label === "Jupiter") {
+      this.startJupiterEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
     }
   }
 
@@ -2553,6 +3141,9 @@ export class CombatSystem {
       crossShields: this.crossShields,
       judgmentBeams: [...this.judgmentDays.values()].flatMap((state) => state.beams),
       moonEvents: this.moonEvents,
+      jupiterEvents: this.jupiterEvents,
+      jupiterHoles: this.jupiterHoles,
+      jupiterSharks: this.jupiterSharks,
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -8054,6 +8645,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#fff4a8";
     case "moon":
       return "#d6f2ff";
+    case "jupiter":
+      return "#ff9f3d";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
