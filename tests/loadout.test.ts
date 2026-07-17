@@ -79,6 +79,14 @@ describe("loadout equipment slots", () => {
     })).toEqual({
       frontStrap: "jupiter",
     });
+    expect(normalizeLoadout({
+      backStrap: "uranus" as never,
+      rightHand: "uranus" as never,
+      attachment: "uranus" as never,
+      legs: "uranus" as never,
+    })).toEqual({
+      backStrap: "uranus",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -152,6 +160,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("jupiter" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("jupiter" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("jupiter" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("uranus" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("uranus" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("uranus" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("uranus" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("uranus" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("uranus" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -197,6 +211,14 @@ describe("loadout equipment slots", () => {
     expect(withJupiter.frontStrap).toBe("jupiter");
     expect(loadoutHasWeapon(withJupiter, "jupiter" as never)).toBe(true);
     expect(LOADOUT_ITEMS.find((item) => item.id === ("jupiter" as never))).toMatchObject({
+      category: "space",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
+    });
+    const withUranus = assignLoadoutItem(DEFAULT_LOADOUT, "backStrap", "uranus" as never);
+    expect(withUranus.backStrap).toBe("uranus");
+    expect(loadoutHasWeapon(withUranus, "uranus" as never)).toBe(true);
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("uranus" as never))).toMatchObject({
       category: "space",
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],

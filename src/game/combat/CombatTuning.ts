@@ -60,6 +60,7 @@ export const COMBAT_TUNING = {
     cross: { label: "Light", moveSpeedMultiplier: 1.03, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.02, slideMultiplier: 1.02 },
     moon: { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.02, slideMultiplier: 1.02 },
     jupiter: { label: "Light", moveSpeedMultiplier: 1.03, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.12, jumpMultiplier: 1.04, slideMultiplier: 1.02 },
+    uranus: { label: "Light", moveSpeedMultiplier: 1.04, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.02, slideMultiplier: 1.02 },
     hands: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
     "super-legs": { label: "Light", moveSpeedMultiplier: 1.44, accelerationMultiplier: 1.58, airAccelerationMultiplier: 1.42, jumpMultiplier: 1.64, slideMultiplier: 1.5 },
   } satisfies Record<WeaponId, WeaponWeightDefinition>,

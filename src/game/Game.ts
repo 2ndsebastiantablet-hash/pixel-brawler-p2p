@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterHoleState, JupiterSharkState, SpikeParticleState, SpikeState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, SpikeParticleState, SpikeState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -518,10 +518,21 @@ export class Game {
       ctx.translate(Math.round(Math.sin(performance.now() * 0.08) * 5 * power), Math.round(Math.cos(performance.now() * 0.1) * 3 * power));
     }
 
-    this.drawGrid(ctx);
+    const uranusState = this.combat.getUranusEventState();
+    const uranusWorldVisible = uranusState.active && uranusState.phase === "active";
+    if (uranusWorldVisible) {
+      this.drawUranusArenaWorld(ctx);
+    } else {
+      this.drawGrid(ctx);
+    }
     this.drawMoonEventWorld(ctx);
-    this.drawPlatform(ctx);
+    if (uranusWorldVisible) {
+      this.drawUranusRingPlatform(ctx);
+    } else {
+      this.drawPlatform(ctx);
+    }
     this.drawJupiterEventWorld(ctx);
+    this.drawUranusHazards(ctx);
     this.drawBursts(ctx);
     this.drawCombatEntities(ctx);
     for (const remote of this.remotes.values()) {
@@ -581,6 +592,7 @@ export class Game {
     }
     this.drawLocalHealth(ctx);
     this.drawJupiterGasOverlay(ctx);
+    this.drawUranusFlashOverlay(ctx);
     this.drawCrosshair(ctx);
     this.drawEventOverlays(ctx);
     if (showSpiritHeart) {
@@ -746,9 +758,9 @@ export class Game {
     this.recordAttack(result, action);
     if (
       (slot === "frontStrap" || slot === "backStrap")
-      && (weaponId === "moon" || weaponId === "jupiter")
+      && (weaponId === "moon" || weaponId === "jupiter" || weaponId === "uranus")
       && result.kind === "utility"
-      && (result.label === "Moonfall" || result.label === "Jupiter")
+      && (result.label === "Moonfall" || result.label === "Jupiter" || result.label === "Uranus")
     ) {
       this.loadout = clearLoadoutSlot(this.loadout, slot);
     }
@@ -988,8 +1000,13 @@ export class Game {
       case "moon-activate":
       case "jupiter-activate":
       case "jupiter-quake":
+      case "jupiter-burst":
       case "jupiter-tornado":
-        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : sound === "jupiter-activate" ? 0.34 : sound === "jupiter-tornado" ? 0.26 : 0.22);
+      case "uranus-activate":
+      case "uranus-impact":
+      case "uranus-flash":
+      case "uranus-chomp":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : sound === "jupiter-activate" ? 0.34 : sound === "jupiter-tornado" ? 0.26 : sound === "jupiter-burst" ? 0.22 : sound === "uranus-impact" || sound === "uranus-flash" ? 0.32 : sound === "uranus-activate" ? 0.24 : 0.16);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -2251,51 +2268,51 @@ export class Game {
     const y = Math.round(shark.y + shark.height / 2 - this.camera.y);
     const facing = shark.vx >= 0 ? 1 : -1;
     const flash = shark.hp < shark.maxHp ? Math.sin(performance.now() * 0.05) > 0 : false;
+    const roll = Math.sin(shark.age * 5.2 + shark.x * 0.02) * 0.42;
+    const pitch = Math.sin(shark.age * 3.1) * 0.22;
+    const project = (point: { x: number; y: number; z: number }): { x: number; y: number } => ({
+      x: Math.round(point.x + point.z * 0.42 * roll),
+      y: Math.round(point.y - point.z * 0.34 + point.x * 0.05 * pitch),
+    });
+    const face = (points: Array<{ x: number; y: number; z: number }>, color: string): void => {
+      const first = project(points[0]);
+      ctx.fillStyle = flash ? "#ffffff" : color;
+      ctx.beginPath();
+      ctx.moveTo(first.x, first.y);
+      for (let index = 1; index < points.length; index += 1) {
+        const next = project(points[index]);
+        ctx.lineTo(next.x, next.y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(5, 6, 10, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    };
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.translate(x, y);
-    ctx.rotate(shark.angle * 0.35);
+    ctx.rotate(shark.angle * 0.42);
     ctx.scale(facing, 1);
     ctx.globalAlpha = shark.visualOnly ? 0.68 : 1;
-    ctx.fillStyle = flash ? "#ffffff" : "#6a7478";
-    ctx.beginPath();
-    ctx.moveTo(-30, -8);
-    ctx.lineTo(18, -14);
-    ctx.lineTo(34, -2);
-    ctx.lineTo(16, 12);
-    ctx.lineTo(-28, 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = flash ? "#d6f2ff" : "#3f4e52";
-    ctx.beginPath();
-    ctx.moveTo(-30, -8);
-    ctx.lineTo(-48, -20);
-    ctx.lineTo(-42, 0);
-    ctx.lineTo(-50, 18);
-    ctx.lineTo(-28, 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#1f5f32";
-    ctx.beginPath();
-    ctx.moveTo(-4, -12);
-    ctx.lineTo(8, -32);
-    ctx.lineTo(18, -10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(-2, 10);
-    ctx.lineTo(12, 26);
-    ctx.lineTo(18, 8);
-    ctx.closePath();
-    ctx.fill();
+    face([{ x: -32, y: -8, z: 0 }, { x: -8, y: -18, z: 14 }, { x: 26, y: -12, z: 8 }, { x: 38, y: -2, z: 0 }, { x: 16, y: 3, z: -8 }, { x: -22, y: 1, z: -12 }], "#7c898c");
+    face([{ x: -32, y: -8, z: 0 }, { x: -22, y: 1, z: -12 }, { x: 16, y: 3, z: -8 }, { x: 32, y: 12, z: 0 }, { x: -26, y: 12, z: 8 }], "#4b5a5e");
+    face([{ x: -8, y: -18, z: 14 }, { x: 22, y: -21, z: 4 }, { x: 44, y: -3, z: 0 }, { x: 38, y: -2, z: 0 }, { x: 26, y: -12, z: 8 }], "#9aa5a6");
+    face([{ x: 38, y: -2, z: 0 }, { x: 44, y: -3, z: 0 }, { x: 34, y: 10, z: -5 }, { x: 20, y: 15, z: 0 }, { x: 32, y: 12, z: 0 }], "#617276");
+    face([{ x: -32, y: -8, z: 0 }, { x: -50, y: -24, z: 0 }, { x: -45, y: -1, z: 12 }, { x: -26, y: 12, z: 8 }], "#3f4e52");
+    face([{ x: -32, y: -8, z: 0 }, { x: -48, y: -5, z: -12 }, { x: -52, y: 18, z: 0 }, { x: -26, y: 12, z: 8 }], "#5a686b");
+    face([{ x: -2, y: -14, z: 8 }, { x: 10, y: -38, z: 0 }, { x: 22, y: -12, z: -5 }], "#1f5f32");
+    face([{ x: 0, y: 8, z: -5 }, { x: 14, y: 30, z: -1 }, { x: 22, y: 8, z: 4 }], "#244f38");
+    face([{ x: 4, y: -2, z: 15 }, { x: 16, y: 12, z: 28 }, { x: 24, y: 4, z: 8 }], "#2f6f45");
+    face([{ x: 4, y: -1, z: -14 }, { x: 18, y: 12, z: -24 }, { x: 24, y: 5, z: -7 }], "#163a2a");
     ctx.fillStyle = "#05060a";
-    ctx.fillRect(18, -8, 5, 5);
+    ctx.fillRect(22, -10, 5, 5);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(28, 0, 4, 3);
-    ctx.fillRect(23, 4, 4, 3);
-    ctx.strokeStyle = "rgba(124, 255, 107, 0.66)";
+    ctx.fillRect(35, -1, 4, 3);
+    ctx.fillRect(30, 3, 4, 3);
+    ctx.strokeStyle = "rgba(124, 255, 107, 0.54)";
     ctx.lineWidth = 2;
-    ctx.strokeRect(-34, -17, 70, 34);
+    ctx.strokeRect(-40, -24, 84, 48);
     ctx.restore();
   }
 
@@ -3238,6 +3255,7 @@ export class Game {
     const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
     const judgment = this.combat.getJudgmentDayState();
     const jupiter = this.combat.getJupiterEventState();
+    const uranus = this.combat.getUranusEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     const ammoText = ammo
@@ -3262,7 +3280,8 @@ export class Game {
       judgment.active ? `Judgment Day ${judgment.phase === "countdown" ? "countdown" : "active"} ${judgment.timer.toFixed(1)}s` : "",
       cross.crossRestTimer > 0 ? `Cross resting ${cross.crossRestTimer.toFixed(1)}s` : loadoutHasWeapon(this.loadout, "cross") ? `Cross shield charge ${Math.round(Math.min(cross.crossStopwatch / 10, 1) * 100)}%` : "",
       moon.active ? `Moon ${moon.timer.toFixed(1)}s - ${localMoon.active ? localMoon.switching ? `switching to ${localMoon.targetSide}` : `side ${localMoon.userSide}` : "map inverted"}` : "",
-      jupiter.active ? `Jupiter ${jupiter.timer.toFixed(1)}s - gas ${Math.round(jupiter.gasAlpha * 100)}% - sharks ${jupiter.sharkCount} - holes ${jupiter.holeCount}` : "",
+      jupiter.active ? `Jupiter ${jupiter.timer.toFixed(1)}s - gas ${Math.round(jupiter.gasAlpha * 100)}% - sharks ${jupiter.sharkCount} - step bursts ${jupiter.footstepCount}` : "",
+      uranus.active ? `Uranus ${uranus.timer.toFixed(1)}s - ${uranus.phase} - ring ${Math.round(uranus.ringSpeed)}px/s` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -3343,6 +3362,204 @@ export class Game {
     }
   }
 
+  private drawUranusArenaWorld(ctx: CanvasRenderingContext2D): void {
+    const event = this.combat.getSnapshot().uranusEvents[0];
+    if (!event) {
+      return;
+    }
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#02030b";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.fillStyle = "#10133a";
+    for (let index = 0; index < 72; index += 1) {
+      const x = Math.round((index * 149 - event.ringScroll * (0.12 + (index % 5) * 0.04)) % (this.canvas.width + 80) - 40);
+      const y = Math.round((index * 83 + Math.sin(index * 4.7) * 24) % Math.max(1, this.canvas.height - 80));
+      const size = 1 + (index % 3);
+      ctx.globalAlpha = 0.42 + (index % 4) * 0.12;
+      ctx.fillRect(x, y, size, size);
+    }
+    ctx.globalAlpha = 1;
+    const planetX = Math.round(this.canvas.width * 0.68 + Math.sin(event.age * 0.35) * 18);
+    const planetY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y - 250);
+    const radius = 188;
+    ctx.save();
+    ctx.translate(planetX, planetY);
+    ctx.rotate(event.age * 0.08);
+    ctx.globalAlpha = 0.52;
+    ctx.fillStyle = "rgba(255, 216, 106, 0.28)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius * 1.68, radius * 0.28, -0.25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.92;
+    const bands = ["#d8a95e", "#f1c972", "#b9854d", "#ffe2a0", "#c89454", "#f6d27b"];
+    for (let band = -4; band <= 4; band += 1) {
+      const h = Math.max(12, radius * 0.18 - Math.abs(band) * 9);
+      ctx.fillStyle = bands[(band + 6) % bands.length];
+      ctx.beginPath();
+      ctx.ellipse(0, band * 26, radius * (0.92 - Math.abs(band) * 0.035), h, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "rgba(60, 41, 28, 0.34)";
+    for (let face = 0; face < 11; face += 1) {
+      const angle = face * 0.72 + event.age * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * radius * 0.16, Math.sin(angle) * radius * 0.16);
+      ctx.lineTo(Math.cos(angle + 0.32) * radius * 0.84, Math.sin(angle + 0.32) * radius * 0.74);
+      ctx.lineTo(Math.cos(angle + 0.62) * radius * 0.58, Math.sin(angle + 0.62) * radius * 0.52);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = "rgba(255, 235, 172, 0.68)";
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius * 1.7, radius * 0.31, -0.25, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#ffd86a";
+    for (let stripe = -2; stripe < this.canvas.width + 220; stripe += 88) {
+      const x = Math.round(stripe - (event.ringScroll * 0.42) % 88);
+      ctx.fillRect(x, 0, 18, this.canvas.height);
+    }
+    ctx.restore();
+  }
+
+  private drawUranusRingPlatform(ctx: CanvasRenderingContext2D): void {
+    const event = this.combat.getSnapshot().uranusEvents[0];
+    if (!event) {
+      return;
+    }
+    const y = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#f6d27b";
+    ctx.fillRect(0, y - 8, this.canvas.width, 18);
+    ctx.fillStyle = "#8e613c";
+    ctx.fillRect(0, y + 10, this.canvas.width, 28);
+    ctx.fillStyle = "#34251f";
+    ctx.fillRect(0, y + 38, this.canvas.width, this.canvas.height - y);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.48)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, y - 9);
+    ctx.lineTo(this.canvas.width, y - 9);
+    ctx.stroke();
+    for (let stripe = -160; stripe < this.canvas.width + 220; stripe += 42) {
+      const x = Math.round(stripe - (event.ringScroll * 1.8) % 42);
+      ctx.fillStyle = stripe % 84 === 0 ? "#ffe2a0" : "#b9854d";
+      ctx.beginPath();
+      ctx.moveTo(x, y - 8);
+      ctx.lineTo(x + 24, y - 8);
+      ctx.lineTo(x - 12, y + 38);
+      ctx.lineTo(x - 36, y + 38);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  private drawUranusHazards(ctx: CanvasRenderingContext2D): void {
+    for (const event of this.combat.getSnapshot().uranusEvents) {
+      if (event.phase === "falling" || event.phase === "flash") {
+        this.drawUranusFallingPlanet(ctx, event);
+      }
+      if (event.phase === "active") {
+        const boundaryX = Math.round(event.leftKillX - this.camera.x);
+        ctx.save();
+        ctx.globalAlpha = 0.62;
+        ctx.fillStyle = "rgba(255, 40, 70, 0.38)";
+        ctx.fillRect(boundaryX - 18, 0, 36, this.canvas.height);
+        ctx.fillStyle = "#ff3d54";
+        ctx.fillRect(boundaryX - 4, 0, 8, this.canvas.height);
+        ctx.restore();
+        this.drawRingChomper(ctx, event);
+      }
+    }
+  }
+
+  private drawUranusFallingPlanet(ctx: CanvasRenderingContext2D, event: UranusEventState): void {
+    const progress = easeOutCubicNumber(event.fallProgress);
+    const x = Math.round(this.canvas.width * 0.5 + Math.sin(event.seed * 0.01) * 90);
+    const startY = -180;
+    const endY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y - 118);
+    const y = Math.round(lerpNumber(startY, endY, progress));
+    const radius = Math.round(42 + progress * 38);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = event.visualOnly ? 0.68 : 0.96;
+    ctx.fillStyle = "rgba(255, 216, 106, 0.18)";
+    ctx.fillRect(x - radius * 2, y - radius * 2, radius * 4, radius * 4);
+    const colors = ["#ffe2a0", "#ffd86a", "#c89454", "#8e613c"];
+    for (let face = 0; face < 9; face += 1) {
+      const angle = face * (Math.PI * 2 / 9) + event.age * 0.5;
+      ctx.fillStyle = colors[face % colors.length];
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
+      ctx.lineTo(x + Math.cos(angle + 0.72) * radius, y + Math.sin(angle + 0.72) * radius);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+    if (event.phase === "flash") {
+      ctx.globalAlpha = Math.min(0.92, event.flashAlpha);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.ellipse(x, endY + 80, 140 + event.phaseTimer * 260, 28 + event.phaseTimer * 60, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  private drawRingChomper(ctx: CanvasRenderingContext2D, event: UranusEventState): void {
+    const x = Math.round(event.chomper.x - this.camera.x);
+    const y = Math.round(event.chomper.y - this.camera.y);
+    const radius = Math.round(event.chomper.radius);
+    const mouth = event.chomper.mouthAngle;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = event.visualOnly ? 0.68 : 1;
+    const facetColors = ["#ffd84d", "#f5b940", "#d99428", "#fff0a8", "#c57d22"];
+    for (let face = 0; face < 14; face += 1) {
+      const a0 = face * (Math.PI * 2 / 14) + event.age * 0.06;
+      const a1 = a0 + Math.PI * 2 / 14;
+      const mid = (a0 + a1) / 2;
+      if (Math.abs(mid) < mouth || Math.abs(mid - Math.PI * 2) < mouth) {
+        continue;
+      }
+      ctx.fillStyle = facetColors[face % facetColors.length];
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(a0) * radius, y + Math.sin(a0) * radius);
+      ctx.lineTo(x + Math.cos(a1) * radius, y + Math.sin(a1) * radius);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = "#05060a";
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(-mouth) * radius * 1.08, y + Math.sin(-mouth) * radius * 1.08);
+    ctx.lineTo(x + radius * 1.08, y);
+    ctx.lineTo(x + Math.cos(mouth) * radius * 1.08, y + Math.sin(mouth) * radius * 1.08);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(x - 22, y - 48, 16, 16);
+    ctx.fillRect(x - 20, y + 30, 14, 14);
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(x - 16, y - 43, 6, 6);
+    ctx.fillRect(x - 15, y + 35, 5, 5);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+    ctx.restore();
+  }
+
   private drawMoonEventWorld(ctx: CanvasRenderingContext2D): void {
     const moon = this.combat.getMoonEventState();
     if (!moon.active) {
@@ -3402,8 +3619,8 @@ export class Game {
     }
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    for (const hole of snapshot.jupiterHoles) {
-      this.drawJupiterHole(ctx, hole);
+    for (const marker of snapshot.jupiterFootsteps) {
+      this.drawJupiterFootstepMarker(ctx, marker);
     }
     for (const event of snapshot.jupiterEvents) {
       this.drawJupiterTornado(ctx, event);
@@ -3411,27 +3628,42 @@ export class Game {
     ctx.restore();
   }
 
-  private drawJupiterHole(ctx: CanvasRenderingContext2D, hole: JupiterHoleState): void {
-    const x = Math.round(hole.x - this.camera.x);
-    const y = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
-    const width = Math.round(hole.width);
-    const depth = Math.round(hole.depth);
-    ctx.globalAlpha = hole.visualOnly ? 0.68 : 0.92;
-    ctx.fillStyle = hole.deadly ? "#05060a" : "rgba(12, 12, 18, 0.82)";
-    ctx.fillRect(x, y - 2, width, depth);
-    ctx.fillStyle = hole.deadly ? "#ff9f3d" : "#6a4a32";
-    ctx.fillRect(x - 4, y - 5, width + 8, 4);
-    ctx.strokeStyle = hole.deadly ? "rgba(255, 159, 61, 0.84)" : "rgba(160, 126, 88, 0.66)";
-    ctx.lineWidth = hole.deadly ? 3 : 2;
-    ctx.beginPath();
-    const crackCount = hole.deadly ? 5 : 3;
-    for (let index = 0; index < crackCount; index += 1) {
-      const startX = x + width * (index + 0.5) / crackCount;
-      ctx.moveTo(startX, y - 4);
-      ctx.lineTo(startX + (index % 2 === 0 ? -22 : 24), y - 12 - (index % 3) * 6);
+  private drawJupiterFootstepMarker(ctx: CanvasRenderingContext2D, marker: JupiterFootstepMarkerState): void {
+    const x = Math.round(marker.x - this.camera.x);
+    const y = Math.round(marker.y - this.camera.y);
+    const progress = Math.min(1, marker.age / Math.max(0.01, marker.delay));
+    const pulse = 0.5 + Math.sin(performance.now() * 0.018 + marker.x * 0.03) * 0.5;
+    const radius = Math.round(marker.radius * (marker.exploded ? 1.12 : 0.38 + progress * 0.62));
+    ctx.save();
+    ctx.globalAlpha = marker.visualOnly ? 0.56 : 0.86;
+    if (marker.exploded) {
+      ctx.strokeStyle = "rgba(255, 207, 90, 0.86)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 5, radius, Math.max(8, radius * 0.18), 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 127, 36, 0.74)";
+      for (let index = 0; index < 10; index += 1) {
+        const px = x - 28 + index * 6 + Math.sin(index + marker.age * 18) * 5;
+        const py = y - 12 - (index % 4) * 12 - marker.age * 90;
+        ctx.fillRect(Math.round(px), Math.round(py), 5, 14 + (index % 3) * 5);
+      }
+      ctx.restore();
+      return;
     }
+    ctx.strokeStyle = `rgba(255, ${Math.round(130 + pulse * 80)}, 36, ${0.55 + progress * 0.35})`;
+    ctx.lineWidth = 2 + Math.round(progress * 3);
+    ctx.beginPath();
+    ctx.ellipse(x, y - 3, radius, Math.max(7, radius * 0.22), 0, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(255, 127, 36, 0.72)";
+    ctx.fillRect(x - 13, y - 9, 9, 5);
+    ctx.fillRect(x + 3, y - 11, 10, 6);
+    ctx.fillStyle = "rgba(5, 6, 10, 0.62)";
+    ctx.fillRect(x - 18, y - 4, 36, 4);
+    ctx.fillStyle = "rgba(255, 207, 90, 0.82)";
+    ctx.fillRect(x - 2, y - 28 - Math.round(progress * 8), 4, 22 + Math.round(progress * 10));
+    ctx.restore();
   }
 
   private drawJupiterTornado(ctx: CanvasRenderingContext2D, event: JupiterEventState): void {
@@ -3497,9 +3729,25 @@ export class Game {
     ctx.restore();
   }
 
+  private drawUranusFlashOverlay(ctx: CanvasRenderingContext2D): void {
+    const flashAlpha = Math.max(0, ...this.combat.getSnapshot().uranusEvents.map((event) => event.flashAlpha));
+    if (flashAlpha <= 0) {
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, flashAlpha);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.globalAlpha = Math.min(0.45, flashAlpha * 0.65);
+    ctx.fillStyle = "#ffd86a";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.restore();
+  }
+
   private drawEventOverlays(ctx: CanvasRenderingContext2D): void {
     const judgment = this.combat.getJudgmentDayState();
     const jupiter = this.combat.getJupiterEventState();
+    const uranus = this.combat.getUranusEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     ctx.save();
@@ -3553,7 +3801,23 @@ export class Game {
       ctx.fillText(`JUPITER ${jupiter.timer.toFixed(1)}s`, x, y - 7);
       ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(`SHARKS ${jupiter.sharkCount}  HOLES ${jupiter.holeCount}`, x, y + 12);
+      ctx.fillText(`SHARKS ${jupiter.sharkCount}  STEPS ${jupiter.footstepCount}`, x, y + 12);
+    }
+    if (uranus.active) {
+      const x = this.canvas.width / 2;
+      const y = this.canvas.height - 86;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(34, 24, 8, 0.78)";
+      ctx.fillRect(x - 154, y - 25, 308, 50);
+      ctx.strokeStyle = "rgba(255, 216, 106, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 154, y - 25, 308, 50);
+      ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ffd86a";
+      ctx.fillText(`URANUS ${uranus.timer.toFixed(1)}s - ${uranus.phase.toUpperCase()}`, x, y - 7);
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(uranus.phase === "active" ? "KEEP MOVING RIGHT - RING CHOMPER LEFT" : "PLANET FALLING", x, y + 12);
     }
     ctx.restore();
   }
@@ -3679,6 +3943,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#d6f2ff";
     case "jupiter":
       return "#ff9f3d";
+    case "uranus":
+      return "#ffd86a";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -3789,8 +4055,12 @@ function weaponHudDetail(
         : "Q/E one-use map flip - both mouse buttons switch sides";
     case "jupiter":
       return runtime.jupiterActive
-        ? `Jupiter ${runtime.jupiterTimer.toFixed(1)}s - Gas ${Math.round(runtime.jupiterGasAlpha * 100)}% - Sharks ${runtime.jupiterSharkCount}`
-        : "Q/E one-use quake gas and shark tornado";
+        ? `Jupiter ${runtime.jupiterTimer.toFixed(1)}s - Gas ${Math.round(runtime.jupiterGasAlpha * 100)}% - Sharks ${runtime.jupiterSharkCount} - Steps ${runtime.jupiterFootstepCount}`
+        : "Q/E one-use step bursts, gas, and shark tornado";
+    case "uranus":
+      return runtime.uranusActive
+        ? `Uranus ${runtime.uranusTimer.toFixed(1)}s - ${runtime.uranusPhase} - Ring ${Math.round(runtime.uranusRingSpeed)}px/s`
+        : "Q/E one-use falling planet into ring-survival arena";
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
     case "holy-bazooka":
@@ -3887,7 +4157,9 @@ function weaponHelper(id: WeaponId): string {
     case "spirit-fighter":
       return "Q/E focus mode - punch/throw on beat - one miss makes Winded";
     case "jupiter":
-      return "Q/E one-use Jupiter event - floaty gas, deadly cracks, shark tornado";
+      return "Q/E one-use Jupiter event - step bursts, floaty gas, shark tornado";
+    case "uranus":
+      return "Q/E one-use Uranus event - falling flash, moving ring, Ring Chomper";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

@@ -125,9 +125,16 @@ export type SoundId =
   | "moon-end"
   | "jupiter-activate"
   | "jupiter-quake"
+  | "jupiter-footstep"
+  | "jupiter-burst"
   | "jupiter-tornado"
   | "jupiter-shark"
   | "jupiter-end"
+  | "uranus-activate"
+  | "uranus-impact"
+  | "uranus-flash"
+  | "uranus-chomp"
+  | "uranus-end"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -268,9 +275,16 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "moon-end": { category: "heavy", frequency: 220, endFrequency: 76, duration: 0.34, noise: true, minInterval: 0.4 },
   "jupiter-activate": { category: "heavy", frequency: 58, endFrequency: 920, duration: 0.72, noise: true, minInterval: 0.7 },
   "jupiter-quake": { category: "heavy", frequency: 70, endFrequency: 34, duration: 0.24, noise: true, minInterval: 0.18 },
+  "jupiter-footstep": { category: "movement", frequency: 130, endFrequency: 58, duration: 0.09, noise: true, minInterval: 0.18 },
+  "jupiter-burst": { category: "heavy", frequency: 82, endFrequency: 420, duration: 0.28, noise: true, minInterval: 0.16 },
   "jupiter-tornado": { category: "heavy", frequency: 160, endFrequency: 42, duration: 0.38, noise: true, minInterval: 0.35 },
   "jupiter-shark": { category: "combat", frequency: 520, endFrequency: 170, duration: 0.12, noise: true, minInterval: 0.1 },
   "jupiter-end": { category: "heavy", frequency: 320, endFrequency: 72, duration: 0.34, noise: true, minInterval: 0.35 },
+  "uranus-activate": { category: "heavy", frequency: 90, endFrequency: 880, duration: 0.68, noise: true, minInterval: 0.7 },
+  "uranus-impact": { category: "heavy", frequency: 54, endFrequency: 34, duration: 0.42, noise: true, minInterval: 0.45 },
+  "uranus-flash": { category: "heavy", frequency: 980, endFrequency: 180, duration: 0.34, noise: true, minInterval: 0.45 },
+  "uranus-chomp": { category: "combat", frequency: 220, endFrequency: 70, duration: 0.16, noise: true, minInterval: 0.14 },
+  "uranus-end": { category: "heavy", frequency: 360, endFrequency: 90, duration: 0.34, noise: true, minInterval: 0.35 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

@@ -26,6 +26,7 @@ export type WeaponId =
   | "cross"
   | "moon"
   | "jupiter"
+  | "uranus"
   | "hands"
   | "super-legs"
   | "teleport-ball"

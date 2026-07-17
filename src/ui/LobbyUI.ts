@@ -1081,6 +1081,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#d6f2ff";
     case "jupiter":
       return "#ff9f3d";
+    case "uranus":
+      return "#ffd86a";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":

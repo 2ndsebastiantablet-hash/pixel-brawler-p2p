@@ -5,7 +5,7 @@ export const jupiter: WeaponDefinition = {
   id: "jupiter",
   name: "Jupiter",
   kind: "utility",
-  description: "Space event item. One use. Q/E starts Jupiter: earthquake cracks the ground, orange gas creates floaty gravity, and a shark tornado releases flying homing sharks.",
+  description: "Space event item. One use. Q/E starts Jupiter: footstep pressure markers erupt upward, orange gas creates floaty gravity, and a shark tornado releases low-poly homing sharks.",
   primary: {
     damage: 0,
     cooldown: 0.5,
@@ -28,8 +28,8 @@ export const jupiter: WeaponDefinition = {
     knockback: 0,
   },
   mastery: [
-    "Q/E opens a one-use Jupiter event with quake holes, orange gas, and a shark tornado",
-    "Floaty gravity lifts everyone while ground cracks punish sloppy footing",
+    "Q/E opens a one-use Jupiter event with delayed footstep bursts, orange gas, and a shark tornado",
+    "Floaty gravity lifts everyone while unstable footsteps erupt after one second",
     "Homing sharks can be killed, but the tornado core is lethal",
   ],
 };
