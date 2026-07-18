@@ -34,6 +34,12 @@ interface PixelBrawlerDebugSnapshot {
     weaponId: string;
     hp?: number;
   };
+  render3d: {
+    enabled: boolean;
+    available: boolean;
+    actorCount: number;
+    error?: string;
+  };
 }
 
 interface Window {

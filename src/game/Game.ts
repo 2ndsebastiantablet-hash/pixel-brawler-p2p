@@ -31,6 +31,8 @@ import {
   type PlayerStatePacket,
 } from "../net/NetTypes";
 import type { PlayerProfile } from "../ui/Profile";
+import { ThreeLayer } from "./render3d/ThreeLayer";
+import { resolveRender3DConfig } from "./render3d/Render3DTypes";
 
 const WING_FLIGHT_CONFIG = {
   enabled: true,
@@ -114,6 +116,12 @@ export interface GameDebugSnapshot {
       maxHp?: number;
     }>;
   };
+  render3d: {
+    enabled: boolean;
+    available: boolean;
+    actorCount: number;
+    error?: string;
+  };
 }
 
 export class Game {
@@ -123,6 +131,7 @@ export class Game {
   private readonly input = new InputController();
   private readonly camera = new Camera();
   private readonly combat = new CombatSystem({ mode: "offline" });
+  private readonly render3d: ThreeLayer;
   private readonly remotes = new Map<string, RemotePlayer>();
   private readonly bursts: LandingBurst[] = [];
   private localPlayer = new Player("local", "local", "Player", -40, "#18dff5");
@@ -154,6 +163,10 @@ export class Game {
     this.combatHud.hidden = true;
     parent.append(this.canvas);
     parent.append(this.combatHud);
+    this.render3d = new ThreeLayer({
+      parent,
+      ...resolveRender3DConfig(),
+    });
 
     const context = this.canvas.getContext("2d");
     if (!context) {
@@ -226,6 +239,7 @@ export class Game {
         count: remotePlayers.length,
         players: remotePlayers,
       },
+      render3d: this.render3d.status,
     };
   }
 
@@ -241,6 +255,7 @@ export class Game {
 
   dispose(): void {
     this.stop();
+    this.render3d.dispose();
     this.input.dispose();
     window.removeEventListener("resize", this.resize);
   }
@@ -305,6 +320,7 @@ export class Game {
     this.lastTime = time;
     this.update(dt, time);
     this.draw();
+    this.render3d.render();
     this.animationFrame = requestAnimationFrame(this.tick);
   };
 
@@ -475,6 +491,12 @@ export class Game {
       this.canvas.width,
       this.canvas.height,
     );
+    this.render3d.update({
+      deltaSeconds: dt,
+      timeSeconds: time / 1000,
+      camera: this.camera,
+      viewport: { width: this.canvas.width, height: this.canvas.height },
+    });
     this.renderCombatHud();
 
     this.sendAccumulator += dt;
@@ -3877,6 +3899,7 @@ export class Game {
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.context.setTransform(1, 0, 0, 1, 0, 0);
+    this.render3d.resize(width, height);
     if (!this.running) {
       this.renderEmpty();
     }

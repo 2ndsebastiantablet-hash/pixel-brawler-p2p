@@ -45,6 +45,16 @@ button {
   background: #05060a;
 }
 
+.game-3d-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+}
+
 .menu-overlay,
 .pause-overlay {
   position: fixed;

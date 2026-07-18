@@ -333,6 +333,7 @@ function buildDebugSnapshot(): PixelBrawlerDebugSnapshot {
     relayFallbackPeerCount: netDebug?.relayFallbackPeerCount ?? 0,
     remotePlayers: gameDebug.remotePlayers,
     localPlayer: gameDebug.localPlayer,
+    render3d: gameDebug.render3d,
   };
 }
 
@@ -357,6 +358,7 @@ function renderDebugOverlay(): void {
     `rtc ${JSON.stringify(debug.webRtcPeerStatus)}`,
     `dc ${JSON.stringify(debug.dataChannels)} fallback ${debug.relayFallbackPeerCount}`,
     `remote players ${debug.remotePlayers.count}`,
+    `3d ${debug.render3d.enabled ? "on" : "off"} ${debug.render3d.available ? "ready" : "fallback"} actors ${debug.render3d.actorCount}`,
   ].join("\n");
 }
 

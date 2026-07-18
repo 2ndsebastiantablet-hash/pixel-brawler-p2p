@@ -15,6 +15,7 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Host-left, empty-room, and AFK cleanup are handled by the Durable Object room so stale public servers disappear and old private codes become invalid.
 - Rebuilt combat slice with 100 HP, hitstun, invulnerability flash, HEAD/BODY/LEG damage labels, stronger knockback, projectiles, directional melee hitboxes, status effects, weapon cooldowns, reloads, equipment slots, drops, throws, pickups, crosshair aiming, screen shake, hit sparks, blood flecks, and an offline training dummy.
 - Twenty-nine enabled polished weapons/items for this slice: pistol, whip, teleporting ball, lightning rod, sledgehammer, slingshot, laser blaster, revolver, minigun, sniper, knife, machete, axe, wings, virgin blood, death aura, rocket, hands, super legs, holy bazooka, grappling hook, chainsaw, spikes, van, Spirit of a Fighter, cross, The Moon, Jupiter, and Uranus.
+- Optional hybrid Three.js/WebGL render layer in `src/game/render3d/` for real low-poly 3D model support beside the current 2D canvas. It is visual-only, can be disabled or left without demo actors, and fails closed so the 2D game still loads if WebGL is unavailable.
 - Centralized combat tuning in `src/game/combat/CombatTuning.ts` for knockback, recoil, body-contact values, weapon weight, sound volume, laser heat/charge, minigun spin-up, projectile floor rules, and sniper leg-shot slow.
 - Weapon weight strongly affects movement speed, acceleration, air control, jump height, and slide speed.
 - Body-contact combat for Knife contact cuts, slide trips, stronger low-slide trips, head stomps, air-dive hits, ground-slam direct hits, and ground-slam shockwaves.
@@ -24,6 +25,12 @@ A fast 2D pixel-art platform brawler prototype with a canvas game loop, procedur
 - Cloudflare Worker + Durable Objects for room creation, public room listing, lobby WebSockets, room metadata, player lists, kick/ban controls, WebRTC signaling, and targeted state/combat relay fallback.
 
 The client creates a WebRTC data-channel mesh between all peers for gameplay packets. Until a data channel is open, or when one direct peer connection hiccups, the Worker relays compact state/combat packets only to the peers that still need fallback delivery. Gameplay simulation remains client-predicted and client-owned for now. Future rollback, prediction, and host/server authoritative validation should replace the current practical prototype sync in `src/net/WebRTCClient.ts`, `src/game/Game.ts`, and `src/game/combat/CombatSystem.ts`.
+
+## Hybrid 3D rendering foundation
+
+The game is still a 2D gameplay game. The current canvas renderer, combat, player sprites, loadout editor, maps, and multiplayer packets remain in place. A new optional Three.js layer can render real low-poly 3D objects through `src/game/render3d/ThreeLayer.ts`, with reusable model factories in `LowPolyFactory.ts`, lifecycle tracking in `ModelRegistry.ts`, and coordinate helpers in `Render3DTypes.ts`.
+
+By default the layer initializes without demo actors. Enable the small rotating cube demo with `?render3dDemo=1` or `localStorage.setItem("pixel-brawler-p2p.render3d.demo", "true")`. Disable WebGL with `?render3d=0` or `localStorage.setItem("pixel-brawler-p2p.render3d.disabled", "true")`. Details, future Jupiter/Uranus/Moon model hook notes, and rollback instructions live in `docs/3d-rendering.md`.
 
 ## Controls
 
