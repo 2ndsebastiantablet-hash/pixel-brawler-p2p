@@ -43,6 +43,7 @@ interface PixelBrawlerDebugSnapshot {
       uranusPlanets: number;
       ringChompers: number;
       moons: number;
+      marsPlanets: number;
     };
     error?: string;
   };

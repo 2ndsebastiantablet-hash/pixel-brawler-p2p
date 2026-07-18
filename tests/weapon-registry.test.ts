@@ -31,6 +31,7 @@ const enabledWeapons = [
   "moon",
   "jupiter",
   "uranus",
+  "mars",
 ] as const;
 
 describe("weapon registry", () => {
@@ -65,6 +66,7 @@ describe("weapon registry", () => {
       "moon",
       "jupiter",
       "uranus",
+      "mars",
     ]);
 
     for (const id of WEAPON_IDS) {
@@ -116,6 +118,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.moon).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>).jupiter).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>).uranus).toBeUndefined();
+    expect((inventory.ammo as Record<string, unknown>).mars).toBeUndefined();
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
@@ -152,5 +155,8 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("uranus" as never).name).toBe("Uranus");
     expect(weaponRegistry.get("uranus" as never).description).toBe("Space event item. One use. Q/E summons a falling planet flash that transforms the arena into a fast-moving Saturn-ring stage with a giant chomping hazard.");
     expect(weaponRegistry.get("uranus" as never).weight.label).toBe("Light");
+    expect(weaponRegistry.get("mars" as never).name).toBe("Mars");
+    expect(weaponRegistry.get("mars" as never).description).toBe("Space event item. One use. Q/E summons Mars, extracts green laser duplicates from every player, and releases AI clones that hunt their originals until the event ends.");
+    expect(weaponRegistry.get("mars" as never).weight.label).toBe("Light");
   });
 });

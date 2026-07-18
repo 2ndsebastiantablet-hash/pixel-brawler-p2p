@@ -10,6 +10,7 @@ import { knife } from "./weapons/Knife";
 import { laserBlaster } from "./weapons/LaserBlaster";
 import { lightningRod } from "./weapons/LightningRod";
 import { machete } from "./weapons/Machete";
+import { mars } from "./weapons/Mars";
 import { minigun } from "./weapons/Minigun";
 import { moon } from "./weapons/Moon";
 import { jupiter } from "./weapons/Jupiter";
@@ -60,6 +61,7 @@ export const WEAPON_IDS = [
   "moon",
   "jupiter",
   "uranus",
+  "mars",
 ] as const satisfies readonly WeaponId[];
 
 const ALL_WEAPON_IDS = [
@@ -92,6 +94,7 @@ const ALL_WEAPON_IDS = [
   "moon",
   "jupiter",
   "uranus",
+  "mars",
 ] as const satisfies readonly WeaponId[];
 
 const weaponDefinitions: WeaponDefinition[] = [
@@ -119,6 +122,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   moon,
   jupiter,
   uranus,
+  mars,
   hands,
   superLegs,
   teleportBall,

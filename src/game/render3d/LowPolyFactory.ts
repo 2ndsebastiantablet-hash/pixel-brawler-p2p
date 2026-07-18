@@ -34,39 +34,45 @@ export function createLowPolySharkPlaceholder(name: string, options: LowPolyMesh
   const group = new THREE.Group();
   group.name = name;
   const scale = options.scale ?? 1;
-  const bodyMaterial = createLowPolyMaterial(options.color ?? 0x6dd7ff);
-  const bellyMaterial = createLowPolyMaterial(0xd6f7ff);
-  const finMaterial = createLowPolyMaterial(0x2f7ca8);
+  const bodyMaterial = createLowPolyMaterial(options.color ?? 0x7f959c);
+  const headMaterial = createLowPolyMaterial(0x9fb4b9);
+  const finMaterial = createLowPolyMaterial(0x2f6f45);
+  const eyeMaterial = createLowPolyMaterial(0x05060a);
 
-  const body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.68 * scale, 0), bodyMaterial);
+  const body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.72 * scale, 0), bodyMaterial);
   body.name = "body";
-  body.scale.set(1.55, 0.48, 0.54);
+  body.scale.set(1.72, 0.48, 0.56);
 
-  const head = new THREE.Mesh(new THREE.ConeGeometry(0.46 * scale, 0.72 * scale, 5, 1, false), bodyMaterial);
-  head.name = "head";
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.5 * scale, 0.74 * scale, 4, 1, false), headMaterial);
+  head.name = "head-wedge";
   head.rotation.z = -Math.PI / 2;
-  head.position.x = 1.08 * scale;
+  head.position.x = 1.16 * scale;
 
-  const mouth = new THREE.Mesh(new THREE.ConeGeometry(0.18 * scale, 0.34 * scale, 3, 1, false), createLowPolyMaterial(0x05060a));
+  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.34 * scale, 0.1 * scale, 0.2 * scale), eyeMaterial);
   mouth.name = "mouth";
-  mouth.rotation.z = -Math.PI / 2;
-  mouth.scale.y = 0.44;
-  mouth.position.set(1.46 * scale, -0.02 * scale, 0);
+  mouth.position.set(1.54 * scale, -0.13 * scale, 0);
 
-  const belly = new THREE.Mesh(new THREE.DodecahedronGeometry(0.4 * scale, 0), bellyMaterial);
-  belly.name = "belly";
-  belly.scale.set(1.35, 0.18, 0.3);
-  belly.position.y = -0.28 * scale;
-
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.35 * scale, 0.76 * scale, 3, 1, false), finMaterial);
+  const tail = new THREE.Group();
   tail.name = "tail";
-  tail.rotation.z = Math.PI / 2;
-  tail.position.x = -1.14 * scale;
+  tail.position.x = -1.18 * scale;
+  const tailTop = new THREE.Mesh(new THREE.ConeGeometry(0.2 * scale, 0.62 * scale, 3, 1, false), finMaterial);
+  tailTop.name = "tail-top";
+  tailTop.rotation.set(0, 0, Math.PI * 0.55);
+  tailTop.position.set(-0.16 * scale, 0.24 * scale, 0);
+  const tailBottom = tailTop.clone();
+  tailBottom.name = "tail-bottom";
+  tailBottom.rotation.z = Math.PI * 0.45;
+  tailBottom.position.y = -0.24 * scale;
+  tail.add(tailTop, tailBottom);
 
-  const topFin = new THREE.Mesh(new THREE.ConeGeometry(0.24 * scale, 0.62 * scale, 3, 1, false), finMaterial);
-  topFin.name = "top-fin";
-  topFin.rotation.x = Math.PI;
-  topFin.position.set(-0.18 * scale, 0.58 * scale, 0);
+  const dorsalFin = new THREE.Mesh(new THREE.ConeGeometry(0.23 * scale, 0.64 * scale, 3, 1, false), finMaterial);
+  dorsalFin.name = "dorsal-fin";
+  dorsalFin.rotation.x = Math.PI;
+  dorsalFin.position.set(-0.18 * scale, 0.6 * scale, 0);
+
+  const lowerFin = new THREE.Mesh(new THREE.ConeGeometry(0.18 * scale, 0.44 * scale, 3, 1, false), finMaterial);
+  lowerFin.name = "lower-fin";
+  lowerFin.position.set(0.16 * scale, -0.48 * scale, 0);
 
   const leftFin = new THREE.Mesh(new THREE.ConeGeometry(0.22 * scale, 0.55 * scale, 3, 1, false), finMaterial);
   leftFin.name = "left-fin";
@@ -78,7 +84,14 @@ export function createLowPolySharkPlaceholder(name: string, options: LowPolyMesh
   rightFin.rotation.z = Math.PI * 0.42;
   rightFin.position.z = -0.52 * scale;
 
-  group.add(body, belly, head, mouth, tail, topFin, leftFin, rightFin);
+  const leftEye = new THREE.Mesh(new THREE.OctahedronGeometry(0.06 * scale, 0), eyeMaterial);
+  leftEye.name = "left-eye";
+  leftEye.position.set(1.4 * scale, 0.12 * scale, 0.26 * scale);
+  const rightEye = leftEye.clone();
+  rightEye.name = "right-eye";
+  rightEye.position.z = -0.26 * scale;
+
+  group.add(body, head, tail, dorsalFin, lowerFin, leftFin, rightFin, leftEye, rightEye, mouth);
   group.userData.tail = tail;
   group.userData.mouth = mouth;
   return group;
@@ -117,10 +130,65 @@ export function createSaturnPlanet(name: string, options: LowPolyMeshOptions = {
   ringsFront.name = "rings-front";
   ringsFront.rotation.copy(ringsBack.rotation);
   ringsFront.position.z = 0.16 * scale;
-  group.add(ringsBack, planet, ringsFront);
+  const arenaRingBack = new THREE.Mesh(
+    new THREE.TorusGeometry(3.34 * scale, 0.045 * scale, 4, 40),
+    createLowPolyMaterial(0x9c8752),
+  );
+  arenaRingBack.name = "arena-ring-back";
+  arenaRingBack.rotation.copy(ringsBack.rotation);
+  arenaRingBack.position.z = -0.38 * scale;
+  const arenaRingFront = new THREE.Mesh(
+    new THREE.TorusGeometry(3.58 * scale, 0.06 * scale, 4, 40),
+    createLowPolyMaterial(0xffd86a),
+  );
+  arenaRingFront.name = "arena-ring-front";
+  arenaRingFront.rotation.copy(ringsBack.rotation);
+  arenaRingFront.position.z = 0.36 * scale;
+  group.add(arenaRingBack, ringsBack, planet, ringsFront, arenaRingFront);
   group.userData.planet = planet;
   group.userData.ringsFront = ringsFront;
   group.userData.ringsBack = ringsBack;
+  group.userData.arenaRingFront = arenaRingFront;
+  group.userData.arenaRingBack = arenaRingBack;
+  return group;
+}
+
+export function createMarsPlanet(name: string, options: LowPolyMeshOptions = {}): THREE.Group {
+  const group = new THREE.Group();
+  group.name = name;
+  const scale = options.scale ?? 1;
+  const planet = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1.18 * scale, 2),
+    createLowPolyMaterial(options.color ?? 0xd94d2b),
+  );
+  planet.name = "planet";
+  const darkMaterial = createLowPolyMaterial(0x6a251d);
+  const craterA = new THREE.Mesh(new THREE.CylinderGeometry(0.2 * scale, 0.2 * scale, 0.04 * scale, 6), darkMaterial);
+  craterA.name = "crater-a";
+  craterA.position.set(-0.42 * scale, 0.28 * scale, 1.02 * scale);
+  craterA.rotation.x = Math.PI / 2;
+  const craterB = new THREE.Mesh(new THREE.CylinderGeometry(0.16 * scale, 0.16 * scale, 0.04 * scale, 6), darkMaterial);
+  craterB.name = "crater-b";
+  craterB.position.set(0.38 * scale, -0.22 * scale, 1.04 * scale);
+  craterB.rotation.x = Math.PI / 2;
+  const polarCap = new THREE.Mesh(new THREE.BoxGeometry(0.82 * scale, 0.1 * scale, 0.06 * scale), createLowPolyMaterial(0xffb36b));
+  polarCap.name = "orange-band";
+  polarCap.position.set(0.05 * scale, 0.48 * scale, 1.04 * scale);
+  const greenGlow = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1.44 * scale, 1),
+    new THREE.MeshBasicMaterial({ color: 0x7cff6b, transparent: true, opacity: 0.2, depthWrite: false }),
+  );
+  greenGlow.name = "green-glow";
+  const energyRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.58 * scale, 0.035 * scale, 4, 28),
+    new THREE.MeshBasicMaterial({ color: 0x7cff6b, transparent: true, opacity: 0.72, depthWrite: false }),
+  );
+  energyRing.name = "green-energy-ring";
+  energyRing.rotation.x = Math.PI * 0.58;
+  group.add(greenGlow, planet, craterA, craterB, polarCap, energyRing);
+  group.userData.planet = planet;
+  group.userData.greenGlow = greenGlow;
+  group.userData.energyRing = energyRing;
   return group;
 }
 

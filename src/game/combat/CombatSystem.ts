@@ -7,7 +7,9 @@ import { projectileBounds } from "./Projectile";
 import { updateStatusEffects, upsertStatusEffect, type StatusEffect, type StatusEffectId } from "./StatusEffects";
 import type { AttackProfile, WeaponChargeState, WeaponId, WeaponInventoryState, WeaponUseContext, WeaponUseResult } from "./Weapon";
 import { COMBAT_TUNING } from "./CombatTuning";
+import { getMarsAiItemStrategy, type MarsAiStrategyId } from "./MarsAiStrategies";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./WeaponRegistry";
+import type { LoadoutState } from "../loadout/Loadout";
 import type { SoundId } from "../../audio/SoundSystem";
 
 export interface Combatant {
@@ -267,6 +269,67 @@ export interface UranusEventState {
   visualOnly?: boolean;
 }
 
+export type MarsEventPhase = "rising" | "beaming" | "pulling" | "active" | "descending";
+export type MarsClonePhase = "pulling" | "hunting" | "reforming" | "disintegrating";
+
+export interface MarsBeamState {
+  id: string;
+  targetId: string;
+  x: number;
+  y: number;
+  tx: number;
+  ty: number;
+  progress: number;
+  flicker: number;
+}
+
+export interface MarsEventState {
+  id: string;
+  ownerId: string;
+  timer: number;
+  duration: number;
+  age: number;
+  phase: MarsEventPhase;
+  phaseTimer: number;
+  riseProgress: number;
+  descendProgress: number;
+  x: number;
+  y: number;
+  radius: number;
+  spin: number;
+  seed: number;
+  beams: MarsBeamState[];
+  cloneIds: string[];
+  visualOnly?: boolean;
+}
+
+export interface MarsCloneState {
+  id: string;
+  eventId: string;
+  ownerId: string;
+  targetId: string;
+  targetName: string;
+  color: string;
+  loadout: LoadoutState;
+  equippedWeapon: WeaponId;
+  strategyId: MarsAiStrategyId;
+  phase: MarsClonePhase;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  age: number;
+  pullProgress: number;
+  reformTimer: number;
+  disintegrateTimer: number;
+  attackCooldown: number;
+  releaseOffsetX: number;
+  releaseOffsetY: number;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -395,6 +458,8 @@ export interface CombatSnapshot {
   jupiterFootsteps: JupiterFootstepMarkerState[];
   jupiterSharks: JupiterSharkState[];
   uranusEvents: UranusEventState[];
+  marsEvents: MarsEventState[];
+  marsClones: MarsCloneState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -601,6 +666,17 @@ const uranusFlashDuration = 1;
 const uranusRingSpeed = 128;
 const uranusInitialLeftKillX = -340;
 const uranusChomperRadius = 112;
+const marsEventDuration = 60;
+const marsRiseDuration = 1.15;
+const marsBeamDuration = 1.05;
+const marsPullDuration = 1.15;
+const marsDescentDuration = 4.2;
+const marsRadius = 96;
+const marsCloneHp = 72;
+const marsCloneReformDuration = 6.2;
+const marsCloneMaxSpeed = 285;
+const marsCloneAcceleration = 980;
+const marsCloneJumpVelocity = -610;
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -777,6 +853,10 @@ export interface WeaponRuntimeState {
   uranusTimer: number;
   uranusPhase: UranusEventPhase | "idle";
   uranusRingSpeed: number;
+  marsActive: boolean;
+  marsTimer: number;
+  marsPhase: MarsEventPhase | "idle";
+  marsCloneCount: number;
   zombieCount: number;
   attachedHands: number;
 }
@@ -827,6 +907,9 @@ export class CombatSystem {
   private readonly jupiterGroundedLastFrame = new Map<string, boolean>();
   private readonly jupiterSharks: JupiterSharkState[] = [];
   private readonly uranusEvents: UranusEventState[] = [];
+  private readonly marsEvents: MarsEventState[] = [];
+  private readonly marsClones = new Map<string, MarsCloneState>();
+  private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
   private holyBazookaAmmoCooldown = 0;
@@ -877,6 +960,9 @@ export class CombatSystem {
     this.jupiterGroundedLastFrame.clear();
     this.jupiterSharks.length = 0;
     this.uranusEvents.length = 0;
+    this.marsEvents.length = 0;
+    this.marsClones.clear();
+    this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
     this.holyBazookaAmmoCooldown = 0;
@@ -984,8 +1070,16 @@ export class CombatSystem {
     target.statuses = upsertStatusEffect(target.statuses, createStatus(status));
   }
 
+  setPlayerLoadout(id: string, loadout: Partial<LoadoutState>): void {
+    this.playerLoadouts.set(id, { ...loadout });
+  }
+
   removeCombatant(id: string): void {
     this.releaseSpikeImpale(id);
+    if (this.marsClones.has(id)) {
+      this.removeMarsClone(id, "CLONE GONE");
+      return;
+    }
     if (this.spikeModes.has(id)) {
       this.endSpikeMode(id, false);
       this.spikeModes.delete(id);
@@ -998,10 +1092,17 @@ export class CombatSystem {
     removeWhere(this.moonEvents, (event) => event.ownerId === id);
     this.removeJupiterStateForOwner(id);
     this.removeUranusStateForOwner(id);
+    this.removeMarsStateForOwner(id);
+    this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
       if (zombie.targetId === id) {
         zombie.targetId = undefined;
+      }
+    }
+    for (const clone of this.marsClones.values()) {
+      if (clone.targetId === id) {
+        this.removeMarsClone(clone.id, "TARGET LOST");
       }
     }
     this.combatants.delete(id);
@@ -1050,6 +1151,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "uranus") {
       return this.activateUranusEvent(context);
+    }
+    if (this.inventory.equippedWeapon === "mars") {
+      return this.activateMarsEvent(context);
     }
     if (this.inventory.equippedWeapon === "super-legs") {
       return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
@@ -1112,6 +1216,9 @@ export class CombatSystem {
     }
     if (weapon.id === "uranus") {
       return { kind: "blocked", weaponId: weapon.id, label: "Uranus uses Q/E" };
+    }
+    if (weapon.id === "mars") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Mars uses Q/E" };
     }
     if (weapon.id === "super-legs") {
       return { kind: "blocked", weaponId: weapon.id, label: "Super Legs passive" };
@@ -1470,6 +1577,7 @@ export class CombatSystem {
     this.updateMoonEvents(dt, players);
     this.updateJupiterEvents(dt, players);
     this.updateUranusEvents(dt, players);
+    this.updateMarsEvents(dt);
     this.updateProjectiles(dt, players);
     this.updateCross(dt, players);
     this.updateTeleports(dt, players);
@@ -1663,6 +1771,7 @@ export class CombatSystem {
     const moon = this.getMoonEventForOwner(ownerId);
     const jupiter = this.getJupiterEventForOwner(ownerId);
     const uranus = this.getUranusEventForOwner(ownerId);
+    const mars = this.getMarsEventForOwner(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1749,6 +1858,10 @@ export class CombatSystem {
       uranusTimer: uranus?.timer ?? 0,
       uranusPhase: uranus?.phase ?? "idle",
       uranusRingSpeed: uranus?.ringSpeed ?? 0,
+      marsActive: Boolean(mars && mars.timer > 0),
+      marsTimer: mars?.timer ?? 0,
+      marsPhase: mars?.phase ?? "idle",
+      marsCloneCount: mars ? [...this.marsClones.values()].filter((clone) => clone.eventId === mars.id && clone.phase !== "disintegrating").length : 0,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -1818,6 +1931,19 @@ export class CombatSystem {
       flashAlpha: active?.flashAlpha ?? 0,
       ringSpeed: active?.ringSpeed ?? 0,
       leftKillX: active?.leftKillX ?? uranusInitialLeftKillX,
+    };
+  }
+
+  getMarsEventState(ownerId?: string): { active: boolean; timer: number; ownerId?: string; phase: MarsEventPhase | "idle"; cloneCount: number } {
+    const active = ownerId
+      ? this.getMarsEventForOwner(ownerId)
+      : [...this.marsEvents].filter((state) => state.timer > 0).sort((left, right) => right.timer - left.timer)[0];
+    return {
+      active: Boolean(active && active.timer > 0),
+      timer: active?.timer ?? 0,
+      ownerId: active?.ownerId,
+      phase: active?.phase ?? "idle",
+      cloneCount: active ? [...this.marsClones.values()].filter((clone) => clone.eventId === active.id && clone.phase !== "disintegrating").length : 0,
     };
   }
 
@@ -1985,6 +2111,59 @@ export class CombatSystem {
     this.addEffect("aura", origin.x, origin.y - 420, origin.x, DEFAULT_PHYSICS.groundY - 90, colorForWeapon("uranus"), "URANUS FALL");
     if (!visualOnly) {
       this.queueSound("uranus-activate");
+    }
+    return event;
+  }
+
+  private activateMarsEvent(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "mars";
+    const existing = this.getMarsEventForOwner(context.ownerId);
+    if (existing && existing.timer > 0) {
+      return { kind: "blocked", weaponId, label: "Mars active" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const seed = Math.floor((context.now || performanceNow()) + context.ownerId.length * 9151) % 1000000;
+    this.startMarsEvent(context.ownerId, origin, false, seed);
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", origin, { x: 0, y: -1 }, "Mars", context.now, {
+      range: seed,
+    }));
+    return { kind: "utility", weaponId, label: "Mars" };
+  }
+
+  private startMarsEvent(ownerId: string, origin: Vec2, visualOnly: boolean, seed: number): MarsEventState {
+    const existing = this.getMarsEventForOwner(ownerId);
+    if (existing && existing.timer > 0) {
+      return existing;
+    }
+    const event: MarsEventState = {
+      id: this.makeId(visualOnly ? "remote-mars" : "mars"),
+      ownerId,
+      timer: marsEventDuration,
+      duration: marsEventDuration,
+      age: 0,
+      phase: "rising",
+      phaseTimer: 0,
+      riseProgress: 0,
+      descendProgress: 0,
+      x: 0,
+      y: DEFAULT_PHYSICS.groundY - 310,
+      radius: marsRadius,
+      spin: 0,
+      seed,
+      beams: [],
+      cloneIds: [],
+      visualOnly,
+    };
+    this.marsEvents.push(event);
+    this.addEffect("aura", origin.x, origin.y, event.x, event.y, colorForWeapon("mars"), "MARS RISE");
+    this.addEffect("lightning", event.x, event.y, origin.x, origin.y, "#7cff6b", "GREEN EXTRACTION");
+    if (!visualOnly) {
+      this.queueSound("jupiter-activate");
+      this.queueSound("lightning-strike");
     }
     return event;
   }
@@ -3130,6 +3309,411 @@ export class CombatSystem {
     removeWhere(this.uranusEvents, (event) => event.ownerId === ownerId);
   }
 
+  private getMarsEventForOwner(ownerId: string): MarsEventState | undefined {
+    return [...this.marsEvents].reverse().find((event) => event.ownerId === ownerId && event.timer > 0);
+  }
+
+  private updateMarsEvents(dt: number): void {
+    if (this.marsEvents.length === 0 && this.marsClones.size === 0) {
+      return;
+    }
+    const ended: MarsEventState[] = [];
+    for (const event of this.marsEvents) {
+      event.age += dt;
+      event.timer = Math.max(0, event.timer - dt);
+      this.updateMarsPhase(event);
+      event.spin += dt * (event.phase === "active" ? 1.85 : 1.15);
+      event.beams = this.buildMarsBeams(event);
+      if (event.phase === "pulling" || event.phase === "active") {
+        this.ensureMarsClones(event);
+      }
+      if (event.phase === "descending") {
+        for (const cloneId of event.cloneIds) {
+          const clone = this.marsClones.get(cloneId);
+          if (clone && clone.phase !== "disintegrating") {
+            this.beginMarsCloneDisintegration(clone, event);
+          }
+        }
+      }
+      if (event.timer <= 0) {
+        ended.push(event);
+      }
+    }
+    this.updateMarsClones(dt);
+    for (const event of ended) {
+      this.finishMarsEvent(event);
+    }
+  }
+
+  private updateMarsPhase(event: MarsEventState): void {
+    const activeCutoff = marsRiseDuration + marsBeamDuration + marsPullDuration;
+    event.descendProgress = event.timer <= marsDescentDuration
+      ? clamp(1 - event.timer / marsDescentDuration, 0, 1)
+      : 0;
+    if (event.timer <= marsDescentDuration) {
+      event.phase = "descending";
+      event.phaseTimer = marsDescentDuration - event.timer;
+      event.riseProgress = 1;
+      return;
+    }
+    if (event.age < marsRiseDuration) {
+      event.phase = "rising";
+      event.phaseTimer = event.age;
+      event.riseProgress = clamp(event.age / marsRiseDuration, 0, 1);
+      return;
+    }
+    if (event.age < marsRiseDuration + marsBeamDuration) {
+      event.phase = "beaming";
+      event.phaseTimer = event.age - marsRiseDuration;
+      event.riseProgress = 1;
+      return;
+    }
+    if (event.age < activeCutoff) {
+      event.phase = "pulling";
+      event.phaseTimer = event.age - marsRiseDuration - marsBeamDuration;
+      event.riseProgress = 1;
+      return;
+    }
+    event.phase = "active";
+    event.phaseTimer = event.age - activeCutoff;
+    event.riseProgress = 1;
+  }
+
+  private buildMarsBeams(event: MarsEventState): MarsBeamState[] {
+    if (event.phase !== "beaming" && event.phase !== "pulling") {
+      return [];
+    }
+    const phaseDuration = event.phase === "beaming" ? marsBeamDuration : marsPullDuration;
+    const progress = event.phase === "pulling" ? 1 : clamp(event.phaseTimer / phaseDuration, 0, 1);
+    return this.getMarsCloneTargets().map((target, index) => ({
+      id: `${event.id}:beam:${target.id}`,
+      targetId: target.id,
+      x: event.x,
+      y: event.y,
+      tx: target.x + target.width / 2,
+      ty: target.y + target.height / 2,
+      progress,
+      flicker: 0.45 + 0.55 * ((Math.sin(event.age * 18 + index * 2.1 + event.seed * 0.001) + 1) / 2),
+    }));
+  }
+
+  private getMarsCloneTargets(): Combatant[] {
+    return [...this.combatants.values()].filter((combatant) => {
+      if (combatant.respawnTimer > 0 || combatant.hp <= 0) {
+        return false;
+      }
+      if (combatant.id.startsWith("zombie-") || this.isJupiterSharkCombatant(combatant.id) || this.isMarsCloneCombatant(combatant.id)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private ensureMarsClones(event: MarsEventState): void {
+    const targets = this.getMarsCloneTargets();
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      const existing = [...this.marsClones.values()].find((clone) => clone.eventId === event.id && clone.targetId === target.id);
+      if (existing) {
+        continue;
+      }
+      const loadout = { ...(this.playerLoadouts.get(target.id) ?? {}) };
+      const equippedWeapon = this.pickMarsCloneWeapon(loadout);
+      const strategy = getMarsAiItemStrategy(equippedWeapon);
+      const offsetSign = index % 2 === 0 ? -1 : 1;
+      const clone: MarsCloneState = {
+        id: this.makeId(`mars-clone-${target.id}`),
+        eventId: event.id,
+        ownerId: event.ownerId,
+        targetId: target.id,
+        targetName: target.name,
+        color: target.color,
+        loadout,
+        equippedWeapon,
+        strategyId: strategy.id,
+        phase: "pulling",
+        x: target.x,
+        y: target.y,
+        vx: 0,
+        vy: 0,
+        width: target.width,
+        height: target.height,
+        age: 0,
+        pullProgress: event.phase === "active" ? 1 : clamp(event.phaseTimer / marsPullDuration, 0, 1),
+        reformTimer: 0,
+        disintegrateTimer: 0,
+        attackCooldown: 0.62 + index * 0.08,
+        releaseOffsetX: offsetSign * (80 + Math.floor(index / 2) * 42),
+        releaseOffsetY: -18 - (index % 3) * 22,
+        visualOnly: event.visualOnly,
+      };
+      this.marsClones.set(clone.id, clone);
+      event.cloneIds.push(clone.id);
+      this.createMarsCloneCombatant(clone, event);
+      if (!event.visualOnly && index === 0) {
+        this.queueSound("lightning-pulse");
+      }
+    }
+  }
+
+  private updateMarsClones(dt: number): void {
+    for (const clone of [...this.marsClones.values()]) {
+      const event = this.marsEvents.find((candidate) => candidate.id === clone.eventId);
+      if (!event) {
+        this.removeMarsClone(clone.id, "MARS GONE");
+        continue;
+      }
+      clone.age += dt;
+      clone.attackCooldown = Math.max(0, clone.attackCooldown - dt);
+      if (clone.phase === "disintegrating") {
+        clone.disintegrateTimer += dt;
+        clone.x += Math.sin(clone.age * 18) * 18 * dt;
+        clone.y -= 54 * dt;
+        if (clone.disintegrateTimer >= 0.8) {
+          this.removeMarsClone(clone.id, "CLONE DUST");
+        }
+        continue;
+      }
+      if (clone.phase === "reforming") {
+        clone.reformTimer = Math.max(0, clone.reformTimer - dt);
+        if (clone.reformTimer === 0) {
+          this.createMarsCloneCombatant(clone, event);
+          clone.phase = "hunting";
+          clone.pullProgress = 1;
+          clone.attackCooldown = 0.48;
+          this.addEffect("aura", clone.x + clone.width / 2, clone.y + clone.height / 2, clone.x + clone.width / 2, clone.y - 54, "#7cff6b", "CLONE REFORM");
+          if (!clone.visualOnly) {
+            this.queueSound("zombie-spawn");
+          }
+        } else if (Math.floor(clone.reformTimer * 8) % 2 === 0) {
+          this.addEffect("spark", clone.x + clone.width / 2, clone.y + clone.height / 2, clone.x + clone.width / 2 + Math.sin(clone.age * 9) * 28, clone.y - 20, "#7cff6b", "REFORM");
+        }
+        continue;
+      }
+      const body = this.combatants.get(clone.id);
+      if (!body || body.hp <= 0 || body.respawnTimer > 0) {
+        this.beginMarsCloneReform(clone.id, "CLONE DOWN");
+        continue;
+      }
+      if (clone.phase === "pulling") {
+        this.updateMarsClonePull(clone, event, body, dt);
+        continue;
+      }
+      this.updateMarsCloneAi(clone, event, body, dt);
+    }
+  }
+
+  private updateMarsClonePull(clone: MarsCloneState, event: MarsEventState, body: Combatant, dt: number): void {
+    clone.pullProgress = event.phase === "active" ? 1 : clamp(event.phaseTimer / marsPullDuration, clone.pullProgress, 1);
+    const target = this.combatants.get(clone.targetId);
+    const startX = target ? target.x : clone.x;
+    const startY = target ? target.y : clone.y;
+    const endX = event.x + clone.releaseOffsetX - clone.width / 2;
+    const endY = Math.min(DEFAULT_PHYSICS.groundY - clone.height, event.y + clone.releaseOffsetY);
+    const eased = easeOutCubic(clone.pullProgress);
+    body.x = lerp(startX, endX, eased);
+    body.y = lerp(startY, endY, eased);
+    body.velocityX = 0;
+    body.velocityY = 0;
+    body.invulnerable = Math.max(body.invulnerable, 0.3);
+    clone.x = body.x;
+    clone.y = body.y;
+    if (clone.pullProgress >= 1 || event.phase === "active") {
+      clone.phase = "hunting";
+      body.y = Math.min(body.y, DEFAULT_PHYSICS.groundY - body.height);
+      body.invulnerable = 0;
+      this.addEffect("aura", body.x + body.width / 2, body.y + body.height / 2, event.x, event.y, "#7cff6b", "CLONE RELEASE");
+    }
+    if (dt > 0) {
+      this.addEffect("lightning", event.x, event.y, body.x + body.width / 2, body.y + body.height / 2, "#7cff6b", "MARS PULL");
+    }
+  }
+
+  private updateMarsCloneAi(clone: MarsCloneState, _event: MarsEventState, body: Combatant, dt: number): void {
+    const target = this.combatants.get(clone.targetId);
+    if (!target || target.respawnTimer > 0 || target.hp <= 0) {
+      body.velocityX *= Math.max(0, 1 - dt * 3);
+      clone.x = body.x;
+      clone.y = body.y;
+      return;
+    }
+    const strategy = getMarsAiItemStrategy(clone.equippedWeapon);
+    clone.strategyId = strategy.id;
+    const bodyCenter = { x: body.x + body.width / 2, y: body.y + body.height / 2 };
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    const dx = targetCenter.x - bodyCenter.x;
+    const dy = targetCenter.y - bodyCenter.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const direction = dx >= 0 ? 1 : -1;
+    const desired =
+      distance > strategy.preferredRange.max || strategy.movementStyle === "rush"
+        ? direction
+        : distance < strategy.preferredRange.min && strategy.movementStyle === "kite"
+          ? -direction
+          : strategy.movementStyle === "kite" && distance > strategy.preferredRange.min + 8
+            ? direction
+          : 0;
+    body.velocityX = clamp(body.velocityX + desired * marsCloneAcceleration * dt, -marsCloneMaxSpeed, marsCloneMaxSpeed);
+    if (strategy.movementStyle === "reposition") {
+      body.velocityX += Math.sin(clone.age * 2.4 + clone.releaseOffsetX) * 36 * dt;
+    }
+    const groundY = DEFAULT_PHYSICS.groundY - body.height;
+    if (target.y + 16 < body.y && body.y >= groundY - 2) {
+      body.velocityY = marsCloneJumpVelocity;
+    }
+    body.x += body.velocityX * dt;
+    body.y += Math.min(body.velocityY, 240) * dt;
+    body.y = Math.min(body.y, groundY);
+    clone.x = body.x;
+    clone.y = body.y;
+    clone.vx = body.velocityX;
+    clone.vy = body.velocityY;
+    if (!strategy.allowPrimary || distance > strategy.preferredRange.max + 28 || clone.attackCooldown > 0) {
+      return;
+    }
+    const aim = normalize({ x: dx, y: dy * 0.35 });
+    const damage = strategy.damage;
+    if (damage <= 0) {
+      return;
+    }
+    if (clone.visualOnly) {
+      clone.attackCooldown = strategy.attackCooldown;
+      this.addEffect(strategy.id === "gun" || strategy.id === "holy-bazooka" ? "tracer" : "spark", bodyCenter.x, bodyCenter.y, targetCenter.x, targetCenter.y, colorForWeapon(clone.equippedWeapon), "Mars Clone");
+      return;
+    }
+    const hit = this.applyDamage({
+      sourceId: clone.id,
+      targetId: target.id,
+      weaponId: clone.equippedWeapon,
+      damage,
+      knockback: {
+        x: aim.x * strategy.knockback,
+        y: strategy.verticalKnockback,
+      },
+      stun: strategy.id === "chainsaw" ? 0.08 : 0.18,
+      label: "Mars Clone",
+      status: strategy.id === "chainsaw" ? "poison" : undefined,
+      skipSourceScaling: true,
+    });
+    clone.attackCooldown = strategy.attackCooldown;
+    if (hit.applied) {
+      const color = colorForWeapon(clone.equippedWeapon);
+      this.addEffect(strategy.id === "gun" || strategy.id === "holy-bazooka" ? "tracer" : "spark", bodyCenter.x, bodyCenter.y, targetCenter.x, targetCenter.y, color, "Mars Clone");
+      if (!clone.visualOnly && strategy.id === "chainsaw") {
+        this.queueSound("chainsaw-hit");
+      } else if (!clone.visualOnly) {
+        this.queueSound(strategy.id === "gun" ? "pistol-shot" : "player-hit");
+      }
+    }
+  }
+
+  private pickMarsCloneWeapon(loadout: LoadoutState): WeaponId {
+    return loadout.leftHand
+      ?? loadout.rightHand
+      ?? loadout.attachment
+      ?? loadout.legs
+      ?? loadout.frontStrap
+      ?? loadout.backStrap
+      ?? "pistol";
+  }
+
+  private createMarsCloneCombatant(clone: MarsCloneState, event: MarsEventState): void {
+    const target = this.combatants.get(clone.targetId);
+    const groundY = DEFAULT_PHYSICS.groundY - clone.height;
+    const x = clone.pullProgress >= 1
+      ? clamp((target?.x ?? event.x) - Math.sign((target?.x ?? 0) - event.x || 1) * 120, DEFAULT_PHYSICS.platformLeft + 80, DEFAULT_PHYSICS.platformRight - 110)
+      : clone.x;
+    const y = clone.pullProgress >= 1 ? groundY : clone.y;
+    clone.x = x;
+    clone.y = y;
+    this.combatants.set(clone.id, {
+      id: clone.id,
+      name: `${clone.targetName} Clone`,
+      x,
+      y,
+      width: clone.width,
+      height: clone.height,
+      spawnX: x,
+      spawnY: groundY,
+      hp: marsCloneHp,
+      maxHp: marsCloneHp,
+      velocityX: clone.vx,
+      velocityY: clone.vy,
+      hitstun: 0,
+      invulnerable: clone.phase === "pulling" ? 0.45 : 0,
+      respawnTimer: 0,
+      color: clone.color,
+      statuses: [],
+    });
+  }
+
+  private beginMarsCloneReform(id: string, label: string): void {
+    const clone = this.marsClones.get(id);
+    if (!clone || clone.phase === "reforming" || clone.phase === "disintegrating") {
+      return;
+    }
+    const body = this.combatants.get(id);
+    clone.x = body?.x ?? clone.x;
+    clone.y = body?.y ?? clone.y;
+    clone.vx = 0;
+    clone.vy = 0;
+    clone.phase = "reforming";
+    clone.reformTimer = marsCloneReformDuration;
+    clone.attackCooldown = 0;
+    this.combatants.delete(id);
+    this.addEffect("aura", clone.x + clone.width / 2, clone.y + clone.height / 2, clone.x + clone.width / 2, clone.y - 50, "#7cff6b", label);
+    this.addEffect("spark", clone.x + clone.width / 2, clone.y + clone.height / 2, clone.x + clone.width / 2 + 32, clone.y - 24, "#7cff6b", "CLONE DUST");
+  }
+
+  private beginMarsCloneDisintegration(clone: MarsCloneState, event: MarsEventState): void {
+    const body = this.combatants.get(clone.id);
+    clone.x = body?.x ?? clone.x;
+    clone.y = body?.y ?? clone.y;
+    clone.phase = "disintegrating";
+    clone.disintegrateTimer = 0;
+    this.combatants.delete(clone.id);
+    this.addEffect("lightning", clone.x + clone.width / 2, clone.y + clone.height / 2, event.x, event.y, "#7cff6b", "MARS RELEASE");
+    this.addEffect("spark", clone.x + clone.width / 2, clone.y + clone.height / 2, event.x, event.y, "#7cff6b", "DISINTEGRATE");
+  }
+
+  private finishMarsEvent(event: MarsEventState): void {
+    removeWhere(this.marsEvents, (item) => item.id === event.id);
+    for (const cloneId of [...event.cloneIds]) {
+      this.removeMarsClone(cloneId, "MARS END");
+    }
+    this.addEffect("aura", event.x, event.y, event.x, DEFAULT_PHYSICS.groundY + 90, colorForWeapon("mars"), "MARS SET");
+    if (!event.visualOnly) {
+      this.queueSound("jupiter-end");
+    }
+  }
+
+  private removeMarsClone(id: string, label: string): void {
+    const clone = this.marsClones.get(id);
+    const body = this.combatants.get(id);
+    const x = body?.x ?? clone?.x ?? 0;
+    const y = body?.y ?? clone?.y ?? DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height;
+    this.combatants.delete(id);
+    this.marsClones.delete(id);
+    for (const event of this.marsEvents) {
+      event.cloneIds = event.cloneIds.filter((cloneId) => cloneId !== id);
+    }
+    this.addEffect("spark", x + (body?.width ?? clone?.width ?? DEFAULT_PHYSICS.width) / 2, y + 20, x + 20, y - 20, "#7cff6b", label);
+  }
+
+  private removeMarsStateForOwner(ownerId: string): void {
+    const eventIds = this.marsEvents.filter((event) => event.ownerId === ownerId).map((event) => event.id);
+    removeWhere(this.marsEvents, (event) => event.ownerId === ownerId);
+    for (const clone of [...this.marsClones.values()]) {
+      if (clone.ownerId === ownerId || clone.targetId === ownerId || eventIds.includes(clone.eventId)) {
+        this.removeMarsClone(clone.id, "MARS OWNER LEFT");
+      }
+    }
+  }
+
+  private isMarsCloneCombatant(id: string): boolean {
+    return this.marsClones.has(id);
+  }
+
   applyRemoteEvent(event: CombatEventPacket): void {
     const weapon = weaponRegistry.get(event.weaponId);
     if (event.action === "hit" && event.targetId && typeof event.damage === "number" && !this.appliedRemoteEvents.has(event.id)) {
@@ -3228,6 +3812,10 @@ export class CombatSystem {
       this.spawnRemoteUranusVisual(event);
       return;
     }
+    if (event.weaponId === "mars") {
+      this.spawnRemoteMarsVisual(event);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -3288,6 +3876,12 @@ export class CombatSystem {
   private spawnRemoteUranusVisual(event: CombatEventPacket): void {
     if (event.label === "Uranus") {
       this.startUranusEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
+    }
+  }
+
+  private spawnRemoteMarsVisual(event: CombatEventPacket): void {
+    if (event.label === "Mars") {
+      this.startMarsEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
     }
   }
 
@@ -3516,6 +4110,8 @@ export class CombatSystem {
       jupiterFootsteps: this.jupiterFootsteps,
       jupiterSharks: this.jupiterSharks,
       uranusEvents: this.uranusEvents,
+      marsEvents: this.marsEvents,
+      marsClones: [...this.marsClones.values()],
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -7271,17 +7867,47 @@ export class CombatSystem {
       this.removeZombiePermanently(target.id, "ZOMBIE DOWN");
       return;
     }
+    if (this.isMarsCloneCombatant(target.id)) {
+      this.beginMarsCloneReform(target.id, label);
+      return;
+    }
+    const respawnPoint = this.respawnPointFor(target);
     target.hp = 0;
     target.respawnTimer = respawnDelay;
     target.hitstun = 0;
     target.invulnerable = respawnDelay;
     target.velocityX = 0;
     target.velocityY = 0;
-    target.x = target.spawnX;
-    target.y = target.spawnY;
+    target.spawnX = respawnPoint.x;
+    target.spawnY = respawnPoint.y;
+    target.x = respawnPoint.x;
+    target.y = respawnPoint.y;
     target.statuses = target.statuses.filter((status) => status.id === "holyBuff" || status.id === "blessed");
-    this.addEffect("shockwave", target.spawnX + target.width / 2, target.spawnY + target.height / 2, target.spawnX + target.width / 2, target.spawnY - 72, "#72b7ff", label);
+    this.addEffect("shockwave", respawnPoint.x + target.width / 2, respawnPoint.y + target.height / 2, respawnPoint.x + target.width / 2, respawnPoint.y - 72, "#72b7ff", label);
     this.queueSound("respawn");
+  }
+
+  private respawnPointFor(target: Combatant): Vec2 {
+    const activeUranus = [...this.uranusEvents]
+      .filter((event) => event.phase === "active" && event.timer > 0)
+      .sort((left, right) => right.leftKillX - left.leftKillX)[0];
+    if (!activeUranus) {
+      return { x: target.spawnX, y: target.spawnY };
+    }
+    const futureScroll = activeUranus.ringSpeed * (respawnDelay + 0.45);
+    const safeX = clamp(
+      Math.max(
+        target.spawnX,
+        activeUranus.leftKillX + futureScroll + 320,
+        activeUranus.chomper.x + futureScroll + activeUranus.chomper.radius + 150,
+      ),
+      DEFAULT_PHYSICS.platformLeft + 80,
+      DEFAULT_PHYSICS.platformRight - target.width - 80,
+    );
+    return {
+      x: safeX,
+      y: DEFAULT_PHYSICS.groundY - target.height,
+    };
   }
 
   private removeZombiePermanently(id: string, label: string): void {
@@ -9021,6 +9647,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff9f3d";
     case "uranus":
       return "#ffd86a";
+    case "mars":
+      return "#ff7045";
     case "hands":
       return "#b8ffd0";
     case "super-legs":

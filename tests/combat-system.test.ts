@@ -45,7 +45,8 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(29);
+    expect(fighter.weaponInventory).toHaveLength(30);
+    expect(fighter.weaponInventory).toContain("mars");
   });
 
   it("fires pistol shots as tap-fire projectiles with ammo and dry-fire feedback", () => {
@@ -1541,6 +1542,51 @@ describe("combat system", () => {
     combat.update(0.16, [local]);
     expect(combat.getCombatant("peer-b")?.hp).toBe(100);
     expect(combat.consumeEvents().some((event) => event.action === "hit")).toBe(false);
+  });
+
+  it("replays remote Mars events with visual-only clones that do not apply local damage", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const local = { ...playerState, id: "peer-b", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(local, "Guest", "#ff6f91");
+    combat.setPlayerLoadout("peer-b", { leftHand: "chainsaw" });
+
+    combat.applyRemoteEvent({
+      t: "c",
+      id: "remote-mars-event",
+      ownerId: "peer-a",
+      weaponId: "mars" as never,
+      action: "primary",
+      x: 0,
+      y: local.y,
+      ax: 0,
+      ay: -1,
+      label: "Mars",
+      ts: 100,
+      range: 1234,
+    });
+
+    combat.update(3.7, [local]);
+    const snapshot = combat.getSnapshot() as unknown as {
+      marsEvents: Array<{ visualOnly?: boolean }>;
+      marsClones: Array<{ id: string; targetId: string; visualOnly?: boolean; phase: string }>;
+    };
+    expect(snapshot.marsEvents[0]).toMatchObject({ visualOnly: true });
+    const clone = snapshot.marsClones.find((item) => item.targetId === "peer-b")!;
+    expect(clone).toMatchObject({ visualOnly: true, phase: "hunting" });
+
+    const cloneBody = combat.getCombatant(clone.id)!;
+    cloneBody.x = local.x + 20;
+    cloneBody.y = local.y;
+    cloneBody.invulnerable = 0;
+    const target = combat.getCombatant("peer-b")!;
+    target.invulnerable = 0;
+    const hpBefore = target.hp;
+
+    combat.update(0.25, [local]);
+
+    expect(combat.getCombatant("peer-b")?.hp).toBe(hpBefore);
+    expect(combat.consumeEvents().some((event) => event.action === "hit" && event.weaponId === "chainsaw")).toBe(false);
   });
 
   it("uses Super Legs kicks as leg equipment attacks with cooldown", () => {
@@ -3156,7 +3202,140 @@ describe("combat system", () => {
     expect(combat.getUranusEventState("uranus-owner")).toMatchObject({ active: false, timer: 0 });
   });
 
-  it("lets Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {
+  it("respawns Uranus victims safely ahead of the Ring Chomper while the arena is scrolling", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("uranus" as never);
+    const player = { ...playerState, id: "uranus-respawn-owner", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Uranus", "#ffd86a");
+
+    combat.usePrimary({ ownerId: "uranus-respawn-owner", player, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    combat.update(2.6, [player]);
+    let event = (combat.getSnapshot() as unknown as {
+      uranusEvents: Array<{ leftKillX: number; chomper: { x: number; y: number; radius: number } }>;
+    }).uranusEvents[0];
+
+    combat.syncRemotePlayer({
+      id: "uranus-respawn-victim",
+      name: "Victim",
+      color: "#ff6f91",
+      x: event.chomper.x - DEFAULT_PHYSICS.width / 2,
+      y: event.chomper.y - DEFAULT_PHYSICS.height / 2,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.update(0.1, [player]);
+    expect(combat.getCombatant("uranus-respawn-victim")!.respawnTimer).toBeGreaterThan(0);
+
+    combat.update(2.1, [player]);
+    event = (combat.getSnapshot() as unknown as {
+      uranusEvents: Array<{ leftKillX: number; chomper: { x: number; y: number; radius: number } }>;
+    }).uranusEvents[0];
+    const respawned = combat.getCombatant("uranus-respawn-victim")!;
+    expect(respawned.respawnTimer).toBe(0);
+    expect(respawned.hp).toBe(respawned.maxHp);
+    expect(respawned.invulnerable).toBeGreaterThan(0);
+    expect(respawned.x).toBeGreaterThan(event.leftKillX + 220);
+    expect(respawned.x).toBeGreaterThan(event.chomper.x + event.chomper.radius + 120);
+  });
+
+  it("activates Mars as a one-use Space event that extracts, releases, reforms, and cleans up AI clones", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("mars" as never);
+    const owner = { ...playerState, id: "mars-user", x: -160, velocityX: 0, velocityY: 0 };
+    const target = { ...playerState, id: "mars-target", x: 260, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Mars", "#ff7045");
+    combat.syncRemotePlayer({
+      id: "mars-target",
+      name: "Target",
+      color: "#ff6f91",
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.setPlayerLoadout("mars-user", { frontStrap: "mars" as never, leftHand: "chainsaw" });
+    combat.setPlayerLoadout("mars-target", { leftHand: "pistol", backStrap: "jupiter" as never });
+
+    const started = combat.usePrimary({ ownerId: "mars-user", player: owner, aim: { x: 0, y: -1 }, now: 100, heldMs: 0, isNewPress: true });
+    expect(started).toMatchObject({ kind: "utility", weaponId: "mars", label: "Mars" });
+    expect(combat.getMarsEventState("mars-user")).toMatchObject({
+      active: true,
+      phase: "rising",
+      timer: expect.closeTo(60, 1),
+    });
+
+    let snapshot = combat.getSnapshot() as unknown as {
+      marsEvents: Array<{ phase: string; beams: Array<{ targetId: string; progress: number }> }>;
+      marsClones: Array<{
+        id: string;
+        targetId: string;
+        color: string;
+        phase: string;
+        loadout: { leftHand?: string; backStrap?: string };
+        strategyId: string;
+      }>;
+    };
+    expect(snapshot.marsEvents).toHaveLength(1);
+    expect(snapshot.marsClones).toHaveLength(0);
+
+    combat.update(1.35, [owner, target]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.marsEvents[0].phase).toBe("beaming");
+    expect(snapshot.marsEvents[0].beams.map((beam) => beam.targetId)).toEqual(expect.arrayContaining(["mars-user", "mars-target"]));
+
+    combat.update(2.2, [owner, target]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.marsEvents[0].phase).toBe("active");
+    expect(snapshot.marsClones).toHaveLength(2);
+    const targetClone = snapshot.marsClones.find((clone) => clone.targetId === "mars-target")!;
+    expect(targetClone).toMatchObject({
+      color: "#ff6f91",
+      phase: "hunting",
+      loadout: { leftHand: "pistol", backStrap: "jupiter" },
+      strategyId: "gun",
+    });
+    expect(combat.getCombatant(targetClone.id)).toBeDefined();
+
+    const targetBody = combat.getCombatant("mars-target")!;
+    const beforeDistance = Math.abs(combat.getCombatant(targetClone.id)!.x - targetBody.x);
+    combat.update(0.6, [owner, target]);
+    const afterDistance = Math.abs(combat.getCombatant(targetClone.id)!.x - targetBody.x);
+    expect(afterDistance).toBeLessThan(beforeDistance);
+
+    combat.applyDamage({
+      sourceId: "mars-target",
+      targetId: targetClone.id,
+      weaponId: "pistol",
+      damage: 999,
+      knockback: { x: 0, y: -100 },
+      stun: 0.1,
+      label: "Clone Hit",
+      skipHitLocationScaling: true,
+      skipSourceScaling: true,
+    });
+    combat.update(0.1, [owner, target]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.marsClones.find((clone) => clone.id === targetClone.id)?.phase).toBe("reforming");
+    expect(combat.getCombatant(targetClone.id)).toBeUndefined();
+
+    combat.update(6.2, [owner, target]);
+    expect(combat.getCombatant(targetClone.id)).toBeDefined();
+    expect(((combat.getSnapshot() as unknown as typeof snapshot).marsClones.find((clone) => clone.id === targetClone.id)?.phase)).toBe("hunting");
+
+    combat.update(60.5, [owner, target]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.marsEvents).toHaveLength(0);
+    expect(snapshot.marsClones).toHaveLength(0);
+    expect(combat.getCombatant(targetClone.id)).toBeUndefined();
+  });
+
+  it("lets Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     const player = { ...playerState, id: "space-stack-user", x: 0, velocityX: 0, velocityY: 0 };
@@ -3168,21 +3347,26 @@ describe("combat system", () => {
     combat.usePrimary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 120, heldMs: 0, isNewPress: true });
     combat.equip("uranus" as never);
     combat.usePrimary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 130, heldMs: 0, isNewPress: true });
+    combat.equip("mars" as never);
+    combat.usePrimary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 135, heldMs: 0, isNewPress: true });
     combat.equip("cross" as never);
     combat.useSecondary({ ownerId: "space-stack-user", player, aim: { x: 0, y: -1 }, now: 140, heldMs: 0, isNewPress: true });
 
     expect(combat.getMoonEventState("space-stack-user")).toMatchObject({ active: true });
     expect((combat.getSnapshot() as unknown as { jupiterEvents: unknown[] }).jupiterEvents).toHaveLength(1);
     expect((combat.getSnapshot() as unknown as { uranusEvents: unknown[] }).uranusEvents).toHaveLength(1);
+    expect((combat.getSnapshot() as unknown as { marsEvents: unknown[] }).marsEvents).toHaveLength(1);
     expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "countdown" });
 
     combat.update(60.2, [player]);
 
-    const snapshot = combat.getSnapshot() as unknown as { jupiterEvents: unknown[]; jupiterFootsteps: unknown[]; jupiterSharks: unknown[]; uranusEvents: unknown[] };
+    const snapshot = combat.getSnapshot() as unknown as { jupiterEvents: unknown[]; jupiterFootsteps: unknown[]; jupiterSharks: unknown[]; uranusEvents: unknown[]; marsEvents: unknown[]; marsClones: unknown[] };
     expect(snapshot.jupiterEvents).toHaveLength(0);
     expect(snapshot.jupiterFootsteps).toHaveLength(0);
     expect(snapshot.jupiterSharks).toHaveLength(0);
     expect(snapshot.uranusEvents).toHaveLength(0);
+    expect(snapshot.marsEvents).toHaveLength(0);
+    expect(snapshot.marsClones).toHaveLength(0);
     expect(combat.getMoonEventState("space-stack-user")).toMatchObject({ active: false });
     expect(combat.getJudgmentDayState()).toMatchObject({ active: true, phase: "active" });
     expect(combat.getSnapshot().judgmentBeams.length).toBeGreaterThan(0);

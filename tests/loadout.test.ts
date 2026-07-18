@@ -87,6 +87,14 @@ describe("loadout equipment slots", () => {
     })).toEqual({
       backStrap: "uranus",
     });
+    expect(normalizeLoadout({
+      frontStrap: "mars" as never,
+      rightHand: "mars" as never,
+      attachment: "mars" as never,
+      legs: "mars" as never,
+    })).toEqual({
+      frontStrap: "mars",
+    });
   });
 
   it("enforces slot compatibility, two-handed hand occupancy, and the leg slot", () => {
@@ -166,6 +174,12 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("uranus" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("uranus" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("uranus" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("mars" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("mars" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("mars" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("mars" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("mars" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("mars" as never, "legs")).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -219,6 +233,14 @@ describe("loadout equipment slots", () => {
     expect(withUranus.backStrap).toBe("uranus");
     expect(loadoutHasWeapon(withUranus, "uranus" as never)).toBe(true);
     expect(LOADOUT_ITEMS.find((item) => item.id === ("uranus" as never))).toMatchObject({
+      category: "space",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
+    });
+    const withMars = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "mars" as never);
+    expect(withMars.frontStrap).toBe("mars");
+    expect(loadoutHasWeapon(withMars, "mars" as never)).toBe(true);
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("mars" as never))).toMatchObject({
       category: "space",
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],

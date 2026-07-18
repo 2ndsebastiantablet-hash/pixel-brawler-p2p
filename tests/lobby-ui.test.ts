@@ -97,6 +97,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-item="moon"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="jupiter"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="uranus"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="mars"]')).toBeInstanceOf(HTMLButtonElement);
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();
     expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Wings");
@@ -240,6 +241,40 @@ describe("lobby loadout menu", () => {
       loadout: expect.objectContaining({
         frontStrap: "uranus",
         backStrap: "uranus",
+      }),
+    }));
+  });
+
+  it("equips Mars only on front or back strap slots", () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const startOffline = vi.fn();
+    const ui = new LobbyUI(root, createProfile(), createActions({ startOffline }));
+
+    ui.showSetup();
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="frontStrap"]'), "mars");
+    expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Mars");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "mars");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Mars");
+    expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="attachment"]'), "mars");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Mars");
+    expect(root.querySelector('[data-loadout-drop-slot="attachment"]')?.textContent).toContain("F");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="legs"]'), "mars");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Mars");
+    expect(root.querySelector('[data-loadout-drop-slot="legs"]')?.textContent).toContain("Legs");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="backStrap"]'), "mars");
+    root.querySelector<HTMLButtonElement>("[data-offline]")?.click();
+
+    expect(startOffline).toHaveBeenCalledWith(expect.objectContaining({
+      loadout: expect.objectContaining({
+        frontStrap: "mars",
+        backStrap: "mars",
       }),
     }));
   });

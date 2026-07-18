@@ -43,6 +43,7 @@ export interface Render3DUranusVisual {
   id: string;
   age: number;
   phase: "falling" | "flash" | "active";
+  fallProgress: number;
   ringScroll: number;
   flashAlpha: number;
   chomper: {
@@ -63,10 +64,21 @@ export interface Render3DMoonVisual {
   moonRadius: number;
 }
 
+export interface Render3DMarsVisual {
+  id: string;
+  age: number;
+  phase: "rising" | "beaming" | "pulling" | "active" | "descending";
+  riseProgress: number;
+  descendProgress: number;
+  radius: number;
+  spin: number;
+}
+
 export interface Render3DEventVisuals {
   jupiterSharks: Render3DJupiterSharkVisual[];
   uranusEvents: Render3DUranusVisual[];
   moonEvents: Render3DMoonVisual[];
+  marsEvents: Render3DMarsVisual[];
 }
 
 export interface Render3DConfig {

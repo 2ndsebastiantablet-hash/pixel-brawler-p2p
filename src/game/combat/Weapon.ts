@@ -27,6 +27,7 @@ export type WeaponId =
   | "moon"
   | "jupiter"
   | "uranus"
+  | "mars"
   | "hands"
   | "super-legs"
   | "teleport-ball"

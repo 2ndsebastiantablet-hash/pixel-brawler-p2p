@@ -3,12 +3,13 @@ import {
   createLowPolyCube,
   createLowPolyPlanetPlaceholder,
   createLowPolySharkPlaceholder,
+  createMarsPlanet,
   createMoonSphere,
   createRingChomper,
   createSaturnPlanet,
 } from "./LowPolyFactory";
 import { ModelRegistry, type ModelActor, createModelActor } from "./ModelRegistry";
-import type { Render3DCamera2D, Render3DConfig, Render3DEventVisuals, Render3DFrame, Render3DJupiterSharkVisual, Render3DMoonVisual, Render3DUranusVisual, Render3DViewport } from "./Render3DTypes";
+import type { Render3DCamera2D, Render3DConfig, Render3DEventVisuals, Render3DFrame, Render3DJupiterSharkVisual, Render3DMarsVisual, Render3DMoonVisual, Render3DUranusVisual, Render3DViewport } from "./Render3DTypes";
 import { DEFAULT_RENDER3D_DEPTH, DEFAULT_RENDER3D_PIXELS_PER_UNIT, worldToThreePosition } from "./Render3DTypes";
 
 export interface Render3DRendererAdapter {
@@ -38,6 +39,7 @@ export interface Render3DModelCounts {
   uranusPlanets: number;
   ringChompers: number;
   moons: number;
+  marsPlanets: number;
 }
 
 export class ThreeLayer {
@@ -217,6 +219,11 @@ export class ThreeLayer {
       object: createMoonSphere(id, { scale: 1 }),
       position,
     }));
+    this.registry.register("mars-planet", ({ id, position }) => createModelActor({
+      id,
+      object: createMarsPlanet(id, { scale: 1 }),
+      position,
+    }));
   }
 
   private addDemoActor(scene: THREE.Scene): void {
@@ -247,6 +254,7 @@ export class ThreeLayer {
     this.syncJupiterSharks(events.jupiterSharks, frame);
     this.syncUranusEvents(events.uranusEvents, frame);
     this.syncMoonEvents(events.moonEvents, frame);
+    this.syncMarsEvents(events.marsEvents, frame);
   }
 
   private syncJupiterSharks(sharks: Render3DJupiterSharkVisual[], frame: Render3DFrame): void {
@@ -279,42 +287,90 @@ export class ThreeLayer {
   }
 
   private syncUranusEvents(events: Render3DUranusVisual[], frame: Render3DFrame): void {
+    const liveIntroPlanets = new Set<string>();
     const livePlanets = new Set<string>();
     const liveChompers = new Set<string>();
     for (const event of events) {
+      if (event.phase !== "active") {
+        const introId = `uranus-intro:${event.id}`;
+        liveIntroPlanets.add(introId);
+        const intro = this.ensureActor("saturn-planet", introId);
+        const progress = easeOutCubic(event.fallProgress);
+        const startAnchor = {
+          x: frame.camera.x + frame.viewport.width * 0.12,
+          y: frame.camera.y + Math.max(58, frame.viewport.height * 0.12),
+        };
+        const centerAnchor = {
+          x: frame.camera.x + frame.viewport.width * 0.5,
+          y: frame.camera.y + Math.max(120, frame.viewport.height * 0.42),
+        };
+        const anchor = {
+          x: lerp(startAnchor.x, centerAnchor.x, progress),
+          y: lerp(startAnchor.y, centerAnchor.y, progress),
+        };
+        const position = worldToThreePosition(anchor, frame.camera, frame.viewport, {
+          pixelsPerUnit: this.pixelsPerUnit,
+          depth: -8.8,
+        });
+        intro.object.position.set(position.x, position.y, position.z);
+        intro.object.scale.setScalar(lerp(0.5, 2.35, progress) + event.flashAlpha * 0.28);
+        intro.object.rotation.y = event.age * 0.7;
+        intro.object.rotation.z = -0.18 + event.age * 0.18;
+        setObjectOpacity(intro.object, event.phase === "flash" ? 0.78 : 0.62);
+        const ringsFront = intro.object.userData.ringsFront as THREE.Object3D | undefined;
+        const ringsBack = intro.object.userData.ringsBack as THREE.Object3D | undefined;
+        const arenaRingFront = intro.object.userData.arenaRingFront as THREE.Object3D | undefined;
+        const arenaRingBack = intro.object.userData.arenaRingBack as THREE.Object3D | undefined;
+        for (const ring of [ringsFront, ringsBack, arenaRingFront, arenaRingBack]) {
+          if (ring) {
+            ring.rotation.z = -0.18 + event.age * 0.36;
+            setObjectOpacity(ring, event.phase === "flash" ? 0.88 : 0.74);
+          }
+        }
+        continue;
+      }
       if (event.phase === "active") {
         const planetId = `uranus-planet:${event.id}`;
         livePlanets.add(planetId);
         const planet = this.ensureActor("saturn-planet", planetId);
-        setObjectOpacity(planet.object, 0.46);
+        setObjectOpacity(planet.object, 0.42);
         const anchor = {
-          x: frame.camera.x + frame.viewport.width * 0.78,
-          y: frame.camera.y + Math.max(96, frame.viewport.height * 0.22),
+          x: frame.camera.x + frame.viewport.width * 0.5,
+          y: frame.camera.y + Math.max(112, frame.viewport.height * 0.38),
         };
         const position = worldToThreePosition(anchor, frame.camera, frame.viewport, {
           pixelsPerUnit: this.pixelsPerUnit,
           depth: -11,
         });
         planet.object.position.set(position.x, position.y, position.z);
-        planet.object.scale.setScalar(Math.max(2.9, Math.min(4.15, frame.viewport.width / 340)));
-        planet.object.rotation.y = event.age * 0.22;
+        planet.object.scale.setScalar(Math.max(2.25, Math.min(3.35, frame.viewport.width / 430)));
+        planet.object.rotation.y = event.age * 0.28;
         planet.object.rotation.z = -0.16 + Math.sin(event.age * 0.3) * 0.04;
         const ringsFront = planet.object.userData.ringsFront as THREE.Object3D | undefined;
         const ringsBack = planet.object.userData.ringsBack as THREE.Object3D | undefined;
-        if (ringsFront && ringsBack) {
-          ringsFront.rotation.z = -0.18 + event.ringScroll * 0.002;
-          ringsBack.rotation.z = -0.18 + event.ringScroll * 0.002;
+        const arenaRingFront = planet.object.userData.arenaRingFront as THREE.Object3D | undefined;
+        const arenaRingBack = planet.object.userData.arenaRingBack as THREE.Object3D | undefined;
+        for (const ring of [ringsFront, ringsBack, arenaRingFront, arenaRingBack]) {
+          if (ring) {
+            ring.rotation.z = -0.18 + event.ringScroll * 0.002;
+            setObjectOpacity(ring, ring === arenaRingFront || ring === arenaRingBack ? 0.84 : 0.72);
+          }
         }
 
         const chomperId = `uranus-chomper:${event.id}`;
         liveChompers.add(chomperId);
         const chomper = this.ensureActor("ring-chomper", chomperId);
-        const chomperPosition = worldToThreePosition(event.chomper, frame.camera, frame.viewport, {
+        const chomperScreenX = Math.min(Math.max(event.chomper.x - frame.camera.x, 82), Math.max(104, frame.viewport.width * 0.16));
+        const chomperAnchor = {
+          x: frame.camera.x + chomperScreenX,
+          y: event.chomper.y,
+        };
+        const chomperPosition = worldToThreePosition(chomperAnchor, frame.camera, frame.viewport, {
           pixelsPerUnit: this.pixelsPerUnit,
           depth: -2.9,
         });
         chomper.object.position.set(chomperPosition.x, chomperPosition.y, chomperPosition.z);
-        chomper.object.scale.setScalar(Math.max(1.15, event.chomper.radius / 76));
+        chomper.object.scale.setScalar(Math.max(0.95, Math.min(1.48, event.chomper.radius / 86)));
         chomper.object.rotation.y = Math.sin(event.age * 1.7) * 0.18;
         chomper.object.rotation.z = Math.sin(event.age * 2.2) * 0.08;
         const upperJaw = chomper.object.userData.upperJaw as THREE.Object3D | undefined;
@@ -326,6 +382,7 @@ export class ThreeLayer {
         }
       }
     }
+    this.removeStaleActors("uranus-intro:", liveIntroPlanets);
     this.removeStaleActors("uranus-planet:", livePlanets);
     this.removeStaleActors("uranus-chomper:", liveChompers);
   }
@@ -356,6 +413,49 @@ export class ThreeLayer {
     this.removeStaleActors("moon:", liveIds);
   }
 
+  private syncMarsEvents(events: Render3DMarsVisual[], frame: Render3DFrame): void {
+    const liveIds = new Set<string>();
+    for (const event of events) {
+      const actorId = `mars-planet:${event.id}`;
+      liveIds.add(actorId);
+      const actor = this.ensureActor("mars-planet", actorId);
+      const rise = easeOutCubic(event.riseProgress);
+      const descend = easeInCubic(event.descendProgress);
+      const hiddenY = frame.camera.y + frame.viewport.height + event.radius + 90;
+      const centerY = frame.camera.y + Math.max(118, frame.viewport.height * 0.38);
+      const y = event.phase === "descending"
+        ? lerp(centerY, hiddenY, descend)
+        : lerp(hiddenY, centerY, rise);
+      const anchor = {
+        x: frame.camera.x + frame.viewport.width * 0.5,
+        y,
+      };
+      const position = worldToThreePosition(anchor, frame.camera, frame.viewport, {
+        pixelsPerUnit: this.pixelsPerUnit,
+        depth: -8.4,
+      });
+      const beamPhase = event.phase === "beaming" || event.phase === "pulling";
+      const pulse = 0.5 + Math.sin(frame.timeSeconds * 7.4 + event.age * 1.3) * 0.5;
+      actor.object.position.set(position.x, position.y, position.z);
+      actor.object.scale.setScalar(Math.max(1.2, event.radius / 64) * (0.9 + rise * 0.12));
+      actor.object.rotation.y = event.spin + event.age * 0.2;
+      actor.object.rotation.x = Math.sin(event.age * 0.45) * 0.08;
+      actor.object.rotation.z = Math.sin(event.age * 0.32) * 0.06;
+      setObjectOpacity(actor.object, event.phase === "descending" ? 0.48 : 0.7);
+      const greenGlow = actor.object.userData.greenGlow as THREE.Object3D | undefined;
+      const energyRing = actor.object.userData.energyRing as THREE.Object3D | undefined;
+      if (greenGlow) {
+        greenGlow.scale.setScalar(1 + pulse * (beamPhase ? 0.16 : 0.08));
+        setObjectOpacity(greenGlow, beamPhase ? 0.3 + pulse * 0.22 : 0.16 + pulse * 0.1);
+      }
+      if (energyRing) {
+        energyRing.rotation.z = event.spin * 0.65 + frame.timeSeconds * (beamPhase ? 1.4 : 0.45);
+        setObjectOpacity(energyRing, beamPhase ? 0.72 + pulse * 0.18 : 0.46 + pulse * 0.12);
+      }
+    }
+    this.removeStaleActors("mars-planet:", liveIds);
+  }
+
   private ensureActor(kind: string, id: string): ModelActor {
     const existing = this.registry.get(id);
     if (existing) {
@@ -382,6 +482,7 @@ export class ThreeLayer {
       uranusPlanets: this.registry.idsWithPrefix("uranus-planet:").length,
       ringChompers: this.registry.idsWithPrefix("uranus-chomper:").length,
       moons: this.registry.idsWithPrefix("moon:").length,
+      marsPlanets: this.registry.idsWithPrefix("mars-planet:").length,
     };
   }
 }
@@ -406,6 +507,7 @@ function emptyModelCounts(): Render3DModelCounts {
     uranusPlanets: 0,
     ringChompers: 0,
     moons: 0,
+    marsPlanets: 0,
   };
 }
 
