@@ -69,6 +69,26 @@ export class ModelRegistry {
     return this.actors.get(id);
   }
 
+  has(id: string): boolean {
+    return this.actors.has(id);
+  }
+
+  idsWithPrefix(prefix: string): string[] {
+    return [...this.actors.keys()].filter((id) => id.startsWith(prefix));
+  }
+
+  remove(id: string, scene?: THREE.Scene): boolean {
+    const actor = this.actors.get(id);
+    if (!actor) {
+      return false;
+    }
+    scene?.remove(actor.object);
+    actor.dispose?.(actor);
+    disposeObjectTree(actor.object);
+    this.actors.delete(id);
+    return true;
+  }
+
   updateAll(frame: Render3DFrame): void {
     for (const actor of this.actors.values()) {
       actor.update?.(actor, frame);

@@ -24,6 +24,49 @@ export interface Render3DFrame {
   timeSeconds: number;
   camera: Render3DCamera2D;
   viewport: Render3DViewport;
+  events?: Render3DEventVisuals;
+}
+
+export interface Render3DJupiterSharkVisual {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  age: number;
+  biteCooldown: number;
+}
+
+export interface Render3DUranusVisual {
+  id: string;
+  age: number;
+  phase: "falling" | "flash" | "active";
+  ringScroll: number;
+  flashAlpha: number;
+  chomper: {
+    x: number;
+    y: number;
+    radius: number;
+    mouthOpen: number;
+    mouthAngle: number;
+  };
+}
+
+export interface Render3DMoonVisual {
+  id: string;
+  age: number;
+  moonVisualPhase: "rising" | "holding" | "descending";
+  moonRiseProgress: number;
+  moonDescendProgress: number;
+  moonRadius: number;
+}
+
+export interface Render3DEventVisuals {
+  jupiterSharks: Render3DJupiterSharkVisual[];
+  uranusEvents: Render3DUranusVisual[];
+  moonEvents: Render3DMoonVisual[];
 }
 
 export interface Render3DConfig {

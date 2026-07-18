@@ -1,6 +1,13 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
-import { createLowPolyCube, createLowPolyPlanetPlaceholder, createLowPolySharkPlaceholder } from "../src/game/render3d/LowPolyFactory";
+import {
+  createLowPolyCube,
+  createLowPolyPlanetPlaceholder,
+  createLowPolySharkPlaceholder,
+  createMoonSphere,
+  createRingChomper,
+  createSaturnPlanet,
+} from "../src/game/render3d/LowPolyFactory";
 import { ModelRegistry, createModelActor } from "../src/game/render3d/ModelRegistry";
 import { ThreeLayer, type Render3DRendererAdapter } from "../src/game/render3d/ThreeLayer";
 import { resolveRender3DConfig, worldToThreePosition } from "../src/game/render3d/Render3DTypes";
@@ -85,6 +92,28 @@ describe("hybrid 3D rendering foundation", () => {
     expect(shark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head", "tail", "top-fin"]));
   });
 
+  it("creates real event model groups for sharks, Saturn, Ring Chomper, and Moon", () => {
+    const shark = createLowPolySharkPlaceholder("shark-model");
+    const saturn = createSaturnPlanet("uranus-saturn");
+    const chomper = createRingChomper("ring-chomper", { mouthOpen: 0.7 });
+    const moon = createMoonSphere("moon-model");
+
+    expect(shark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head", "tail", "top-fin", "mouth"]));
+    expect(saturn.children.map((child) => child.name)).toEqual(expect.arrayContaining(["planet", "rings-front", "rings-back"]));
+    expect(chomper.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "upper-jaw", "lower-jaw", "left-eye", "right-eye"]));
+    expect(moon.children.map((child) => child.name)).toEqual(expect.arrayContaining(["sphere", "crater-a", "crater-b", "glow"]));
+
+    for (const group of [shark, saturn, chomper, moon]) {
+      expect(group).toBeInstanceOf(THREE.Group);
+      expect(group.children.length).toBeGreaterThanOrEqual(4);
+      for (const child of group.children) {
+        if (child instanceof THREE.Mesh) {
+          expect((child.material as THREE.MeshStandardMaterial).flatShading ?? true).toBe(true);
+        }
+      }
+    }
+  });
+
   it("fails closed when WebGL initialization throws and keeps update/dispose safe", () => {
     const parent = document.createElement("main");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -140,6 +169,124 @@ describe("hybrid 3D rendering foundation", () => {
     layer.dispose();
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(parent.querySelector(".game-3d-layer")).toBeNull();
+  });
+
+  it("syncs real 3D event actors from existing 2D event snapshots and cleans stale actors", () => {
+    const parent = document.createElement("main");
+    const renderer: Render3DRendererAdapter = {
+      domElement: document.createElement("canvas"),
+      setSize: vi.fn(),
+      render: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const layer = new ThreeLayer({
+      parent,
+      enabled: true,
+      demoEnabled: false,
+      rendererFactory: () => renderer,
+    });
+    const frame = {
+      deltaSeconds: 0.25,
+      timeSeconds: 2,
+      camera: { x: 80, y: 20 },
+      viewport: { width: 1280, height: 720 },
+    };
+
+    layer.update({
+      ...frame,
+      events: {
+        jupiterSharks: [
+          { id: "shark-a", x: 700, y: 260, width: 72, height: 46, vx: 220, vy: -80, age: 1.2, biteCooldown: 0 },
+        ],
+        uranusEvents: [
+          {
+            id: "uranus-a",
+            age: 4,
+            phase: "active",
+            ringScroll: 120,
+            flashAlpha: 0,
+            chomper: { x: 230, y: 304, radius: 112, mouthOpen: 0.8, mouthAngle: 0.7 },
+          },
+        ],
+        moonEvents: [
+          {
+            id: "moon-a",
+            age: 2,
+            moonVisualPhase: "holding",
+            moonRiseProgress: 1,
+            moonDescendProgress: 0,
+            moonRadius: 74,
+          },
+        ],
+      },
+    });
+
+    expect(layer.status).toMatchObject({
+      available: true,
+      actorCount: 4,
+      modelCounts: {
+        jupiterSharks: 1,
+        uranusPlanets: 1,
+        ringChompers: 1,
+        moons: 1,
+      },
+    });
+    expect(layer.getActorObject("jupiter-shark:shark-a")).toBeInstanceOf(THREE.Group);
+    expect(layer.getActorObject("uranus-planet:uranus-a")).toBeInstanceOf(THREE.Group);
+    expect(layer.getActorObject("uranus-chomper:uranus-a")).toBeInstanceOf(THREE.Group);
+    expect(layer.getActorObject("moon:moon-a")).toBeInstanceOf(THREE.Group);
+
+    const shark = layer.getActorObject("jupiter-shark:shark-a")!;
+    const sharkX = shark.position.x;
+    layer.update({
+      ...frame,
+      timeSeconds: 2.25,
+      events: {
+        jupiterSharks: [
+          { id: "shark-a", x: 780, y: 260, width: 72, height: 46, vx: -120, vy: 30, age: 1.45, biteCooldown: 0.1 },
+        ],
+        uranusEvents: [],
+        moonEvents: [],
+      },
+    });
+
+    expect(layer.status.modelCounts).toMatchObject({
+      jupiterSharks: 1,
+      uranusPlanets: 0,
+      ringChompers: 0,
+      moons: 0,
+    });
+    expect(layer.getActorObject("jupiter-shark:shark-a")?.position.x).toBeGreaterThan(sharkX);
+    expect(layer.getActorObject("uranus-planet:uranus-a")).toBeUndefined();
+    expect(layer.getActorObject("uranus-chomper:uranus-a")).toBeUndefined();
+    expect(layer.getActorObject("moon:moon-a")).toBeUndefined();
+
+    layer.update({ ...frame, events: { jupiterSharks: [], uranusEvents: [], moonEvents: [] } });
+    expect(layer.status.actorCount).toBe(0);
+  });
+
+  it("does not create event actors when the 3D layer is disabled", () => {
+    const parent = document.createElement("main");
+    const layer = new ThreeLayer({
+      parent,
+      enabled: false,
+      demoEnabled: false,
+    });
+
+    expect(() => layer.update({
+      deltaSeconds: 0.1,
+      timeSeconds: 1,
+      camera: { x: 0, y: 0 },
+      viewport: { width: 800, height: 600 },
+      events: {
+        jupiterSharks: [
+          { id: "disabled-shark", x: 0, y: 0, width: 72, height: 46, vx: 1, vy: 0, age: 0, biteCooldown: 0 },
+        ],
+        uranusEvents: [],
+        moonEvents: [],
+      },
+    })).not.toThrow();
+    expect(layer.status).toMatchObject({ enabled: false, available: false, actorCount: 0 });
   });
 });
 

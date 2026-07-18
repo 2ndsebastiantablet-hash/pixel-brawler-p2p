@@ -38,6 +38,12 @@ interface PixelBrawlerDebugSnapshot {
     enabled: boolean;
     available: boolean;
     actorCount: number;
+    modelCounts: {
+      jupiterSharks: number;
+      uranusPlanets: number;
+      ringChompers: number;
+      moons: number;
+    };
     error?: string;
   };
 }

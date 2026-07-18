@@ -32,7 +32,7 @@ import {
 } from "../net/NetTypes";
 import type { PlayerProfile } from "../ui/Profile";
 import { ThreeLayer } from "./render3d/ThreeLayer";
-import { resolveRender3DConfig } from "./render3d/Render3DTypes";
+import { resolveRender3DConfig, type Render3DEventVisuals } from "./render3d/Render3DTypes";
 
 const WING_FLIGHT_CONFIG = {
   enabled: true,
@@ -120,6 +120,12 @@ export interface GameDebugSnapshot {
     enabled: boolean;
     available: boolean;
     actorCount: number;
+    modelCounts: {
+      jupiterSharks: number;
+      uranusPlanets: number;
+      ringChompers: number;
+      moons: number;
+    };
     error?: string;
   };
 }
@@ -496,6 +502,7 @@ export class Game {
       timeSeconds: time / 1000,
       camera: this.camera,
       viewport: { width: this.canvas.width, height: this.canvas.height },
+      events: this.createRender3DEventVisuals(),
     });
     this.renderCombatHud();
 
@@ -527,6 +534,49 @@ export class Game {
         lastActivityAt: Date.now(),
       }));
     }
+  }
+
+  private createRender3DEventVisuals(): Render3DEventVisuals {
+    const snapshot = this.combat.getSnapshot();
+    return {
+      jupiterSharks: snapshot.jupiterSharks.map((shark) => ({
+        id: shark.id,
+        x: shark.x,
+        y: shark.y,
+        vx: shark.vx,
+        vy: shark.vy,
+        width: shark.width,
+        height: shark.height,
+        age: shark.age,
+        biteCooldown: shark.biteCooldown,
+      })),
+      uranusEvents: snapshot.uranusEvents.map((event) => ({
+        id: event.id,
+        age: event.age,
+        phase: event.phase,
+        ringScroll: event.ringScroll,
+        flashAlpha: event.flashAlpha,
+        chomper: {
+          x: event.chomper.x,
+          y: event.chomper.y,
+          radius: event.chomper.radius,
+          mouthOpen: event.chomper.mouthOpen,
+          mouthAngle: event.chomper.mouthAngle,
+        },
+      })),
+      moonEvents: snapshot.moonEvents.map((event) => ({
+        id: event.id,
+        age: event.age,
+        moonVisualPhase: event.moonVisualPhase,
+        moonRiseProgress: event.moonRiseProgress,
+        moonDescendProgress: event.moonDescendProgress,
+        moonRadius: event.moonRadius,
+      })),
+    };
+  }
+
+  private shouldUse3DEventVisuals(): boolean {
+    return this.render3d.status.available;
   }
 
   private draw(): void {
@@ -2226,8 +2276,10 @@ export class Game {
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
     }
-    for (const shark of snapshot.jupiterSharks) {
-      this.drawJupiterShark(ctx, shark);
+    if (!this.shouldUse3DEventVisuals()) {
+      for (const shark of snapshot.jupiterSharks) {
+        this.drawJupiterShark(ctx, shark);
+      }
     }
     for (const combatant of snapshot.combatants) {
       if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id) && !jupiterSharkIds.has(combatant.id)) {
@@ -3402,43 +3454,45 @@ export class Game {
       ctx.fillRect(x, y, size, size);
     }
     ctx.globalAlpha = 1;
-    const planetX = Math.round(this.canvas.width * 0.68 + Math.sin(event.age * 0.35) * 18);
-    const planetY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y - 250);
-    const radius = 188;
-    ctx.save();
-    ctx.translate(planetX, planetY);
-    ctx.rotate(event.age * 0.08);
-    ctx.globalAlpha = 0.52;
-    ctx.fillStyle = "rgba(255, 216, 106, 0.28)";
-    ctx.beginPath();
-    ctx.ellipse(0, 0, radius * 1.68, radius * 0.28, -0.25, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.92;
-    const bands = ["#d8a95e", "#f1c972", "#b9854d", "#ffe2a0", "#c89454", "#f6d27b"];
-    for (let band = -4; band <= 4; band += 1) {
-      const h = Math.max(12, radius * 0.18 - Math.abs(band) * 9);
-      ctx.fillStyle = bands[(band + 6) % bands.length];
+    if (!this.shouldUse3DEventVisuals()) {
+      const planetX = Math.round(this.canvas.width * 0.68 + Math.sin(event.age * 0.35) * 18);
+      const planetY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y - 250);
+      const radius = 188;
+      ctx.save();
+      ctx.translate(planetX, planetY);
+      ctx.rotate(event.age * 0.08);
+      ctx.globalAlpha = 0.52;
+      ctx.fillStyle = "rgba(255, 216, 106, 0.28)";
       ctx.beginPath();
-      ctx.ellipse(0, band * 26, radius * (0.92 - Math.abs(band) * 0.035), h, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, radius * 1.68, radius * 0.28, -0.25, 0, Math.PI * 2);
       ctx.fill();
-    }
-    ctx.fillStyle = "rgba(60, 41, 28, 0.34)";
-    for (let face = 0; face < 11; face += 1) {
-      const angle = face * 0.72 + event.age * 0.12;
+      ctx.globalAlpha = 0.92;
+      const bands = ["#d8a95e", "#f1c972", "#b9854d", "#ffe2a0", "#c89454", "#f6d27b"];
+      for (let band = -4; band <= 4; band += 1) {
+        const h = Math.max(12, radius * 0.18 - Math.abs(band) * 9);
+        ctx.fillStyle = bands[(band + 6) % bands.length];
+        ctx.beginPath();
+        ctx.ellipse(0, band * 26, radius * (0.92 - Math.abs(band) * 0.035), h, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "rgba(60, 41, 28, 0.34)";
+      for (let face = 0; face < 11; face += 1) {
+        const angle = face * 0.72 + event.age * 0.12;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angle) * radius * 0.16, Math.sin(angle) * radius * 0.16);
+        ctx.lineTo(Math.cos(angle + 0.32) * radius * 0.84, Math.sin(angle + 0.32) * radius * 0.74);
+        ctx.lineTo(Math.cos(angle + 0.62) * radius * 0.58, Math.sin(angle + 0.62) * radius * 0.52);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = "rgba(255, 235, 172, 0.68)";
+      ctx.lineWidth = 9;
       ctx.beginPath();
-      ctx.moveTo(Math.cos(angle) * radius * 0.16, Math.sin(angle) * radius * 0.16);
-      ctx.lineTo(Math.cos(angle + 0.32) * radius * 0.84, Math.sin(angle + 0.32) * radius * 0.74);
-      ctx.lineTo(Math.cos(angle + 0.62) * radius * 0.58, Math.sin(angle + 0.62) * radius * 0.52);
-      ctx.closePath();
-      ctx.fill();
+      ctx.ellipse(0, 0, radius * 1.7, radius * 0.31, -0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
-    ctx.globalAlpha = 0.9;
-    ctx.strokeStyle = "rgba(255, 235, 172, 0.68)";
-    ctx.lineWidth = 9;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, radius * 1.7, radius * 0.31, -0.25, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
     ctx.globalAlpha = 0.18;
     ctx.fillStyle = "#ffd86a";
     for (let stripe = -2; stripe < this.canvas.width + 220; stripe += 88) {
@@ -3496,7 +3550,9 @@ export class Game {
         ctx.fillStyle = "#ff3d54";
         ctx.fillRect(boundaryX - 4, 0, 8, this.canvas.height);
         ctx.restore();
-        this.drawRingChomper(ctx, event);
+        if (!this.shouldUse3DEventVisuals()) {
+          this.drawRingChomper(ctx, event);
+        }
       }
     }
   }
@@ -3590,16 +3646,6 @@ export class Game {
     const topY = Math.round(moon.topFloorY - this.camera.y);
     const x = Math.round(PLATFORM_LEFT - this.camera.x);
     const width = PLATFORM_RIGHT - PLATFORM_LEFT;
-    const pulse = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
-    const rise = easeOutCubicNumber(moon.moonRiseProgress);
-    const descend = easeInCubicNumber(moon.moonDescendProgress);
-    const hiddenMoonY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y + moon.moonRadius + 112);
-    const centerMoonY = Math.round(this.canvas.height * 0.43);
-    const moonY = moon.moonVisualPhase === "descending"
-      ? Math.round(lerpNumber(centerMoonY, hiddenMoonY, descend))
-      : Math.round(lerpNumber(hiddenMoonY, centerMoonY, rise));
-    const moonX = Math.round(this.canvas.width / 2);
-    const radius = Math.round(moon.moonRadius);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = 0.72;
@@ -3613,18 +3659,30 @@ export class Game {
     for (let tileX = x; tileX < x + width; tileX += 32) {
       ctx.fillRect(tileX, topY - 17, 24, 2);
     }
-    ctx.globalAlpha = 0.32 + pulse * 0.16;
-    ctx.fillStyle = "rgba(214, 242, 255, 0.38)";
-    ctx.fillRect(moonX - radius - 22, moonY - radius - 22, (radius + 22) * 2, (radius + 22) * 2);
-    ctx.globalAlpha = 0.88;
-    ctx.fillStyle = "#d6f2ff";
-    ctx.fillRect(moonX - radius, moonY - radius, radius * 2, radius * 2);
-    ctx.fillStyle = "#aab9c8";
-    ctx.fillRect(moonX - 34, moonY - 24, 16, 14);
-    ctx.fillRect(moonX + 18, moonY + 4, 22, 18);
-    ctx.fillRect(moonX - 6, moonY + 32, 14, 12);
-    ctx.fillStyle = "#05060a";
-    ctx.fillRect(moonX + Math.round(radius * 0.18), moonY - radius - 1, Math.round(radius * 0.86), radius * 2 + 2);
+    if (!this.shouldUse3DEventVisuals()) {
+      const pulse = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
+      const rise = easeOutCubicNumber(moon.moonRiseProgress);
+      const descend = easeInCubicNumber(moon.moonDescendProgress);
+      const hiddenMoonY = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y + moon.moonRadius + 112);
+      const centerMoonY = Math.round(this.canvas.height * 0.43);
+      const moonY = moon.moonVisualPhase === "descending"
+        ? Math.round(lerpNumber(centerMoonY, hiddenMoonY, descend))
+        : Math.round(lerpNumber(hiddenMoonY, centerMoonY, rise));
+      const moonX = Math.round(this.canvas.width / 2);
+      const radius = Math.round(moon.moonRadius);
+      ctx.globalAlpha = 0.32 + pulse * 0.16;
+      ctx.fillStyle = "rgba(214, 242, 255, 0.38)";
+      ctx.fillRect(moonX - radius - 22, moonY - radius - 22, (radius + 22) * 2, (radius + 22) * 2);
+      ctx.globalAlpha = 0.88;
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillRect(moonX - radius, moonY - radius, radius * 2, radius * 2);
+      ctx.fillStyle = "#aab9c8";
+      ctx.fillRect(moonX - 34, moonY - 24, 16, 14);
+      ctx.fillRect(moonX + 18, moonY + 4, 22, 18);
+      ctx.fillRect(moonX - 6, moonY + 32, 14, 12);
+      ctx.fillStyle = "#05060a";
+      ctx.fillRect(moonX + Math.round(radius * 0.18), moonY - radius - 1, Math.round(radius * 0.86), radius * 2 + 2);
+    }
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "#ffffff";
     for (let index = 0; index < 9; index += 1) {

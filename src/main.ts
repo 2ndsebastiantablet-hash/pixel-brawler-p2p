@@ -358,7 +358,7 @@ function renderDebugOverlay(): void {
     `rtc ${JSON.stringify(debug.webRtcPeerStatus)}`,
     `dc ${JSON.stringify(debug.dataChannels)} fallback ${debug.relayFallbackPeerCount}`,
     `remote players ${debug.remotePlayers.count}`,
-    `3d ${debug.render3d.enabled ? "on" : "off"} ${debug.render3d.available ? "ready" : "fallback"} actors ${debug.render3d.actorCount}`,
+    `3d ${debug.render3d.enabled ? "on" : "off"} ${debug.render3d.available ? "ready" : "fallback"} actors ${debug.render3d.actorCount} models ${JSON.stringify(debug.render3d.modelCounts)}`,
   ].join("\n");
 }
 

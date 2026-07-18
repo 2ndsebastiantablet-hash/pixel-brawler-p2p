@@ -29,9 +29,9 @@ The foundation lives in `src/game/render3d/`:
 - `ThreeLayer.ts`: Owns the Three.js scene, camera, lights, WebGL renderer, resize handling, per-frame update, render call, fallback behavior, and debug status.
 - `Render3DTypes.ts`: Defines render-frame types, feature flags, and `worldToThreePosition()` for mapping 2D world points into Three space.
 - `ModelRegistry.ts`: Registers model actor factories, tracks live actors, updates them each frame, removes them from the scene, and disposes geometries/materials.
-- `LowPolyFactory.ts`: Creates real low-poly Three meshes/groups for current demo/future placeholders: cube, planet, and shark.
+- `LowPolyFactory.ts`: Creates real low-poly Three meshes/groups for the demo cube and current event visuals: Jupiter sharks, Saturn/Uranus planet rings, Ring Chomper, and Moon.
 
-`Game.ts` constructs the layer once, resizes it with the 2D canvas, sends it camera/viewport timing each tick, and calls its render method after the 2D draw. The layer does not mutate players, combatants, weapons, events, or network packets.
+`Game.ts` constructs the layer once, resizes it with the 2D canvas, sends it camera/viewport timing and event visual snapshots each tick, and calls its render method after the 2D draw. The layer does not mutate players, combatants, weapons, events, or network packets.
 
 ## Coordinate Mapping
 
@@ -81,14 +81,14 @@ Force-enable after a stored disable:
 
 If WebGL or Three initialization throws, `ThreeLayer` catches the error, logs one warning, exposes `available: false` in the debug snapshot, and leaves the 2D canvas running.
 
-## Future Model Hooks
+## Current Event Models
 
-Use `ModelRegistry` factories for future conversions:
+The current event conversions use `ModelRegistry` actors that are driven by existing `CombatSystem` snapshots:
 
-- Jupiter sharks: replace the current projected canvas shark drawing with `low-poly-shark` actors driven from `jupiterSharks` snapshot state.
-- Uranus/Saturn planet: replace the canvas planet with a `low-poly-planet` actor driven from the Uranus event phase/timer.
-- Ring Chomper: add a custom low-poly actor factory with mouth-open animation driven from `uranusEvents[].chomper`.
-- Moon: add a moon sphere actor driven from `moonEvents` visual phase and rise/descent progress.
+- Jupiter sharks: `low-poly-shark` actors follow `jupiterSharks` positions, velocity, bite cooldown, and lifetime state. The 2D shark combat body remains authoritative and the actor is removed when the shark leaves the snapshot.
+- Uranus/Saturn planet: a translucent rotating `saturn-planet` actor appears during the active Uranus ring arena, with separate front/back ring meshes driven by the existing ring scroll.
+- Ring Chomper: a yellow `ring-chomper` actor follows `uranusEvents[].chomper`; its jaws animate from the existing mouth-open state while the 2D hazard radius remains authoritative.
+- Moon: a translucent `moon-sphere` actor follows `moonEvents` visual phase, rise/descent progress, and radius while the Moon event's floors, side switching, and timers remain in 2D gameplay code.
 - Space-series events: keep gameplay in `CombatSystem`, sync through current snapshots/events, and make Three actors pure visual adapters.
 
-The safe rule: Three meshes may display state, but they should not own rules, damage, collision, timers, or multiplayer authority.
+When `?render3d=0`, stored WebGL disable is active, or WebGL initialization fails, the original 2D canvas visuals render instead. The safe rule remains: Three meshes may display state, but they should not own rules, damage, collision, timers, or multiplayer authority.
