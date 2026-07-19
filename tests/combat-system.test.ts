@@ -45,7 +45,8 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(31);
+    expect(fighter.weaponInventory).toHaveLength(32);
+    expect(fighter.weaponInventory).toContain("grabber");
     expect(fighter.weaponInventory).toContain("mars");
   });
 
@@ -3372,7 +3373,7 @@ describe("combat system", () => {
         laser: { active: boolean; warningAlpha: number; firing: boolean; fromX: number; fromY: number; toX: number; toY: number; width: number };
       }>;
       neptuneCreatures: Array<{ id: string; kind: "urchin" | "octopus" | "giant-shark" | "clown-fish"; hp: number; maxHp: number; x: number; y: number }>;
-      neptunePellets: Array<{ id: string; radius: number; damage: number }>;
+      neptunePellets: Array<{ id: string; radius: number; damage: number; source?: string }>;
     };
     let snapshot = combat.getSnapshot() as unknown as NeptuneSnapshot;
     expect(snapshot.neptuneEvents).toHaveLength(1);
@@ -3403,18 +3404,19 @@ describe("combat system", () => {
     expect(snapshot.neptuneEvents[0].phase).toBe("active");
     expect(snapshot.neptuneEvents[0].currentAttack).toBe("flood");
     expect(snapshot.neptuneEvents[0].flood.active).toBe(true);
-    expect(snapshot.neptuneEvents[0].flood.level).toBeLessThan(DEFAULT_PHYSICS.groundY);
+    expect(snapshot.neptuneEvents[0].flood.level).toBeLessThan(DEFAULT_PHYSICS.groundY - 500);
     expect(combat.getCombatant("neptune-victim")!.velocityY).toBeLessThan(0);
 
     for (let index = 0; index < 34; index += 1) {
       combat.update(0.5, [owner, victim]);
     }
     snapshot = combat.getSnapshot() as unknown as NeptuneSnapshot;
-    expect(snapshot.neptuneEvents[0].attackHistory).toEqual(expect.arrayContaining(["flood", "slam", "laser", "summon"]));
+    expect(snapshot.neptuneEvents[0].attackHistory).toEqual(expect.arrayContaining(["flood", "slam", "laser", "summon", "rain"]));
     expect(snapshot.neptuneEvents[0].tilt.direction).toBeDefined();
     expect(snapshot.neptuneEvents[0].laser.width).toBeGreaterThanOrEqual(22);
     expect(snapshot.neptuneCreatures.map((creature) => creature.kind)).toEqual(expect.arrayContaining(["urchin", "octopus", "giant-shark", "clown-fish"]));
     expect(snapshot.neptunePellets.some((pellet) => pellet.radius >= 8 && pellet.damage > 0)).toBe(true);
+    expect(snapshot.neptunePellets.some((pellet) => pellet.source === "rain" && pellet.radius >= 18 && pellet.damage >= 14)).toBe(true);
 
     const creature = snapshot.neptuneCreatures[0];
     expect(combat.getCombatant(creature.id)).toBeDefined();
@@ -3443,6 +3445,75 @@ describe("combat system", () => {
     expect(histories.every((history) => history[0] === "flood")).toBe(true);
     expect(histories.every((history) => new Set(history).size >= 4)).toBe(true);
     expect(new Set(histories.map((history) => history.slice(1).join(","))).size).toBeGreaterThan(1);
+  });
+
+  it("starts Neptune laser behind its target and chases forward before it becomes lethal", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("neptune" as never);
+    const owner = { ...playerState, id: "laser-owner", x: 120, velocityX: 260, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Laser Owner", "#5ad7ff");
+    combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 444, heldMs: 0, isNewPress: true });
+    combat.update(4.05, [owner]);
+
+    type LaserSnapshot = { neptuneEvents: Array<{ currentAttack: string; laser: { toX: number; toY: number; warningAlpha: number; firing: boolean } }> };
+    let snapshot = combat.getSnapshot() as unknown as LaserSnapshot;
+    for (let tick = 0; tick < 90 && snapshot.neptuneEvents[0]?.currentAttack !== "laser"; tick += 1) {
+      combat.update(0.1, [owner]);
+      snapshot = combat.getSnapshot() as unknown as LaserSnapshot;
+    }
+
+    expect(snapshot.neptuneEvents[0].currentAttack).toBe("laser");
+    const targetCenterX = owner.x + owner.width / 2;
+    const firstX = snapshot.neptuneEvents[0].laser.toX;
+    expect(snapshot.neptuneEvents[0].laser.warningAlpha).toBeGreaterThan(0);
+    expect(snapshot.neptuneEvents[0].laser.firing).toBe(false);
+    expect(firstX).toBeLessThan(targetCenterX - 80);
+
+    combat.update(0.55, [owner]);
+    snapshot = combat.getSnapshot() as unknown as LaserSnapshot;
+    expect(snapshot.neptuneEvents[0].laser.toX).toBeGreaterThan(firstX);
+    expect(Math.abs(snapshot.neptuneEvents[0].laser.toX - targetCenterX)).toBeLessThan(Math.abs(firstX - targetCenterX));
+    expect(combat.getCombatant(owner.id)?.respawnTimer ?? 0).toBe(0);
+  });
+
+  it("lets an empty Grabber strap autonomously punch nearby valid targets without a new input", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "grabber-user", x: 0, velocityX: 0, velocityY: 0 };
+    const target = { ...playerState, id: "grabber-target", x: 74, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Grabber", "#18dff5");
+    combat.syncRemotePlayer({
+      id: target.id,
+      name: "Target",
+      color: "#ff6f91",
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.setPlayerLoadout(owner.id, { frontStrap: "grabber" as never });
+
+    combat.update(0.2, [owner, target]);
+
+    const hitTarget = combat.getCombatant(target.id)!;
+    const runtime = combat.getWeaponRuntimeState("grabber" as never, owner.id) as unknown as {
+      grabberEquipped: boolean;
+      grabberHolding?: string;
+      grabberCooldown: number;
+      grabberReachActive: boolean;
+    };
+    expect(hitTarget.hp).toBeLessThan(100);
+    expect(hitTarget.velocityX).toBeGreaterThan(400);
+    expect(runtime).toMatchObject({
+      grabberEquipped: true,
+      grabberHolding: undefined,
+      grabberReachActive: true,
+    });
+    expect(runtime.grabberCooldown).toBeGreaterThan(0.5);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "GRABBER PUNCH")).toBe(true);
   });
 
   it("lets Neptune, Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {

@@ -28,6 +28,7 @@ export interface Render3DRendererAdapter {
 
 export interface ThreeLayerOptions extends Partial<Render3DConfig> {
   parent: HTMLElement;
+  className?: string;
   rendererFactory?: () => Render3DRendererAdapter;
 }
 
@@ -138,7 +139,7 @@ export class ThreeLayer {
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(42, this.lastViewport.width / this.lastViewport.height, 0.1, 200);
       const renderer = this.createRenderer();
-      renderer.domElement.className = "game-3d-layer";
+      renderer.domElement.className = this.options.className ?? "game-3d-layer";
       renderer.domElement.setAttribute("aria-hidden", "true");
       renderer.setPixelRatio?.(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setClearColor?.(0x000000, 0);
@@ -499,28 +500,61 @@ export class ThreeLayer {
       const actor = this.ensureActor("neptune-boss", actorId);
       const rise = easeOutCubic(event.riseProgress);
       const descend = easeInCubic(event.descendProgress);
+      const attackPulse = event.currentAttack === "idle" ? 0 : Math.sin(frame.timeSeconds * 7.2 + event.age) * 0.5 + 0.5;
       const anchor = {
         x: frame.camera.x + frame.viewport.width * 0.5,
-        y: frame.camera.y + frame.viewport.height * (event.phase === "ending" ? lerp(0.58, 0.9, descend) : lerp(0.92, 0.42, rise)),
+        y: frame.camera.y + frame.viewport.height * (event.phase === "ending" ? lerp(0.62, 0.96, descend) : lerp(0.98, 0.58, rise)),
       };
       const position = worldToThreePosition(anchor, frame.camera, frame.viewport, {
         pixelsPerUnit: this.pixelsPerUnit,
-        depth: -9.4,
+        depth: -13.8,
       });
       actor.object.position.set(position.x, position.y, position.z);
-      actor.object.scale.setScalar(Math.max(2.7, Math.min(4.6, frame.viewport.width / 330)) * (0.86 + rise * 0.14));
-      actor.object.rotation.y = Math.sin(event.age * 0.34) * 0.12;
-      actor.object.rotation.z = event.tilt.amount * -0.09 + Math.sin(event.age * 0.2) * 0.035;
-      setObjectOpacity(actor.object, event.phase === "ending" ? 0.54 : 0.86);
+      actor.object.scale.setScalar(Math.max(1.92, Math.min(3.05, frame.viewport.width / 560)) * (0.9 + rise * 0.1));
+      actor.object.rotation.y = Math.sin(event.age * 0.34) * 0.1 + (event.currentAttack === "laser" ? Math.sin(event.age * 1.4) * 0.08 : 0);
+      actor.object.rotation.x = event.currentAttack === "flood" ? -0.12 - attackPulse * 0.04 : event.currentAttack === "rain" ? 0.12 + attackPulse * 0.04 : Math.sin(event.age * 0.23) * 0.025;
+      actor.object.rotation.z = event.tilt.amount * -0.06 + Math.sin(event.age * 0.2) * 0.028;
+      setObjectOpacity(actor.object, event.phase === "ending" ? 0.42 : 0.7);
+      const head = actor.object.userData.head as THREE.Object3D | undefined;
+      if (head) {
+        head.rotation.x = event.currentAttack === "rain"
+          ? -0.26 - attackPulse * 0.06
+          : event.currentAttack === "flood"
+            ? 0.22 + attackPulse * 0.05
+            : event.currentAttack === "laser"
+              ? -0.05 + Math.sin(event.age * 5) * 0.04
+              : Math.sin(event.age * 0.9) * 0.04;
+        head.rotation.z = event.currentAttack === "summon" ? Math.sin(event.age * 4.2) * 0.12 : Math.sin(event.age * 0.6) * 0.035;
+      }
+      const mouth = actor.object.userData.mouth as THREE.Object3D | undefined;
+      if (mouth) {
+        mouth.scale.y = event.roarAlpha > 0
+          ? 2.1 + attackPulse * 0.4
+          : event.currentAttack === "flood"
+            ? 2.45 + attackPulse * 0.36
+            : event.currentAttack === "rain"
+              ? 1.85 + attackPulse * 0.42
+              : 1 + (event.currentAttack === "summon" ? attackPulse * 0.28 : 0);
+      }
+      const leftArm = actor.object.userData.leftArm as THREE.Object3D | undefined;
+      const rightArm = actor.object.userData.rightArm as THREE.Object3D | undefined;
+      if (leftArm) {
+        leftArm.rotation.z = -0.82 - (event.currentAttack === "summon" ? Math.sin(event.age * 3.8) * 0.35 : 0) - Math.max(0, event.leftHand.slamAlpha ?? 0) * 0.22;
+      }
+      if (rightArm) {
+        rightArm.rotation.z = 0.82 + (event.currentAttack === "summon" ? Math.sin(event.age * 3.8 + 1.2) * 0.35 : 0) + Math.max(0, event.rightHand.slamAlpha ?? 0) * 0.22;
+      }
       const leftHand = actor.object.userData.leftHand as THREE.Object3D | undefined;
       const rightHand = actor.object.userData.rightHand as THREE.Object3D | undefined;
       if (leftHand) {
-        leftHand.position.y = -0.44 + (event.leftHand.slamAlpha ?? 0) * -0.38;
-        leftHand.rotation.z = -0.22 + Math.sin(event.age * 1.8) * 0.08;
+        leftHand.position.y = -0.44 + (event.leftHand.slamAlpha ?? 0) * -0.38 + (event.currentAttack === "slam" && event.tilt.direction < 0 ? -0.18 * event.tilt.warningAlpha : 0);
+        leftHand.position.x = -2.1 - (event.currentAttack === "summon" ? attackPulse * 0.22 : 0);
+        leftHand.rotation.z = -0.22 + Math.sin(event.age * 1.8) * 0.08 - (event.leftHand.slamAlpha ?? 0) * 0.35;
       }
       if (rightHand) {
-        rightHand.position.y = -0.44 + (event.rightHand.slamAlpha ?? 0) * -0.38;
-        rightHand.rotation.z = 0.22 + Math.sin(event.age * 1.8 + 1.3) * 0.08;
+        rightHand.position.y = -0.44 + (event.rightHand.slamAlpha ?? 0) * -0.38 + (event.currentAttack === "slam" && event.tilt.direction > 0 ? -0.18 * event.tilt.warningAlpha : 0);
+        rightHand.position.x = 2.1 + (event.currentAttack === "summon" ? attackPulse * 0.22 : 0);
+        rightHand.rotation.z = 0.22 + Math.sin(event.age * 1.8 + 1.3) * 0.08 + (event.rightHand.slamAlpha ?? 0) * 0.35;
       }
       const glow = actor.object.userData.waterGlow as THREE.Object3D | undefined;
       if (glow) {

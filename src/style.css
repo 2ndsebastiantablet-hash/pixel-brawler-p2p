@@ -36,23 +36,30 @@ button {
 .game-canvas {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: 2;
   display: block;
   width: 100vw;
   height: 100vh;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  background: #05060a;
+  background: transparent;
 }
 
 .game-3d-layer {
   position: fixed;
   inset: 0;
-  z-index: 4;
   display: block;
   width: 100vw;
   height: 100vh;
   pointer-events: none;
+}
+
+.game-3d-layer--background {
+  z-index: 1;
+}
+
+.game-3d-layer--foreground {
+  z-index: 4;
 }
 
 .menu-overlay,
@@ -405,6 +412,11 @@ button {
   top: 66px;
 }
 
+.loadout-preview-item.grabber {
+  left: 40px;
+  top: 18px;
+}
+
 .loadout-slots {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -739,6 +751,11 @@ button {
   top: 90px;
 }
 
+.loadout-x-target.grabber {
+  left: calc(50% + 34px);
+  top: 90px;
+}
+
 .loadout-x-target.left-leg,
 .loadout-x-target.back-left-leg {
   left: calc(50% - 52px);
@@ -823,6 +840,33 @@ button {
   border-radius: 999px;
   background: #d6f2ff;
   box-shadow: 0 0 8px rgba(90, 215, 255, 0.86), 0 0 14px rgba(214, 242, 255, 0.5);
+}
+
+.loadout-grabber-arm {
+  left: calc(50% + 8px);
+  top: 76px;
+  z-index: 1;
+  width: 58px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background:
+    repeating-linear-gradient(90deg, #dfe6f0 0 7px, #7f8796 7px 10px);
+  transform: rotate(-18deg);
+  transform-origin: left center;
+  box-shadow: 0 0 8px rgba(214, 242, 255, 0.32);
+}
+
+.loadout-grabber-glove {
+  right: -14px;
+  top: -8px;
+  width: 16px;
+  height: 18px;
+  border-radius: 6px 6px 8px 8px;
+  background: #ffffff;
+  box-shadow:
+    -4px 12px 0 -5px #ffffff,
+    2px 12px 0 -5px #ffffff,
+    7px 9px 0 -5px #ffffff;
 }
 
 .loadout-error {

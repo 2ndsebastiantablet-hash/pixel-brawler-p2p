@@ -31,7 +31,7 @@ import {
   type PlayerStatePacket,
 } from "../net/NetTypes";
 import type { PlayerProfile } from "../ui/Profile";
-import { ThreeLayer } from "./render3d/ThreeLayer";
+import { ThreeLayer, type ThreeLayerStatus } from "./render3d/ThreeLayer";
 import { resolveRender3DConfig, type Render3DEventVisuals } from "./render3d/Render3DTypes";
 
 const WING_FLIGHT_CONFIG = {
@@ -140,6 +140,7 @@ export class Game {
   private readonly input = new InputController();
   private readonly camera = new Camera();
   private readonly combat = new CombatSystem({ mode: "offline" });
+  private readonly render3dBackground: ThreeLayer;
   private readonly render3d: ThreeLayer;
   private readonly remotes = new Map<string, RemotePlayer>();
   private readonly bursts: LandingBurst[] = [];
@@ -172,9 +173,17 @@ export class Game {
     this.combatHud.hidden = true;
     parent.append(this.canvas);
     parent.append(this.combatHud);
+    const render3dConfig = resolveRender3DConfig();
+    this.render3dBackground = new ThreeLayer({
+      parent,
+      ...render3dConfig,
+      demoEnabled: false,
+      className: "game-3d-layer game-3d-layer--background",
+    });
     this.render3d = new ThreeLayer({
       parent,
-      ...resolveRender3DConfig(),
+      ...render3dConfig,
+      className: "game-3d-layer game-3d-layer--foreground",
     });
 
     const context = this.canvas.getContext("2d");
@@ -248,7 +257,7 @@ export class Game {
         count: remotePlayers.length,
         players: remotePlayers,
       },
-      render3d: this.render3d.status,
+      render3d: this.getRender3DStatus(),
     };
   }
 
@@ -264,6 +273,7 @@ export class Game {
 
   dispose(): void {
     this.stop();
+    this.render3dBackground.dispose();
     this.render3d.dispose();
     this.input.dispose();
     window.removeEventListener("resize", this.resize);
@@ -328,6 +338,7 @@ export class Game {
     const dt = Math.min((time - this.lastTime) / 1000, 1 / 20);
     this.lastTime = time;
     this.update(dt, time);
+    this.render3dBackground.render();
     this.draw();
     this.render3d.render();
     this.animationFrame = requestAnimationFrame(this.tick);
@@ -384,8 +395,10 @@ export class Game {
     const lockedOut = (localCombatant?.respawnTimer ?? 0) > 0
       || (localCombatant?.statuses.some((status) => status.id === "deathFrozen") ?? false)
       || this.combat.isMovementLocked(this.localPlayer.state.id);
+    const activeMovementInput = lockedOut ? neutralInput() : movementInput;
     const previousState = { ...this.localPlayer.state };
-    this.localPlayer.update(lockedOut ? neutralInput() : movementInput, dt, this.getWeightedPhysics());
+    this.localPlayer.update(activeMovementInput, dt, this.getWeightedPhysics());
+    this.applyLocalNeptuneWaterInput(activeMovementInput, dt);
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.updateAttachmentVisual(dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
@@ -502,12 +515,20 @@ export class Game {
       this.canvas.width,
       this.canvas.height,
     );
+    const render3DEventVisuals = this.createRender3DEventVisuals();
+    this.render3dBackground.update({
+      deltaSeconds: dt,
+      timeSeconds: time / 1000,
+      camera: this.camera,
+      viewport: { width: this.canvas.width, height: this.canvas.height },
+      events: backgroundNeptuneVisuals(render3DEventVisuals),
+    });
     this.render3d.update({
       deltaSeconds: dt,
       timeSeconds: time / 1000,
       camera: this.camera,
       viewport: { width: this.canvas.width, height: this.canvas.height },
-      events: this.createRender3DEventVisuals(),
+      events: foregroundEventVisuals(render3DEventVisuals),
     });
     this.renderCombatHud();
 
@@ -616,6 +637,14 @@ export class Game {
     return this.render3d.status.available;
   }
 
+  private shouldUse3DNeptuneBoss(): boolean {
+    return this.render3dBackground.status.available;
+  }
+
+  private getRender3DStatus(): GameDebugSnapshot["render3d"] {
+    return combineRender3DStatus(this.render3dBackground.status, this.render3d.status);
+  }
+
   private draw(): void {
     const ctx = this.context;
     ctx.save();
@@ -660,6 +689,7 @@ export class Game {
       }
       const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
       this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
+      this.drawGrabberArm(ctx, remote.player.state, remoteLoadout);
       if (remoteLoadout.attachment) {
         this.drawRemoteAttachmentString(ctx, remote.player.state, remoteLoadout.attachment);
       }
@@ -690,6 +720,7 @@ export class Game {
         this.drawSpikeModeHands(ctx, this.localPlayer.state);
       }
       this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
+      this.drawGrabberArm(ctx, this.localPlayer.state, this.loadout, this.combat.getWeaponRuntimeState("grabber", this.localPlayer.state.id));
       if (this.loadout.attachment) {
         this.drawAttachmentString(ctx, this.localPlayer.state, this.loadout.attachment);
       }
@@ -885,9 +916,11 @@ export class Game {
   }
 
   private useAttachmentSlot(): void {
-    const picked = this.combat.pickUpNearest(this.localPlayer.state);
+    const previousWeapon = this.combat.getPlayerInventory().equippedWeapon;
+    const pickupRange = this.combat.getGrabberPickupRange(this.localPlayer.state.id);
+    const picked = this.combat.pickUpNearest(this.localPlayer.state, pickupRange);
     if (picked) {
-      this.assignPickedLoadoutItem(picked);
+      this.assignPickedLoadoutItem(picked, pickupRange > 54, previousWeapon);
       return;
     }
     const preferredSlot = this.preferredHandSlot();
@@ -902,8 +935,10 @@ export class Game {
     playSound("weapon-pickup");
   }
 
-  private assignPickedLoadoutItem(weaponId: WeaponId): void {
-    const slot: LoadoutSlotId | null = isSlotCompatible(weaponId, "attachment")
+  private assignPickedLoadoutItem(weaponId: WeaponId, preferGrabber = false, fallbackEquipped?: WeaponId): void {
+    const slot: LoadoutSlotId | null = preferGrabber && isSlotCompatible(weaponId, "grabber")
+      ? "grabber"
+      : isSlotCompatible(weaponId, "attachment")
       ? "attachment"
       : isSlotCompatible(weaponId, "rightHand")
         ? "rightHand"
@@ -916,7 +951,8 @@ export class Game {
       return;
     }
     this.loadout = assignLoadoutItem(this.loadout, slot, weaponId);
-    this.combat.setEquippedWeapon(weaponId);
+    this.attachmentVisual.initialized = false;
+    this.combat.setEquippedWeapon(slot === "grabber" ? fallbackEquipped ?? this.loadout.rightHand ?? this.loadout.leftHand ?? weaponId : weaponId);
   }
 
   private preferredHandSlot(): Extract<LoadoutSlotId, "leftHand" | "rightHand"> {
@@ -1315,7 +1351,7 @@ export class Game {
       slamLandingDuration: DEFAULT_PHYSICS.slamLandingDuration * (superLegs ? 0.72 : 1),
     };
     const jupiter = this.combat.getJupiterEventState();
-    const eventPhysics = jupiter.active
+    const jupiterPhysics = jupiter.active
       ? {
         ...physics,
         gravity: physics.gravity * 0.42,
@@ -1325,7 +1361,53 @@ export class Game {
         groundSlamVelocity: physics.groundSlamVelocity * 0.68,
       }
       : physics;
+    const neptune = this.combat.getNeptuneEventState();
+    const eventPhysics = neptune.floodActive
+      ? {
+        ...jupiterPhysics,
+        gravity: jupiterPhysics.gravity * 0.2,
+        maxRunSpeed: jupiterPhysics.maxRunSpeed * 0.58,
+        acceleration: jupiterPhysics.acceleration * 0.58,
+        airAcceleration: jupiterPhysics.airAcceleration * 0.72,
+        jumpVelocity: jupiterPhysics.jumpVelocity * 0.54,
+        doubleJumpVelocity: jupiterPhysics.doubleJumpVelocity * 0.48,
+        thirdJumpVelocity: jupiterPhysics.thirdJumpVelocity * 0.48,
+        slideSpeed: jupiterPhysics.slideSpeed * 0.45,
+        lowSlideSpeed: jupiterPhysics.lowSlideSpeed * 0.45,
+        groundSlamVelocity: jupiterPhysics.groundSlamVelocity * 0.4,
+      }
+      : jupiterPhysics;
     return weapon.id === "wings" || strappedWings || angelWings ? { ...eventPhysics, wingFlight: WING_FLIGHT_CONFIG } : eventPhysics;
+  }
+
+  private applyLocalNeptuneWaterInput(input: InputFrame, dt: number): void {
+    const neptune = this.combat.getNeptuneEventState();
+    if (!neptune.floodActive || this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      return;
+    }
+    const state = this.localPlayer.state;
+    const horizontal = Number(input.right) - Number(input.left);
+    if (horizontal !== 0) {
+      state.velocityX += horizontal * 360 * dt;
+    }
+    if (input.jumpPressed || input.jumpHeld || input.up) {
+      state.velocityY -= (input.jumpPressed ? 210 : 0) + 760 * dt;
+      state.grounded = false;
+    }
+    if (input.down) {
+      state.velocityY += 420 * dt;
+    }
+    state.velocityX *= Math.max(0, 1 - dt * 1.35);
+    state.velocityY *= Math.max(0, 1 - dt * 0.82);
+    state.velocityY = clampNumber(state.velocityY, -540, input.down ? 430 : 280);
+    if (Math.hypot(state.velocityX, state.velocityY) > 260 && Math.floor(performance.now() / 90) % 3 === 0) {
+      this.bursts.push({
+        x: state.x + state.width / 2 - Math.sign(state.velocityX || state.facing) * 8,
+        y: state.y + state.height * 0.55,
+        age: 0.08,
+        color: "#5ad7ff",
+      });
+    }
   }
 
   private updateAttachmentVisual(dt: number): void {
@@ -1428,6 +1510,70 @@ export class Game {
     ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
     ctx.strokeRect(ex - 10, ey - 10, 20, 20);
     this.drawTinyLoadoutItem(ctx, weaponId, ex, ey, 8);
+    ctx.restore();
+  }
+
+  private drawGrabberArm(
+    ctx: CanvasRenderingContext2D,
+    state: PlayerPhysicsState,
+    loadout: LoadoutState,
+    runtime?: ReturnType<CombatSystem["getWeaponRuntimeState"]>,
+  ): void {
+    if (loadout.frontStrap !== "grabber" && loadout.backStrap !== "grabber") {
+      return;
+    }
+    const facing = state.facing || 1;
+    const back = -facing;
+    const anchor = {
+      x: state.x + state.width / 2 + back * 15,
+      y: state.y + 18,
+    };
+    const cooldown = runtime?.grabberCooldown ?? 0;
+    const punchExtension = cooldown > 1.02 ? (cooldown - 1.02) / 0.33 : cooldown > 0.75 ? (0.75 - cooldown) / 0.27 : 0;
+    const spring = Math.sin(performance.now() * 0.009 + state.x * 0.03) * 4;
+    const end = {
+      x: anchor.x + back * (62 + Math.max(0, punchExtension) * 42),
+      y: anchor.y + 17 + spring,
+    };
+    const ax = Math.round(anchor.x - this.camera.x);
+    const ay = Math.round(anchor.y - this.camera.y);
+    const ex = Math.round(end.x - this.camera.x);
+    const ey = Math.round(end.y - this.camera.y);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (!loadout.grabber) {
+      ctx.globalAlpha = 0.16;
+      ctx.strokeStyle = "#f2f2f2";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(Math.round(state.x + state.width / 2 - this.camera.x), Math.round(state.y + state.height / 2 - this.camera.y), 126, 70, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = "rgba(214, 242, 255, 0.86)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(Math.round((ax + ex) / 2), Math.round((ay + ey) / 2 - 10));
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.strokeStyle = "#56606f";
+    ctx.lineWidth = 2;
+    for (let index = 1; index <= 3; index += 1) {
+      const t = index / 4;
+      const jointX = Math.round(ax + (ex - ax) * t);
+      const jointY = Math.round(ay + (ey - ay) * t - Math.sin(t * Math.PI) * 10);
+      ctx.strokeRect(jointX - 5, jointY - 5, 10, 10);
+    }
+    ctx.fillStyle = "#f2f2f2";
+    this.pixelRect(ctx, ex - 9, ey - 8, 18, 16);
+    this.pixelRect(ctx, ex + back * 8 - 4, ey - 12, 8, 8);
+    this.pixelRect(ctx, ex + back * 12 - 3, ey - 4, 12, 5);
+    ctx.fillStyle = "#101018";
+    this.pixelRect(ctx, ex - 4, ey - 3, 8, 5);
+    if (loadout.grabber) {
+      this.drawTinyLoadoutItem(ctx, loadout.grabber, ex + back * 20, ey - 3, 10);
+    }
     ctx.restore();
   }
 
@@ -3482,6 +3628,7 @@ export class Game {
       !spirit.spiritActive && spirit.spiritCooldown > 0 ? `Spirit cooldown ${spirit.spiritCooldown.toFixed(1)}s` : "",
       judgment.active ? `Judgment Day ${judgment.phase === "countdown" ? "countdown" : "active"} ${judgment.timer.toFixed(1)}s` : "",
       cross.crossRestTimer > 0 ? `Cross resting ${cross.crossRestTimer.toFixed(1)}s` : loadoutHasWeapon(this.loadout, "cross") ? `Cross shield charge ${Math.round(Math.min(cross.crossStopwatch / 10, 1) * 100)}%` : "",
+      runtime.grabberEquipped ? `Grabber ${runtime.grabberHolding ? loadoutWeaponName(runtime.grabberHolding) : `empty reach${runtime.grabberCooldown > 0 ? ` - punch ${runtime.grabberCooldown.toFixed(1)}s` : ""}`}` : "",
       moon.active ? `Moon ${moon.timer.toFixed(1)}s - ${localMoon.active ? localMoon.switching ? `switching to ${localMoon.targetSide}` : `side ${localMoon.userSide}` : "map inverted"}` : "",
       jupiter.active ? `Jupiter ${jupiter.timer.toFixed(1)}s - gas ${Math.round(jupiter.gasAlpha * 100)}% - sharks ${jupiter.sharkCount} - step bursts ${jupiter.footstepCount}` : "",
       uranus.active ? `Uranus ${uranus.timer.toFixed(1)}s - ${uranus.phase} - ring ${Math.round(uranus.ringSpeed)}px/s` : "",
@@ -3494,7 +3641,11 @@ export class Game {
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
     const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
-    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment", "legs"];
+    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    if (this.loadout.frontStrap === "grabber" || this.loadout.backStrap === "grabber") {
+      loadoutSlots.push("grabber");
+    }
+    loadoutSlots.push("legs");
     const slotHud = loadoutSlots.map((slot) => {
       const slotWeapon = this.loadout[slot];
       const cooldown = slotWeapon ? this.combat.getPlayerInventory().cooldowns[slotWeapon] ?? 0 : 0;
@@ -3517,15 +3668,17 @@ export class Game {
   }
 
   private drawBackdrop(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = "#05060a";
+    const neptuneBehindGameplay = this.shouldUse3DNeptuneBoss() && this.combat.getSnapshot().neptuneEvents.length > 0;
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.fillStyle = neptuneBehindGameplay ? "rgba(5, 6, 10, 0.44)" : "#05060a";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.fillStyle = "#0b1230";
+    ctx.fillStyle = neptuneBehindGameplay ? "rgba(11, 18, 48, 0.45)" : "#0b1230";
     for (let y = 18; y < this.canvas.height; y += 34) {
       const offset = Math.round((-this.camera.x * 0.18 + y * 3) % 160);
       ctx.fillRect(offset - 160, y, 280, 4);
       ctx.fillRect(offset + 220, y + 8, 180, 3);
     }
-    ctx.fillStyle = "#10133a";
+    ctx.fillStyle = neptuneBehindGameplay ? "rgba(16, 19, 58, 0.62)" : "#10133a";
     ctx.fillRect(0, Math.round(DEFAULT_PHYSICS.groundY - this.camera.y + 30), this.canvas.width, this.canvas.height);
   }
 
@@ -3557,6 +3710,42 @@ export class Game {
     const y = Math.round(DEFAULT_PHYSICS.groundY - this.camera.y);
     const x = Math.round(PLATFORM_LEFT - this.camera.x);
     const width = PLATFORM_RIGHT - PLATFORM_LEFT;
+    const tilt = this.getActiveNeptuneTilt();
+    if (tilt && Math.abs(tilt.amount) > 0.035) {
+      const drop = Math.round(Math.min(48, Math.abs(tilt.amount) * 56));
+      const leftY = y + (tilt.amount < 0 ? drop : 0);
+      const rightY = y + (tilt.amount > 0 ? drop : 0);
+      const yAt = (screenX: number): number => {
+        const t = clampNumber((screenX - x) / Math.max(1, width), 0, 1);
+        return Math.round(lerpNumber(leftY, rightY, t));
+      };
+      ctx.fillStyle = "#dedee8";
+      ctx.beginPath();
+      ctx.moveTo(x, leftY);
+      ctx.lineTo(x + width, rightY);
+      ctx.lineTo(x + width, rightY + 12);
+      ctx.lineTo(x, leftY + 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#86869b";
+      ctx.beginPath();
+      ctx.moveTo(x, leftY + 12);
+      ctx.lineTo(x + width, rightY + 12);
+      ctx.lineTo(x + width, rightY + 32);
+      ctx.lineTo(x, leftY + 32);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#444455";
+      for (let tileX = x; tileX < x + width; tileX += 32) {
+        const tileY = yAt(tileX) + 14;
+        ctx.save();
+        ctx.translate(tileX, tileY);
+        ctx.rotate(Math.atan2(rightY - leftY, width));
+        ctx.fillRect(0, 0, 24, 2);
+        ctx.restore();
+      }
+      return;
+    }
     ctx.fillStyle = "#dedee8";
     ctx.fillRect(x, y, width, 12);
     ctx.fillStyle = "#86869b";
@@ -3794,33 +3983,52 @@ export class Game {
         ctx.closePath();
         ctx.fill();
       }
-      if (!this.shouldUse3DEventVisuals()) {
+      if (!this.shouldUse3DNeptuneBoss()) {
         this.drawNeptuneBossFallback(ctx, event);
       }
       if (event.flood.active || event.flood.alpha > 0) {
         const level = Math.round(event.flood.level - this.camera.y);
-        ctx.globalAlpha = Math.min(0.7, event.flood.alpha);
-        ctx.fillStyle = "rgba(61, 174, 214, 0.64)";
-        ctx.fillRect(0, level, this.canvas.width, this.canvas.height - level);
-        ctx.globalAlpha = Math.min(0.52, event.flood.alpha + 0.16);
+        const surfaceY = clampNumber(level, 0, this.canvas.height);
+        const water = ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+        water.addColorStop(0, `rgba(61, 174, 214, ${Math.min(0.32, event.flood.alpha * 0.6)})`);
+        water.addColorStop(0.45, `rgba(61, 174, 214, ${Math.min(0.52, event.flood.alpha * 0.86)})`);
+        water.addColorStop(1, `rgba(31, 116, 166, ${Math.min(0.72, event.flood.alpha + 0.08)})`);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = water;
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        if (level > -24 && level < this.canvas.height + 24) {
+          ctx.globalAlpha = Math.min(0.65, event.flood.alpha + 0.22);
+          ctx.fillStyle = "#d6f2ff";
+          ctx.fillRect(0, surfaceY - 3, this.canvas.width, 6);
+        }
+        ctx.globalAlpha = Math.min(0.5, event.flood.alpha + 0.16);
         ctx.fillStyle = "#bdefff";
-        for (let index = 0; index < 24; index += 1) {
+        for (let index = 0; index < 46; index += 1) {
           const x = Math.round((index * 173 + time * 130 + event.age * 45) % (this.canvas.width + 120) - 60);
-          const y = level + 18 + (index % 7) * 34 + Math.round(Math.sin(time * 2.4 + index) * 8);
+          const y = Math.round((index * 61 + time * (34 + (index % 5) * 8)) % (this.canvas.height + 80) - 40 + Math.sin(time * 2.4 + index) * 8);
           ctx.fillRect(x, y, 64 + (index % 4) * 18, 4);
+        }
+        ctx.globalAlpha = Math.min(0.44, event.flood.alpha + 0.1);
+        ctx.fillStyle = "#d6f2ff";
+        for (let index = 0; index < 34; index += 1) {
+          const x = Math.round((index * 127 + Math.sin(event.age + index) * 24) % (this.canvas.width + 60) - 30);
+          const y = Math.round((this.canvas.height + 30 - ((time * (42 + index % 7 * 11) + index * 73) % (this.canvas.height + 80))));
+          const size = 2 + (index % 4);
+          ctx.fillRect(x, y, size, size);
         }
         if (event.flood.suck > 0) {
           const mouth = this.neptuneScreenPoint({ x: event.body.x, y: event.body.y - event.body.radius * 0.7 });
           ctx.globalAlpha = Math.min(0.56, event.flood.suck);
           ctx.strokeStyle = "#d6f2ff";
           ctx.lineWidth = 5;
-          for (let index = 0; index < 6; index += 1) {
+          for (let index = 0; index < 8; index += 1) {
+            const rowY = (index + 1) * (this.canvas.height / 9);
             ctx.beginPath();
-            ctx.moveTo(0, level + index * 38);
+            ctx.moveTo(0, rowY);
             ctx.quadraticCurveTo(mouth.x - 160, mouth.y + index * 12, mouth.x, mouth.y);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(this.canvas.width, level + index * 42);
+            ctx.moveTo(this.canvas.width, rowY + 18);
             ctx.quadraticCurveTo(mouth.x + 160, mouth.y - index * 10, mouth.x, mouth.y);
             ctx.stroke();
           }
@@ -3956,6 +4164,33 @@ export class Game {
           ctx.stroke();
         }
       }
+      if (event.currentAttack === "rain") {
+        const mouth = this.neptuneScreenPoint({ x: event.body.x, y: event.body.y - event.body.radius * 0.72 });
+        const spit = clampNumber(event.attackTimer / 0.72, 0, 1);
+        const dropletY = Math.round(lerpNumber(mouth.y, -72, easeOutCubicNumber(spit)));
+        const radius = Math.round(22 + (1 - spit) * 12);
+        ctx.globalAlpha = event.attackTimer < 0.9 ? 0.84 : Math.max(0, 1.4 - event.attackTimer);
+        ctx.fillStyle = "#bdefff";
+        ctx.beginPath();
+        ctx.ellipse(mouth.x, dropletY, radius, radius * 1.32, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(mouth.x - 8, dropletY - radius + 8, 14, 4);
+        if (event.attackTimer > 0.72 && event.attackTimer < 1.25) {
+          const burst = clampNumber((event.attackTimer - 0.72) / 0.53, 0, 1);
+          ctx.globalAlpha = 1 - burst;
+          ctx.strokeStyle = "#d6f2ff";
+          ctx.lineWidth = 3;
+          for (let index = 0; index < 10; index += 1) {
+            const angle = index * Math.PI * 2 / 10;
+            const length = 24 + burst * 92;
+            ctx.beginPath();
+            ctx.moveTo(mouth.x + Math.cos(angle) * 18, dropletY + Math.sin(angle) * 18);
+            ctx.lineTo(mouth.x + Math.cos(angle) * length, dropletY + Math.sin(angle) * length);
+            ctx.stroke();
+          }
+        }
+      }
     }
     ctx.restore();
   }
@@ -4028,8 +4263,13 @@ export class Game {
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = Math.max(0.2, 1 - pellet.age / pellet.lifetime);
     ctx.fillStyle = pellet.color;
+    if (pellet.source === "rain") {
+      ctx.fillStyle = "rgba(189, 239, 255, 0.24)";
+      ctx.fillRect(x - Math.round(pellet.radius * 0.28), y - Math.round(pellet.radius * 1.65), Math.max(3, Math.round(pellet.radius * 0.56)), Math.round(pellet.radius * 1.5));
+      ctx.fillStyle = pellet.color;
+    }
     ctx.beginPath();
-    ctx.ellipse(x, y, pellet.radius, Math.max(4, pellet.radius * 0.72), 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y, pellet.radius, Math.max(4, pellet.radius * (pellet.source === "rain" ? 1.08 : 0.72)), 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#d6f2ff";
     ctx.fillRect(x - Math.round(pellet.radius * 0.25), y - Math.round(pellet.radius * 0.32), Math.max(3, Math.round(pellet.radius * 0.45)), 3);
@@ -4041,6 +4281,10 @@ export class Game {
       x: Math.round(point.x - this.camera.x),
       y: Math.round(point.y - this.camera.y),
     };
+  }
+
+  private getActiveNeptuneTilt(): NeptuneEventState["tilt"] | null {
+    return this.combat.getSnapshot().neptuneEvents.find((event) => event.tilt.active || Math.abs(event.tilt.amount) > 0.025)?.tilt ?? null;
   }
 
   private drawMoonEventWorld(ctx: CanvasRenderingContext2D): void {
@@ -4466,6 +4710,22 @@ export class Game {
   }
 
   private renderEmpty(): void {
+    this.render3dBackground.update({
+      deltaSeconds: 0,
+      timeSeconds: performance.now() / 1000,
+      camera: this.camera,
+      viewport: { width: this.canvas.width, height: this.canvas.height },
+      events: emptyRender3DEventVisuals(),
+    });
+    this.render3d.update({
+      deltaSeconds: 0,
+      timeSeconds: performance.now() / 1000,
+      camera: this.camera,
+      viewport: { width: this.canvas.width, height: this.canvas.height },
+      events: emptyRender3DEventVisuals(),
+    });
+    this.render3dBackground.render();
+    this.render3d.render();
     this.drawBackdrop(this.context);
   }
 
@@ -4487,6 +4747,7 @@ export class Game {
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.context.setTransform(1, 0, 0, 1, 0, 0);
+    this.render3dBackground.resize(width, height);
     this.render3d.resize(width, height);
     if (!this.running) {
       this.renderEmpty();
@@ -4523,7 +4784,7 @@ export function resolveReloadWeapon(loadout: Partial<LoadoutState>, inventory: W
   if (canReload(inventory.equippedWeapon)) {
     return inventory.equippedWeapon;
   }
-  const candidates = [normalized.leftHand, normalized.rightHand, normalized.attachment];
+  const candidates = [normalized.leftHand, normalized.rightHand, normalized.attachment, normalized.grabber];
   const ammoWeapons = candidates.filter(canReload);
   return ammoWeapons.find(needsReload) ?? ammoWeapons[0] ?? null;
 }
@@ -4550,6 +4811,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "grabber":
+      return "#f2f2f2";
     case "moon":
       return "#d6f2ff";
     case "jupiter":
@@ -4658,6 +4921,10 @@ function weaponHudDetail(
           : `Rush swing - Throw chamber ${runtime.chamber.toFixed(1)}s`;
     case "wings":
       return "Hold Space flap - release glide - S dive - Shift burst";
+    case "grabber":
+      return runtime.grabberHolding
+        ? `Holding ${loadoutWeaponName(runtime.grabberHolding)} - F cycles hand/attachment/grabber`
+        : `Empty glove - far pickup reach${runtime.grabberCooldown > 0 ? ` - punch ${runtime.grabberCooldown.toFixed(1)}s` : ""}`;
     case "super-legs":
       return "Run/jump boost - Space kicks - leg armor";
     case "virgin-blood":
@@ -4757,6 +5024,8 @@ function weaponHelper(id: WeaponId): string {
       return "Left rushes target - Right throw/recall";
     case "wings":
       return "No attacks - Space fly/glide - flap gust pushes nearby";
+    case "grabber":
+      return "Strap arm - F cycles third slot - empty glove punches and reaches pickups";
     case "super-legs":
       return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":
@@ -4854,5 +5123,48 @@ function neutralInput(): InputFrame {
     jumpPressed: false,
     jumpHeld: false,
     dashPressed: false,
+  };
+}
+
+function emptyRender3DEventVisuals(): Render3DEventVisuals {
+  return {
+    jupiterSharks: [],
+    uranusEvents: [],
+    moonEvents: [],
+    marsEvents: [],
+    neptuneEvents: [],
+    neptuneCreatures: [],
+  };
+}
+
+function backgroundNeptuneVisuals(events: Render3DEventVisuals): Render3DEventVisuals {
+  return {
+    ...emptyRender3DEventVisuals(),
+    neptuneEvents: events.neptuneEvents,
+  };
+}
+
+function foregroundEventVisuals(events: Render3DEventVisuals): Render3DEventVisuals {
+  return {
+    ...events,
+    neptuneEvents: [],
+  };
+}
+
+function combineRender3DStatus(background: ThreeLayerStatus, foreground: ThreeLayerStatus): GameDebugSnapshot["render3d"] {
+  return {
+    enabled: background.enabled || foreground.enabled,
+    available: background.available || foreground.available,
+    actorCount: background.actorCount + foreground.actorCount,
+    modelCounts: {
+      jupiterSharks: background.modelCounts.jupiterSharks + foreground.modelCounts.jupiterSharks,
+      uranusPlanets: background.modelCounts.uranusPlanets + foreground.modelCounts.uranusPlanets,
+      ringChompers: background.modelCounts.ringChompers + foreground.modelCounts.ringChompers,
+      moons: background.modelCounts.moons + foreground.modelCounts.moons,
+      marsPlanets: background.modelCounts.marsPlanets + foreground.modelCounts.marsPlanets,
+      neptuneBosses: background.modelCounts.neptuneBosses + foreground.modelCounts.neptuneBosses,
+      neptuneCreatures: background.modelCounts.neptuneCreatures + foreground.modelCounts.neptuneCreatures,
+    },
+    error: foreground.error ?? background.error,
   };
 }

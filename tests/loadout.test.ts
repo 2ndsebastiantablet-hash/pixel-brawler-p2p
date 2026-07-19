@@ -194,6 +194,16 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("neptune" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("neptune" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("neptune" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("grabber" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("grabber" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("grabber" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("grabber" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("grabber" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("grabber" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("pistol", "grabber" as never)).toBe(true);
+    expect(isSlotCompatible("holy-bazooka", "grabber" as never)).toBe(true);
+    expect(isSlotCompatible("super-legs", "grabber" as never)).toBe(false);
+    expect(isSlotCompatible("neptune" as never, "grabber" as never)).toBe(false);
 
     const withAxe = assignLoadoutItem(DEFAULT_LOADOUT, "leftHand", "axe");
     expect(withAxe.leftHand).toBe("axe");
@@ -267,6 +277,16 @@ describe("loadout equipment slots", () => {
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],
     });
+    const withGrabber = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "grabber" as never);
+    expect(withGrabber.frontStrap).toBe("grabber");
+    expect(loadoutHasWeapon(withGrabber, "grabber" as never)).toBe(true);
+    const withGrabberItem = assignLoadoutItem(withGrabber, "grabber" as never, "pistol");
+    expect((withGrabberItem as Record<string, unknown>).grabber).toBe("pistol");
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("grabber" as never))).toMatchObject({
+      category: "utility",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
+    });
   });
 
   it("treats the editor hand target as one held item for mouse primary/secondary controls", () => {
@@ -296,6 +316,14 @@ describe("loadout equipment slots", () => {
       frontStrap: "wings",
       backStrap: "death-aura",
     });
+
+    const withGrabberSlot = normalizeLoadout({
+      frontStrap: "grabber" as never,
+      grabber: "pistol",
+    } as never);
+    expect((withGrabberSlot as Record<string, unknown>).grabber).toBe("pistol");
+    expect(clearLoadoutSlot(withGrabberSlot, "frontStrap")).toEqual({});
+    expect(normalizeLoadout({ grabber: "pistol" } as never)).toEqual({});
   });
 
   it("swaps the attachment string with the active hand item without deleting or using either item", () => {
@@ -371,5 +399,34 @@ describe("loadout equipment slots", () => {
     expect(chainsawSwap.loadout.leftHand).toBe("holy-bazooka");
     expect(chainsawSwap.loadout.rightHand).toBe("holy-bazooka");
     expect(chainsawSwap.loadout.attachment).toBe("chainsaw");
+
+    const grabberCycleStart = {
+      frontStrap: "grabber",
+      rightHand: "pistol",
+      attachment: "knife",
+      grabber: "virgin-blood",
+    } as never;
+    const grabberFirst = swapAttachmentWithHand(grabberCycleStart, "rightHand");
+    expect(grabberFirst.swapped).toBe(true);
+    expect(grabberFirst.loadout).toMatchObject({
+      frontStrap: "grabber",
+      rightHand: "knife",
+      attachment: "virgin-blood",
+      grabber: "pistol",
+    });
+    const grabberSecond = swapAttachmentWithHand(grabberFirst.loadout, "rightHand");
+    expect(grabberSecond.loadout).toMatchObject({
+      frontStrap: "grabber",
+      rightHand: "virgin-blood",
+      attachment: "pistol",
+      grabber: "knife",
+    });
+    const grabberThird = swapAttachmentWithHand(grabberSecond.loadout, "rightHand");
+    expect(grabberThird.loadout).toMatchObject({
+      frontStrap: "grabber",
+      rightHand: "pistol",
+      attachment: "knife",
+      grabber: "virgin-blood",
+    });
   });
 });

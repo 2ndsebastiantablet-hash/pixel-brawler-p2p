@@ -99,6 +99,8 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-item="uranus"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="mars"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="neptune"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="grabber"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-drop-slot="grabber"]')).toBeNull();
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();
     expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Wings");
@@ -310,6 +312,40 @@ describe("lobby loadout menu", () => {
       loadout: expect.objectContaining({
         frontStrap: "neptune",
         backStrap: "neptune",
+      }),
+    }));
+  });
+
+  it("shows Grabber as a strap item that unlocks one extra attachment slot", () => {
+    const root = document.createElement("main");
+    document.body.append(root);
+    const startOffline = vi.fn();
+    const ui = new LobbyUI(root, createProfile(), createActions({ startOffline }));
+
+    ui.showSetup();
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="frontStrap"]'), "grabber");
+    expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Grabber");
+    const grabberSlot = requireTarget(root, '[data-loadout-drop-slot="grabber"]');
+    expect(grabberSlot.textContent).toContain("Grabber");
+    expect(root.querySelector('[data-loadout-view="back"] .loadout-grabber-arm')).toBeInstanceOf(HTMLElement);
+
+    dispatchDrop(grabberSlot, "pistol");
+    expect(root.querySelector('[data-loadout-drop-slot="grabber"]')?.textContent).toContain("Pistol");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="grabber"]'), "neptune");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Neptune");
+    expect(root.querySelector('[data-loadout-drop-slot="grabber"]')?.textContent).toContain("Pistol");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="grabber"]'), "super-legs");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Super Legs");
+    expect(root.querySelector('[data-loadout-drop-slot="grabber"]')?.textContent).toContain("Pistol");
+
+    root.querySelector<HTMLButtonElement>("[data-offline]")?.click();
+    expect(startOffline).toHaveBeenCalledWith(expect.objectContaining({
+      loadout: expect.objectContaining({
+        frontStrap: "grabber",
+        grabber: "pistol",
       }),
     }));
   });

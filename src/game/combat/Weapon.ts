@@ -14,6 +14,7 @@ export type WeaponId =
   | "machete"
   | "axe"
   | "wings"
+  | "grabber"
   | "virgin-blood"
   | "death-aura"
   | "rocket"

@@ -16,6 +16,7 @@ const enabledWeapons = [
   "machete",
   "axe",
   "wings",
+  "grabber",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -52,6 +53,7 @@ describe("weapon registry", () => {
       "machete",
       "axe",
       "wings",
+      "grabber",
       "virgin-blood",
       "death-aura",
       "rocket",
@@ -104,6 +106,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.machete).toBeUndefined();
     expect(inventory.ammo.axe).toBeUndefined();
     expect(inventory.ammo.wings).toBeUndefined();
+    expect((inventory.ammo as Record<string, unknown>).grabber).toBeUndefined();
     expect(inventory.ammo["virgin-blood"]).toBeUndefined();
     expect(inventory.ammo["death-aura"]).toBeUndefined();
     expect(inventory.ammo.rocket).toBeUndefined();
@@ -125,6 +128,9 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("machete").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("axe").weight.moveSpeedMultiplier).toBeLessThan(weaponRegistry.get("knife").weight.moveSpeedMultiplier);
     expect(weaponRegistry.get("wings").weight.moveSpeedMultiplier).toBeGreaterThan(weaponRegistry.get("machete").weight.moveSpeedMultiplier);
+    expect(weaponRegistry.get("grabber" as never).name).toBe("Grabber");
+    expect(weaponRegistry.get("grabber" as never).description).toContain("extra F-cycle attachment slot");
+    expect(weaponRegistry.get("grabber" as never).weight.label).toBe("Light");
     expect(weaponRegistry.get("super-legs").weight.moveSpeedMultiplier).toBeGreaterThanOrEqual(1.4);
     expect(weaponRegistry.get("super-legs").weight.accelerationMultiplier).toBeGreaterThanOrEqual(1.5);
     expect(weaponRegistry.get("super-legs").weight.airAccelerationMultiplier).toBeGreaterThanOrEqual(1.35);

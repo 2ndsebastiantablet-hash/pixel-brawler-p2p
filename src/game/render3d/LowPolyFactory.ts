@@ -351,6 +351,12 @@ export function createNeptuneBoss(name: string, options: LowPolyMeshOptions = {}
 
   group.add(waterGlow, torso, neck, head, mouth, leftEye, rightEye, crown, leftArm, rightArm, leftHand, rightHand);
   group.userData.waterGlow = waterGlow;
+  group.userData.torso = torso;
+  group.userData.head = head;
+  group.userData.mouth = mouth;
+  group.userData.crown = crown;
+  group.userData.leftArm = leftArm;
+  group.userData.rightArm = rightArm;
   group.userData.leftHand = leftHand;
   group.userData.rightHand = rightHand;
   group.userData.leftEye = leftEye;

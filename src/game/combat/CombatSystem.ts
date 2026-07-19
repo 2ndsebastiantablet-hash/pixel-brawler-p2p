@@ -331,7 +331,7 @@ export interface MarsCloneState {
 }
 
 export type NeptuneEventPhase = "intro" | "active" | "ending";
-export type NeptuneAttackKind = "idle" | "flood" | "slam" | "laser" | "summon";
+export type NeptuneAttackKind = "idle" | "flood" | "slam" | "laser" | "summon" | "rain";
 type NeptuneRealAttackKind = Exclude<NeptuneAttackKind, "idle">;
 export type NeptuneCreatureKind = "urchin" | "octopus" | "giant-shark" | "clown-fish";
 
@@ -426,6 +426,7 @@ export interface NeptunePelletState {
   id: string;
   eventId: string;
   ownerId: string;
+  source?: "clown-fish" | "rain";
   x: number;
   y: number;
   vx: number;
@@ -617,6 +618,11 @@ const knifeContactDamage = 4;
 const knifeContactCooldown = 0.42;
 const wingGustRadius = 130;
 const wingGustCooldown = 0.14;
+const grabberPunchRadius = 126;
+const grabberPunchDamage = 22;
+const grabberPunchKnockback = 720;
+const grabberPunchCooldown = 1.35;
+const grabberPickupRange = 150;
 const superLegsArmorDamageScale = 0.38;
 const superLegsStatusRefresh = 0.35;
 const axeRushRange = 940;
@@ -798,6 +804,8 @@ const neptuneFloodDuration = 5.2;
 const neptuneSlamDuration = 3.3;
 const neptuneLaserDuration = 3.8;
 const neptuneSummonDuration = 4.2;
+const neptuneRainDuration = 4.4;
+const neptuneRainSpawnInterval = 0.13;
 const neptuneFloodBuoyancy = 980;
 const neptuneFloodDrag = 0.72;
 const neptuneTiltSlideAcceleration = 680;
@@ -806,7 +814,7 @@ const neptuneLaserWidth = 28;
 const neptuneCreaturePoisonDuration = 10;
 const neptuneCreatureStuckDuration = 10;
 const neptunePelletLifetime = 3.2;
-const neptuneAttackCycle: NeptuneRealAttackKind[] = ["flood", "slam", "laser", "summon"];
+const neptuneAttackCycle: NeptuneRealAttackKind[] = ["flood", "slam", "laser", "summon", "rain"];
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -995,6 +1003,10 @@ export interface WeaponRuntimeState {
   neptuneFloodActive: boolean;
   zombieCount: number;
   attachedHands: number;
+  grabberEquipped: boolean;
+  grabberHolding?: WeaponId;
+  grabberCooldown: number;
+  grabberReachActive: boolean;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -1048,6 +1060,7 @@ export class CombatSystem {
   private readonly neptuneEvents: NeptuneEventState[] = [];
   private readonly neptuneCreatures = new Map<string, NeptuneCreatureState>();
   private readonly neptunePellets: NeptunePelletState[] = [];
+  private readonly grabberCooldowns = new Map<string, number>();
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -1104,6 +1117,7 @@ export class CombatSystem {
     this.neptuneEvents.length = 0;
     this.neptuneCreatures.clear();
     this.neptunePellets.length = 0;
+    this.grabberCooldowns.clear();
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1240,6 +1254,7 @@ export class CombatSystem {
     this.removeUranusStateForOwner(id);
     this.removeMarsStateForOwner(id);
     this.removeNeptuneStateForOwner(id);
+    this.grabberCooldowns.delete(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1296,6 +1311,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
+    }
+    if (this.inventory.equippedWeapon === "grabber") {
+      return { kind: "blocked", weaponId: "grabber", label: "Grabber passive" };
     }
     if (this.inventory.equippedWeapon === "moon") {
       return this.activateMoonEvent(context);
@@ -1364,6 +1382,9 @@ export class CombatSystem {
     }
     if (weapon.id === "wings") {
       return { kind: "blocked", weaponId: weapon.id, label: "Wings passive" };
+    }
+    if (weapon.id === "grabber") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Grabber passive" };
     }
     if (weapon.id === "moon") {
       return { kind: "blocked", weaponId: weapon.id, label: "Moon uses Q/E" };
@@ -1552,6 +1573,9 @@ export class CombatSystem {
     if (this.inventory.equippedWeapon === "wings") {
       return { kind: "blocked", weaponId: "wings", label: "Wings passive" };
     }
+    if (this.inventory.equippedWeapon === "grabber") {
+      return { kind: "blocked", weaponId: "grabber", label: "Grabber passive" };
+    }
     if (this.inventory.equippedWeapon === "super-legs") {
       return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
     }
@@ -1578,6 +1602,11 @@ export class CombatSystem {
       return null;
     }
     return this.collectDroppedWeapon(best.weapon);
+  }
+
+  getGrabberPickupRange(ownerId: string): number {
+    const loadout = this.playerLoadouts.get(ownerId);
+    return hasGrabberStrap(loadout) && !loadout?.grabber ? grabberPickupRange : 54;
   }
 
   applyDamage(request: DamageRequest): DamageResult {
@@ -1750,6 +1779,7 @@ export class CombatSystem {
     this.updatePositiveBuffVisuals(dt);
     this.updateContactCooldowns(dt);
     this.updateBodyContact(dt, players);
+    this.updateGrabbers(dt, players);
     this.updateDroppedWeapons(dt);
   }
 
@@ -1937,6 +1967,8 @@ export class CombatSystem {
     const uranus = this.getUranusEventForOwner(ownerId);
     const mars = this.getMarsEventForOwner(ownerId);
     const neptune = this.getNeptuneEventForOwner(ownerId);
+    const ownerLoadout = this.playerLoadouts.get(ownerId);
+    const grabberEquipped = hasGrabberStrap(ownerLoadout);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -2035,6 +2067,10 @@ export class CombatSystem {
       neptuneFloodActive: neptune?.flood.active ?? false,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
+      grabberEquipped,
+      grabberHolding: ownerLoadout?.grabber,
+      grabberCooldown: this.grabberCooldowns.get(ownerId) ?? 0,
+      grabberReachActive: grabberEquipped && !ownerLoadout?.grabber,
     };
   }
 
@@ -4122,12 +4158,17 @@ export class CombatSystem {
       const target = this.findNeptuneTarget(event);
       event.laser.targetId = target?.id;
       const to = target
-        ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
+        ? neptuneLaserStartBehindTarget(event, target)
         : { x: event.body.x + (seededUnit(event.seed, event.attackIndex, 211) - 0.5) * 720, y: DEFAULT_PHYSICS.groundY - 120 };
       event.laser.fromX = event.body.x;
       event.laser.fromY = event.body.y - event.body.radius * 1.02;
       event.laser.toX = to.x;
       event.laser.toY = to.y;
+    } else if (attack === "rain") {
+      this.addEffect("aura", event.body.x, event.body.y - event.body.radius * 0.92, event.body.x, DEFAULT_PHYSICS.groundY - 760, colorForWeapon("neptune"), "WATER DROP");
+      if (!event.visualOnly) {
+        this.queueSound("neptune-wave");
+      }
     } else if (attack === "summon") {
       event.summonWave += 1;
       this.spawnNeptuneWaveCreatures(event);
@@ -4148,8 +4189,8 @@ export class CombatSystem {
   }
 
   private refillNeptuneAttackBag(event: NeptuneEventState): void {
-    const source = event.attackHistory.length <= 1
-      ? neptuneAttackCycle.filter((attack) => attack !== "flood")
+    const source: NeptuneRealAttackKind[] = event.attackHistory.length <= 1
+      ? ["slam", "laser", "summon"]
       : [...neptuneAttackCycle];
     for (let index = source.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(seededUnit(event.seed, event.attackIndex + index, 1201 + index * 61) * (index + 1));
@@ -4159,7 +4200,7 @@ export class CombatSystem {
       const swapIndex = 1 + Math.floor(seededUnit(event.seed, event.attackIndex, 1747) * (source.length - 1));
       [source[0], source[swapIndex]] = [source[swapIndex], source[0]];
     }
-    event.attackBag = source;
+    event.attackBag = event.attackHistory.length <= 1 ? [...source, "rain"] : source;
   }
 
   private updateNeptuneActiveAttack(event: NeptuneEventState, dt: number, players: PlayerPhysicsState[]): void {
@@ -4182,8 +4223,15 @@ export class CombatSystem {
       return;
     }
     if (event.currentAttack === "laser") {
-      this.updateNeptuneLaser(event);
+      this.updateNeptuneLaser(event, dt);
       if (event.attackTimer >= neptuneLaserDuration) {
+        this.beginNeptuneAttack(event);
+      }
+      return;
+    }
+    if (event.currentAttack === "rain") {
+      this.updateNeptuneRain(event, dt);
+      if (event.attackTimer >= neptuneRainDuration) {
         this.beginNeptuneAttack(event);
       }
       return;
@@ -4197,7 +4245,7 @@ export class CombatSystem {
     const fill = clamp(event.attackTimer / 1.2, 0, 1);
     const drain = clamp((neptuneFloodDuration - event.attackTimer) / 1.2, 0, 1);
     const visible = Math.min(fill, drain);
-    const level = lerp(DEFAULT_PHYSICS.groundY + 88, DEFAULT_PHYSICS.groundY - 182, easeOutCubicNumber(visible));
+    const level = lerp(DEFAULT_PHYSICS.groundY + 88, DEFAULT_PHYSICS.groundY - 760, easeOutCubicNumber(visible));
     event.flood = {
       active: true,
       level,
@@ -4209,14 +4257,14 @@ export class CombatSystem {
     }
     for (const combatant of this.neptuneValidTargets()) {
       const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
-      if (center.y < level - 120) {
+      if (center.y < level - 180) {
         continue;
       }
       const pull = normalize({ x: event.body.x - center.x, y: event.body.y - event.body.radius * 0.9 - center.y });
-      const buoyancy = (center.y - level + 140) / 220;
+      const buoyancy = (center.y - level + 180) / 420;
       this.pushCombatantAndPlayer(combatant.id, {
-        x: pull.x * 240 * event.flood.suck * dt - combatant.velocityX * neptuneFloodDrag * dt,
-        y: -neptuneFloodBuoyancy * clamp(buoyancy, 0.25, 1) * dt + pull.y * 340 * event.flood.suck * dt,
+        x: pull.x * 280 * event.flood.suck * dt - combatant.velocityX * neptuneFloodDrag * dt,
+        y: -neptuneFloodBuoyancy * clamp(buoyancy, 0.35, 1.15) * dt + pull.y * 380 * event.flood.suck * dt,
       }, players);
       combatant.hitstun = Math.max(combatant.hitstun, 0.04);
     }
@@ -4254,12 +4302,18 @@ export class CombatSystem {
     }
   }
 
-  private updateNeptuneLaser(event: NeptuneEventState): void {
+  private updateNeptuneLaser(event: NeptuneEventState, dt: number): void {
     const target = event.laser.targetId ? this.combatants.get(event.laser.targetId) : this.findNeptuneTarget(event);
     if (target && target.respawnTimer <= 0 && target.hp > 0) {
       event.laser.targetId = target.id;
-      event.laser.toX = target.x + target.width / 2;
-      event.laser.toY = target.y + target.height / 2;
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const chase = clamp(event.attackTimer / Math.max(0.01, neptuneLaserDuration - 0.5), 0, 1);
+      const speed = lerp(260, 1180, chase) * dt;
+      const delta = { x: targetCenter.x - event.laser.toX, y: targetCenter.y - event.laser.toY };
+      const distance = Math.max(1, Math.hypot(delta.x, delta.y));
+      const step = Math.min(distance, speed);
+      event.laser.toX += (delta.x / distance) * step;
+      event.laser.toY += (delta.y / distance) * step;
     }
     event.laser.fromX = event.body.x - 18;
     event.laser.fromY = event.body.y - event.body.radius * 1.02;
@@ -4270,20 +4324,64 @@ export class CombatSystem {
     }
     for (const combatant of this.neptuneValidTargets()) {
       const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
-      const closest = nearestPointOnSegment(center, { x: event.laser.fromX, y: event.laser.fromY }, { x: event.laser.toX, y: event.laser.toY });
-      if (closest.distance <= event.laser.width + Math.max(combatant.width, combatant.height) * 0.3) {
+      const distance = Math.hypot(center.x - event.laser.toX, center.y - event.laser.toY);
+      if (distance <= event.laser.width + Math.max(combatant.width, combatant.height) * 0.28) {
         this.applyNeptuneFatalHit(event, combatant, "NEPTUNE LASER", { x: Math.sign(center.x - event.body.x || 1) * 840, y: -560 });
       }
     }
     for (const van of this.damageableVans()) {
       const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
-      const closest = nearestPointOnSegment(center, { x: event.laser.fromX, y: event.laser.fromY }, { x: event.laser.toX, y: event.laser.toY });
-      if (closest.distance <= event.laser.width + van.height * 0.32) {
+      const distance = Math.hypot(center.x - event.laser.toX, center.y - event.laser.toY);
+      if (distance <= event.laser.width + van.height * 0.32) {
         this.damageVan(van.id, 999, event.ownerId, performanceNow(), { x: Math.sign(center.x - event.body.x || 1) * 900, y: -620 });
       }
     }
     if (Math.floor(event.attackTimer * 10) % 4 === 0) {
       this.queueSound("neptune-laser");
+    }
+  }
+
+  private updateNeptuneRain(event: NeptuneEventState, dt: number): void {
+    const previousStep = Math.floor(Math.max(0, event.attackTimer - dt) / neptuneRainSpawnInterval);
+    const currentStep = Math.floor(event.attackTimer / neptuneRainSpawnInterval);
+    if (event.attackTimer < 0.5) {
+      event.leftHand.warningAlpha = Math.max(event.leftHand.warningAlpha, 0.35);
+      event.rightHand.warningAlpha = Math.max(event.rightHand.warningAlpha, 0.35);
+    }
+    for (let step = previousStep + 1; step <= currentStep; step += 1) {
+      if (step < 5) {
+        continue;
+      }
+      const burstCount = 2 + Math.floor(seededUnit(event.seed, event.attackIndex + step, 311) * 3);
+      for (let index = 0; index < burstCount; index += 1) {
+        const seedA = event.attackIndex * 1000 + step * 29 + index * 7;
+        const width = DEFAULT_PHYSICS.platformRight - DEFAULT_PHYSICS.platformLeft;
+        const x = DEFAULT_PHYSICS.platformLeft + 120 + seededUnit(event.seed, seedA, 19) * (width - 240);
+        const radius = 10 + Math.round(seededUnit(event.seed, seedA, 23) * 30);
+        const y = DEFAULT_PHYSICS.groundY - 780 - seededUnit(event.seed, seedA, 31) * 220;
+        this.neptunePellets.push({
+          id: this.makeId("neptune-rain"),
+          eventId: event.id,
+          ownerId: event.ownerId,
+          source: "rain",
+          x,
+          y,
+          vx: (seededUnit(event.seed, seedA, 37) - 0.5) * 90,
+          vy: 360 + radius * 10,
+          radius,
+          damage: 12 + Math.round(radius * 0.62),
+          age: 0,
+          lifetime: 3.6,
+          color: radius > 26 ? "#bdefff" : "#5ad7ff",
+          visualOnly: event.visualOnly,
+        });
+        if (radius > 25) {
+          this.addEffect("tracer", x, DEFAULT_PHYSICS.groundY - 160, x, DEFAULT_PHYSICS.groundY, "#bdefff", "DROP WARN");
+        }
+      }
+    }
+    if (!event.visualOnly && Math.floor(event.attackTimer * 10) % 6 === 0) {
+      this.queueSound("neptune-wave");
     }
   }
 
@@ -4526,6 +4624,7 @@ export class CombatSystem {
       id: this.makeId("neptune-pellet"),
       eventId: event.id,
       ownerId: event.ownerId,
+      source: "clown-fish",
       x: center.x,
       y: center.y,
       vx: aim.x * (360 + radius * 8),
@@ -4543,12 +4642,19 @@ export class CombatSystem {
   private updateNeptunePellets(dt: number): void {
     const expired = new Set<string>();
     for (const pellet of this.neptunePellets) {
+      const rain = pellet.source === "rain";
       pellet.age += dt;
       pellet.x += pellet.vx * dt;
       pellet.y += pellet.vy * dt;
-      pellet.vx *= Math.max(0, 1 - dt * 0.28);
-      pellet.vy += DEFAULT_PHYSICS.gravity * 0.18 * dt;
+      pellet.vx *= Math.max(0, 1 - dt * (rain ? 0.12 : 0.28));
+      pellet.vy += DEFAULT_PHYSICS.gravity * (rain ? 0.06 : 0.18) * dt;
       if (pellet.age > pellet.lifetime || pellet.y > DEFAULT_PHYSICS.groundY + 90) {
+        if (rain && pellet.y > DEFAULT_PHYSICS.groundY - 12) {
+          this.addEffect("spark", pellet.x, DEFAULT_PHYSICS.groundY, pellet.x + pellet.vx * 0.05, DEFAULT_PHYSICS.groundY - 36, pellet.color, "DROP SPLASH");
+          if (pellet.radius > 26) {
+            this.addEffect("shockwave", pellet.x, DEFAULT_PHYSICS.groundY, pellet.x + 80, DEFAULT_PHYSICS.groundY, pellet.color, "BIG SPLASH");
+          }
+        }
         expired.add(pellet.id);
         continue;
       }
@@ -4565,14 +4671,19 @@ export class CombatSystem {
           targetId: target.id,
           weaponId: "neptune",
           damage: pellet.damage,
-          knockback: { x: Math.sign(target.x + target.width / 2 - pellet.x || 1) * (260 + pellet.radius * 10), y: -160 - pellet.radius * 6 },
-          stun: 0.24,
-          label: "WATER PELLET",
+          knockback: rain
+            ? { x: Math.sign(target.x + target.width / 2 - pellet.x || 1) * (360 + pellet.radius * 18), y: -260 - pellet.radius * 9 }
+            : { x: Math.sign(target.x + target.width / 2 - pellet.x || 1) * (260 + pellet.radius * 10), y: -160 - pellet.radius * 6 },
+          stun: rain ? 0.28 + Math.min(0.24, pellet.radius / 130) : 0.24,
+          label: rain ? "WATER DROP" : "WATER PELLET",
           status: pellet.radius > 18 ? "daze" : undefined,
           skipHitLocationScaling: true,
           skipSourceScaling: true,
         });
-        this.addEffect("spark", pellet.x, pellet.y, pellet.x + pellet.vx * 0.05, pellet.y + pellet.vy * 0.05, pellet.color, "SPLASH");
+        this.addEffect("spark", pellet.x, pellet.y, pellet.x + pellet.vx * 0.05, pellet.y + pellet.vy * 0.05, pellet.color, rain ? "DROP SPLASH" : "SPLASH");
+        if (rain && pellet.radius > 26) {
+          this.addEffect("shockwave", pellet.x, pellet.y, pellet.x + 72, pellet.y + 18, pellet.color, "BIG SPLASH");
+        }
         expired.add(pellet.id);
         break;
       }
@@ -10160,6 +10271,67 @@ export class CombatSystem {
     }
   }
 
+  private updateGrabbers(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [ownerId, cooldown] of [...this.grabberCooldowns.entries()]) {
+      const nextCooldown = Math.max(0, cooldown - dt);
+      if (nextCooldown > 0) {
+        this.grabberCooldowns.set(ownerId, nextCooldown);
+      } else {
+        this.grabberCooldowns.delete(ownerId);
+      }
+    }
+
+    for (const [ownerId, loadout] of this.playerLoadouts.entries()) {
+      if (!hasGrabberStrap(loadout) || loadout.grabber) {
+        continue;
+      }
+      if ((this.grabberCooldowns.get(ownerId) ?? 0) > 0) {
+        continue;
+      }
+      const owner = this.combatants.get(ownerId);
+      if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+        continue;
+      }
+      const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+      const target = [...this.combatants.values()]
+        .filter((candidate) => candidate.id !== ownerId && candidate.respawnTimer <= 0 && candidate.hp > 0)
+        .map((candidate) => {
+          const center = { x: candidate.x + candidate.width / 2, y: candidate.y + candidate.height / 2 };
+          return { candidate, center, distance: Math.hypot(center.x - ownerCenter.x, center.y - ownerCenter.y) };
+        })
+        .filter((item) => item.distance <= grabberPunchRadius)
+        .sort((left, right) => left.distance - right.distance)[0];
+      if (!target) {
+        continue;
+      }
+      const direction = normalize({ x: target.center.x - ownerCenter.x || 1, y: target.center.y - ownerCenter.y || -0.15 });
+      const hit = this.applyDamage({
+        sourceId: ownerId,
+        targetId: target.candidate.id,
+        weaponId: "grabber",
+        damage: grabberPunchDamage,
+        knockback: {
+          x: direction.x * grabberPunchKnockback,
+          y: -260 + direction.y * 120,
+        },
+        stun: 0.28,
+        label: "GRABBER PUNCH",
+        status: "daze",
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+      if (!hit.applied) {
+        this.grabberCooldowns.set(ownerId, 0.2);
+        continue;
+      }
+      this.pushCombatantAndPlayer(target.candidate.id, { x: direction.x * 120, y: -60 }, players);
+      this.grabberCooldowns.set(ownerId, grabberPunchCooldown);
+      this.addEffect("whip", ownerCenter.x, ownerCenter.y - 6, target.center.x, target.center.y, colorForWeapon("grabber"), "GRABBER PUNCH");
+      this.addEffect("spark", target.center.x, target.center.y, target.center.x + direction.x * 36, target.center.y - 22, colorForWeapon("grabber"), "Glove");
+      this.queueSound("grabber-punch");
+    }
+  }
+
   private updateContactCooldowns(dt: number): void {
     for (const [key, value] of this.bodyContactCooldowns.entries()) {
       const next = Math.max(0, value - dt);
@@ -10630,6 +10802,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "grabber":
+      return "#f2f2f2";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -10971,21 +11145,6 @@ function distanceBetweenRects(a: RectLike, b: RectLike): number {
   return Math.hypot(ax - bx, ay - by);
 }
 
-function nearestPointOnSegment(point: Vec2, start: Vec2, end: Vec2): { point: Vec2; distance: number } {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const lengthSquared = Math.max(1, dx * dx + dy * dy);
-  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
-  const projected = {
-    x: start.x + dx * t,
-    y: start.y + dy * t,
-  };
-  return {
-    point: projected,
-    distance: Math.hypot(point.x - projected.x, point.y - projected.y),
-  };
-}
-
 function neptuneCreatureProfile(kind: NeptuneCreatureKind): { width: number; height: number; hp: number; speed: number; color: string } {
   switch (kind) {
     case "urchin":
@@ -11010,6 +11169,24 @@ function neptuneCreatureName(kind: NeptuneCreatureKind): string {
     case "clown-fish":
       return "Clown Fish";
   }
+}
+
+function neptuneLaserStartBehindTarget(event: NeptuneEventState, target: Combatant): Vec2 {
+  const center = {
+    x: target.x + target.width / 2,
+    y: target.y + target.height / 2,
+  };
+  const targetMovement = Math.sign(target.velocityX);
+  const bodySide = Math.sign(center.x - event.body.x);
+  const chaseDirection = targetMovement || bodySide || 1;
+  return {
+    x: center.x - chaseDirection * 140,
+    y: center.y - 8,
+  };
+}
+
+function hasGrabberStrap(loadout: Partial<LoadoutState> | undefined): boolean {
+  return loadout?.frontStrap === "grabber" || loadout?.backStrap === "grabber";
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -116,7 +116,13 @@ describe("hybrid 3D rendering foundation", () => {
     expect(chomper.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "upper-jaw", "lower-jaw", "left-eye", "right-eye", "mouth-interior", "teeth", "spikes"]));
     expect(moon.children.map((child) => child.name)).toEqual(expect.arrayContaining(["sphere", "crater-a", "crater-b", "glow"]));
     expect(mars.children.map((child) => child.name)).toEqual(expect.arrayContaining(["planet", "green-glow", "crater-a", "crater-b"]));
-    expect(neptune.children.map((child) => child.name)).toEqual(expect.arrayContaining(["torso", "neck", "head", "crown", "left-hand", "right-hand", "water-glow"]));
+    expect(neptune.children.map((child) => child.name)).toEqual(expect.arrayContaining(["torso", "neck", "head", "crown", "mouth", "left-arm", "right-arm", "left-hand", "right-hand", "water-glow"]));
+    expect(neptune.userData).toEqual(expect.objectContaining({
+      head: expect.any(THREE.Object3D),
+      mouth: expect.any(THREE.Object3D),
+      leftArm: expect.any(THREE.Object3D),
+      rightArm: expect.any(THREE.Object3D),
+    }));
     expect(urchin.children.map((child) => child.name)).toEqual(expect.arrayContaining(["core", "spikes"]));
     expect(octopus.children.map((child) => child.name)).toEqual(expect.arrayContaining(["head", "arm-0", "arm-7"]));
     expect(giantShark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head-wedge", "tail", "dorsal-fin"]));
@@ -172,10 +178,12 @@ describe("hybrid 3D rendering foundation", () => {
       parent,
       enabled: true,
       demoEnabled: true,
+      className: "game-3d-layer game-3d-layer--background",
       rendererFactory: () => renderer,
     });
 
-    expect(parent.querySelector(".game-3d-layer")).toBe(renderer.domElement);
+    expect(parent.querySelector(".game-3d-layer--background")).toBe(renderer.domElement);
+    expect(renderer.domElement.className).toContain("game-3d-layer");
     expect(layer.status).toMatchObject({ available: true, actorCount: 1 });
 
     layer.resize(800, 600);
@@ -261,7 +269,7 @@ describe("hybrid 3D rendering foundation", () => {
             body: { x: 640, y: 260, radius: 260 },
             leftHand: { x: 360, y: 430, radius: 120, warningAlpha: 0 },
             rightHand: { x: 920, y: 430, radius: 120, warningAlpha: 0 },
-            currentAttack: "summon",
+            currentAttack: "rain",
             flood: { active: false, level: 0, alpha: 0, suck: 0 },
             tilt: { active: false, direction: 1, amount: 0, warningAlpha: 0 },
             laser: { active: true, warningAlpha: 1, firing: false, fromX: 640, fromY: 160, toX: 740, toY: 420, width: 24 },
@@ -293,6 +301,9 @@ describe("hybrid 3D rendering foundation", () => {
     expect(layer.getActorObject("mars-planet:mars-a")).toBeInstanceOf(THREE.Group);
     expect(layer.getActorObject("neptune-boss:neptune-a")).toBeInstanceOf(THREE.Group);
     expect(layer.getActorObject("neptune-creature:urchin-a")).toBeInstanceOf(THREE.Group);
+    const neptuneBoss = layer.getActorObject("neptune-boss:neptune-a")!;
+    expect(neptuneBoss.position.z).toBeLessThan(-12);
+    expect(neptuneBoss.scale.x).toBeLessThanOrEqual(3.15);
     const uranus = layer.getActorObject("uranus-planet:uranus-a")!;
     expect(uranus.position.x).toBeCloseTo(0, 1);
     expect(uranus.scale.x).toBeLessThanOrEqual(3.35);

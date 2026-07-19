@@ -101,7 +101,7 @@ export interface Render3DNeptuneVisual {
     warningAlpha: number;
     slamAlpha?: number;
   };
-  currentAttack: "idle" | "flood" | "slam" | "laser" | "summon";
+  currentAttack: "idle" | "flood" | "slam" | "laser" | "summon" | "rain";
   flood: {
     active: boolean;
     level: number;

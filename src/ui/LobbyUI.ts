@@ -433,6 +433,14 @@ export class LobbyUI {
   private renderLoadoutPreview(root: HTMLElement): void {
     const preview = requireElement(root, "[data-loadout-preview]");
     preview.replaceChildren();
+    const loadout = normalizeLoadout(this.profile.loadout);
+    const hasGrabber = loadout.frontStrap === "grabber" || loadout.backStrap === "grabber";
+    const backTargets: Array<{ slot: LoadoutSlotId; label: string; className: string }> = [
+      { slot: "backStrap", label: "Back", className: "back-strap" },
+    ];
+    if (hasGrabber) {
+      backTargets.push({ slot: "grabber", label: "Grabber", className: "grabber" });
+    }
     const views = document.createElement("div");
     views.className = "loadout-views";
     views.append(
@@ -442,9 +450,7 @@ export class LobbyUI {
         { slot: "attachment", label: "F", className: "attachment" },
         { slot: "legs", label: "Legs", className: "left-leg" },
       ]),
-      this.createLoadoutView(root, "back", [
-        { slot: "backStrap", label: "Back", className: "back-strap" },
-      ]),
+      this.createLoadoutView(root, "back", backTargets),
     );
     preview.append(views);
   }
@@ -461,6 +467,11 @@ export class LobbyUI {
     if (normalizeLoadout(this.profile.loadout).legs === "super-legs") {
       figure.classList.add("has-super-legs");
     }
+    const loadout = normalizeLoadout(this.profile.loadout);
+    const hasGrabber = loadout.frontStrap === "grabber" || loadout.backStrap === "grabber";
+    if (view === "back" && hasGrabber) {
+      figure.classList.add("has-grabber");
+    }
 
     const title = document.createElement("div");
     title.className = "loadout-view-title";
@@ -471,6 +482,14 @@ export class LobbyUI {
       const node = document.createElement("span");
       node.className = `loadout-figure-${part}`;
       figure.append(node);
+    }
+    if (view === "back" && hasGrabber) {
+      const arm = document.createElement("span");
+      arm.className = "loadout-grabber-arm";
+      const glove = document.createElement("span");
+      glove.className = "loadout-grabber-glove";
+      arm.append(glove);
+      figure.append(arm);
     }
 
     for (const target of targets) {
@@ -593,7 +612,12 @@ export class LobbyUI {
     const container = requireElement(root, "[data-loadout-slots]");
     const loadout = normalizeLoadout(this.profile.loadout);
     container.replaceChildren();
-    for (const slot of ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment", "legs"] as LoadoutSlotId[]) {
+    const slots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    if (loadout.frontStrap === "grabber" || loadout.backStrap === "grabber") {
+      slots.push("grabber");
+    }
+    slots.push("legs");
+    for (const slot of slots) {
       const weaponId = loadout[slot];
       const button = document.createElement("button");
       button.type = "button";
@@ -1077,6 +1101,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#ffb35c";
     case "wings":
       return "#d9f7ff";
+    case "grabber":
+      return "#f2f2f2";
     case "moon":
       return "#d6f2ff";
     case "jupiter":
@@ -1134,6 +1160,7 @@ function loadoutSlotFromTarget(target: HTMLElement): LoadoutSlotId | null {
     || value === "leftHand"
     || value === "rightHand"
     || value === "attachment"
+    || value === "grabber"
     || value === "legs"
   ) {
     return value;

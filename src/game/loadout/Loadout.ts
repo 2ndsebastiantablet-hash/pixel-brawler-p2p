@@ -1,7 +1,7 @@
 import type { WeaponId } from "../combat/Weapon";
 import { WEAPON_IDS, weaponRegistry } from "../combat/WeaponRegistry";
 
-export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment" | "legs";
+export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment" | "grabber" | "legs";
 export type LoadoutCategory =
   | "all"
   | "guns"
@@ -21,6 +21,7 @@ export interface LoadoutState {
   leftHand?: WeaponId;
   rightHand?: WeaponId;
   attachment?: WeaponId;
+  grabber?: WeaponId;
   legs?: WeaponId;
 }
 
@@ -49,6 +50,7 @@ export const LOADOUT_SLOT_LABELS: Record<LoadoutSlotId, string> = {
   leftHand: "Left Mouse",
   rightHand: "Right Mouse",
   attachment: "F Attachment",
+  grabber: "Grabber",
   legs: "Legs",
 };
 
@@ -84,6 +86,7 @@ const strapWeapons = new Set<WeaponId>([
   "spirit-fighter",
   "van",
   "wings",
+  "grabber",
   "moon",
   "jupiter",
   "uranus",
@@ -111,6 +114,7 @@ export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
   }
   if (attachmentWeapons.has(id)) {
     compatibleSlots.push("attachment");
+    compatibleSlots.push("grabber");
   }
   if (legWeapons.has(id)) {
     compatibleSlots.push("legs");
@@ -141,6 +145,9 @@ export function normalizeLoadout(input: Partial<LoadoutState> = {}): LoadoutStat
   normalizeSlot(input, next, "frontStrap");
   normalizeSlot(input, next, "backStrap");
   normalizeSlot(input, next, "attachment");
+  if (hasGrabberEquipped(next)) {
+    normalizeSlot(input, next, "grabber");
+  }
   normalizeSlot(input, next, "legs");
 
   return next;
@@ -166,8 +173,12 @@ export function assignLoadoutItem(current: Partial<LoadoutState>, slot: LoadoutS
     return next;
   }
 
+  if (slot === "grabber" && !hasGrabberEquipped(next)) {
+    return next;
+  }
+
   next[slot] = weaponId;
-  return next;
+  return normalizeLoadout(next);
 }
 
 export function assignHeldLoadoutItem(current: Partial<LoadoutState>, weaponId: WeaponId): LoadoutState {
@@ -202,6 +213,9 @@ export function swapAttachmentWithHand(
   preferredSlot: Extract<LoadoutSlotId, "leftHand" | "rightHand"> = "rightHand",
 ): { loadout: LoadoutState; swapped: boolean; reason?: string } {
   const next = normalizeLoadout(current);
+  if (hasGrabberEquipped(next)) {
+    return swapAttachmentGrabberWithHand(next, preferredSlot);
+  }
   const attachment = next.attachment;
   const fallbackSlot = preferredSlot === "rightHand" ? "leftHand" : "rightHand";
   const handSlot = next[preferredSlot] ? preferredSlot : fallbackSlot;
@@ -260,6 +274,62 @@ export function swapAttachmentWithHand(
   return { loadout: next, swapped: true };
 }
 
+function swapAttachmentGrabberWithHand(
+  current: LoadoutState,
+  preferredSlot: Extract<LoadoutSlotId, "leftHand" | "rightHand">,
+): { loadout: LoadoutState; swapped: boolean; reason?: string } {
+  const next = { ...current };
+  const fallbackSlot = preferredSlot === "rightHand" ? "leftHand" : "rightHand";
+  const handSlot = next[preferredSlot] ? preferredSlot : next[fallbackSlot] ? fallbackSlot : preferredSlot;
+  const otherSlot = handSlot === "rightHand" ? "leftHand" : "rightHand";
+  const held = next[handSlot];
+  const attachment = next.attachment;
+  const grabberHeld = next.grabber;
+
+  if (!held && !attachment && !grabberHeld) {
+    return { loadout: next, swapped: false, reason: "Nothing to swap" };
+  }
+
+  const nextHand = attachment;
+  const nextAttachment = grabberHeld;
+  const nextGrabber = held;
+  if (nextHand && !isSlotCompatible(nextHand, handSlot)) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(nextHand)} cannot be held` };
+  }
+  if (nextAttachment && !isSlotCompatible(nextAttachment, "attachment")) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(nextAttachment)} cannot attach to ${LOADOUT_SLOT_LABELS.attachment}` };
+  }
+  if (nextGrabber && !isSlotCompatible(nextGrabber, "grabber")) {
+    return { loadout: next, swapped: false, reason: `${loadoutWeaponName(nextGrabber)} cannot attach to ${LOADOUT_SLOT_LABELS.grabber}` };
+  }
+  if (nextHand && isTwoHandedWeapon(nextHand)) {
+    const otherHeld = next[otherSlot];
+    const heldUsesBothHands = held && next.leftHand === held && next.rightHand === held;
+    if (otherHeld && otherHeld !== held && !heldUsesBothHands) {
+      return { loadout: next, swapped: false, reason: `${loadoutWeaponName(nextHand)} needs both hands` };
+    }
+  }
+
+  if (held && next.leftHand === held && next.rightHand === held) {
+    next.leftHand = undefined;
+    next.rightHand = undefined;
+  } else {
+    next[handSlot] = undefined;
+  }
+
+  if (nextHand) {
+    if (isTwoHandedWeapon(nextHand)) {
+      next.leftHand = nextHand;
+      next.rightHand = nextHand;
+    } else {
+      next[handSlot] = nextHand;
+    }
+  }
+  next.attachment = nextAttachment;
+  next.grabber = nextGrabber;
+  return { loadout: normalizeLoadout(next), swapped: true };
+}
+
 export function isSlotCompatible(weaponId: WeaponId, slot: LoadoutSlotId): boolean {
   if (!isKnownWeaponId(weaponId)) {
     return false;
@@ -272,6 +342,9 @@ export function isSlotCompatible(weaponId: WeaponId, slot: LoadoutSlotId): boole
   }
   if (slot === "legs") {
     return legWeapons.has(weaponId);
+  }
+  if (slot === "grabber") {
+    return attachmentWeapons.has(weaponId);
   }
   return attachmentWeapons.has(weaponId);
 }
@@ -298,7 +371,12 @@ export function loadoutHasWeapon(loadout: Partial<LoadoutState>, weaponId: Weapo
     || loadout.leftHand === weaponId
     || loadout.rightHand === weaponId
     || loadout.attachment === weaponId
+    || loadout.grabber === weaponId
     || loadout.legs === weaponId;
+}
+
+function hasGrabberEquipped(loadout: Partial<LoadoutState>): boolean {
+  return loadout.frontStrap === "grabber" || loadout.backStrap === "grabber";
 }
 
 function normalizeHandSlots(input: Partial<LoadoutState>, next: LoadoutState): void {
@@ -356,6 +434,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   }
   if (id === "death-aura" || id === "lightning-rod") {
     return "body";
+  }
+  if (id === "grabber") {
+    return "utility";
   }
   if (id === "spikes" || id === "van" || id === "spirit-fighter") {
     return "body";

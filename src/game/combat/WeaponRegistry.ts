@@ -4,6 +4,7 @@ import { chainsaw } from "./weapons/Chainsaw";
 import { cross } from "./weapons/Cross";
 import { deathAura } from "./weapons/DeathAura";
 import { grapplingHook } from "./weapons/GrapplingHook";
+import { grabber } from "./weapons/Grabber";
 import { hands } from "./weapons/Hands";
 import { holyBazooka } from "./weapons/HolyBazooka";
 import { knife } from "./weapons/Knife";
@@ -47,6 +48,7 @@ export const WEAPON_IDS = [
   "machete",
   "axe",
   "wings",
+  "grabber",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -78,6 +80,7 @@ const ALL_WEAPON_IDS = [
   "machete",
   "axe",
   "wings",
+  "grabber",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -112,6 +115,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   machete,
   axe,
   wings,
+  grabber,
   virginBlood,
   deathAura,
   rocket,
