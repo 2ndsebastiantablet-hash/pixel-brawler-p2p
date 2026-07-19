@@ -135,6 +135,11 @@ export type SoundId =
   | "uranus-flash"
   | "uranus-chomp"
   | "uranus-end"
+  | "neptune-roar"
+  | "neptune-wave"
+  | "neptune-slam"
+  | "neptune-laser"
+  | "neptune-creature"
   | "zombie-spawn"
   | "zombie-bite"
   | "hand-spawn"
@@ -285,6 +290,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "uranus-flash": { category: "heavy", frequency: 980, endFrequency: 180, duration: 0.34, noise: true, minInterval: 0.45 },
   "uranus-chomp": { category: "combat", frequency: 220, endFrequency: 70, duration: 0.16, noise: true, minInterval: 0.14 },
   "uranus-end": { category: "heavy", frequency: 360, endFrequency: 90, duration: 0.34, noise: true, minInterval: 0.35 },
+  "neptune-roar": { category: "heavy", frequency: 58, endFrequency: 620, duration: 0.82, noise: true, minInterval: 0.65 },
+  "neptune-wave": { category: "heavy", frequency: 130, endFrequency: 48, duration: 0.48, noise: true, minInterval: 0.28 },
+  "neptune-slam": { category: "heavy", frequency: 72, endFrequency: 28, duration: 0.46, noise: true, minInterval: 0.22 },
+  "neptune-laser": { category: "heavy", frequency: 1180, endFrequency: 120, duration: 0.3, noise: true, minInterval: 0.18 },
+  "neptune-creature": { category: "combat", frequency: 430, endFrequency: 150, duration: 0.16, noise: true, minInterval: 0.12 },
   "zombie-spawn": { category: "heavy", frequency: 86, endFrequency: 190, duration: 0.28, noise: true, minInterval: 0.24 },
   "zombie-bite": { category: "combat", frequency: 340, endFrequency: 120, duration: 0.11, noise: true, minInterval: 0.14 },
   "hand-spawn": { category: "weapon", frequency: 420, endFrequency: 160, duration: 0.16, type: "square", minInterval: 0.24 },

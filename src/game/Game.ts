@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, SpikeParticleState, SpikeState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -126,6 +126,8 @@ export interface GameDebugSnapshot {
       ringChompers: number;
       moons: number;
       marsPlanets: number;
+      neptuneBosses: number;
+      neptuneCreatures: number;
     };
     error?: string;
   };
@@ -578,6 +580,35 @@ export class Game {
         radius: event.radius,
         spin: event.spin,
       })),
+      neptuneEvents: snapshot.neptuneEvents.map((event) => ({
+        id: event.id,
+        age: event.age,
+        phase: event.phase,
+        timer: event.timer,
+        riseProgress: event.riseProgress,
+        descendProgress: event.descendProgress,
+        roarAlpha: event.roarAlpha,
+        body: { ...event.body },
+        leftHand: { ...event.leftHand },
+        rightHand: { ...event.rightHand },
+        currentAttack: event.currentAttack,
+        flood: { ...event.flood },
+        tilt: { ...event.tilt },
+        laser: { ...event.laser },
+      })),
+      neptuneCreatures: snapshot.neptuneCreatures.map((creature) => ({
+        id: creature.id,
+        kind: creature.kind,
+        x: creature.x,
+        y: creature.y,
+        vx: creature.vx,
+        vy: creature.vy,
+        width: creature.width,
+        height: creature.height,
+        age: creature.age,
+        hp: creature.hp,
+        maxHp: creature.maxHp,
+      })),
     };
   }
 
@@ -605,6 +636,7 @@ export class Game {
     }
     this.drawMoonEventWorld(ctx);
     this.drawMarsEventWorld(ctx);
+    this.drawNeptuneEventWorld(ctx);
     if (uranusWorldVisible) {
       this.drawUranusRingPlatform(ctx);
     } else {
@@ -673,6 +705,7 @@ export class Game {
     this.drawLocalHealth(ctx);
     this.drawJupiterGasOverlay(ctx);
     this.drawUranusFlashOverlay(ctx);
+    this.drawNeptuneEventEffects(ctx);
     this.drawCrosshair(ctx);
     this.drawEventOverlays(ctx);
     if (showSpiritHeart) {
@@ -838,9 +871,9 @@ export class Game {
     this.recordAttack(result, action);
     if (
       (slot === "frontStrap" || slot === "backStrap")
-      && (weaponId === "moon" || weaponId === "jupiter" || weaponId === "uranus" || weaponId === "mars")
+      && (weaponId === "moon" || weaponId === "jupiter" || weaponId === "uranus" || weaponId === "mars" || weaponId === "neptune")
       && result.kind === "utility"
-      && (result.label === "Moonfall" || result.label === "Jupiter" || result.label === "Uranus" || result.label === "Mars")
+      && (result.label === "Moonfall" || result.label === "Jupiter" || result.label === "Uranus" || result.label === "Mars" || result.label === "Neptune")
     ) {
       this.loadout = clearLoadoutSlot(this.loadout, slot);
     }
@@ -1086,7 +1119,11 @@ export class Game {
       case "uranus-impact":
       case "uranus-flash":
       case "uranus-chomp":
-        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : sound === "jupiter-activate" ? 0.34 : sound === "jupiter-tornado" ? 0.26 : sound === "jupiter-burst" ? 0.22 : sound === "uranus-impact" || sound === "uranus-flash" ? 0.32 : sound === "uranus-activate" ? 0.24 : 0.16);
+      case "neptune-roar":
+      case "neptune-wave":
+      case "neptune-slam":
+      case "neptune-laser":
+        this.shakeTimer = Math.max(this.shakeTimer, sound === "holy-bazooka-explode" ? 0.34 : sound === "van-explode" ? 0.26 : sound === "moon-activate" ? 0.24 : sound === "jupiter-activate" ? 0.34 : sound === "jupiter-tornado" ? 0.26 : sound === "jupiter-burst" ? 0.22 : sound === "uranus-impact" || sound === "uranus-flash" ? 0.32 : sound === "uranus-activate" ? 0.24 : sound === "neptune-roar" || sound === "neptune-slam" ? 0.38 : sound === "neptune-wave" ? 0.28 : 0.16);
         break;
       case "lightning-strike":
       case "sniper-shot":
@@ -2289,6 +2326,7 @@ export class Game {
     const snapshot = this.combat.getSnapshot();
     const jupiterSharkIds = new Set(snapshot.jupiterSharks.map((shark) => shark.id));
     const marsCloneById = new Map(snapshot.marsClones.map((clone) => [clone.id, clone]));
+    const neptuneCreatureById = new Map(snapshot.neptuneCreatures.map((creature) => [creature.id, creature]));
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
     }
@@ -2306,10 +2344,15 @@ export class Game {
       if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id) && !jupiterSharkIds.has(combatant.id)) {
         const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
         const marsClone = marsCloneById.get(combatant.id);
+        const neptuneCreature = neptuneCreatureById.get(combatant.id);
         if (zombie) {
           this.drawZombieCombatant(ctx, combatant, zombie);
         } else if (marsClone) {
           this.drawMarsCloneCombatant(ctx, combatant, marsClone);
+        } else if (neptuneCreature) {
+          if (!this.shouldUse3DEventVisuals()) {
+            this.drawNeptuneCreatureCombatant(ctx, combatant, neptuneCreature);
+          }
         } else {
           this.drawCombatant(ctx, combatant);
         }
@@ -2335,6 +2378,9 @@ export class Game {
     }
     for (const beam of snapshot.judgmentBeams) {
       this.drawJudgmentBeam(ctx, beam);
+    }
+    for (const pellet of snapshot.neptunePellets) {
+      this.drawNeptunePellet(ctx, pellet);
     }
     for (const projectile of snapshot.projectiles) {
       this.drawProjectile(ctx, projectile);
@@ -3412,6 +3458,7 @@ export class Game {
     const jupiter = this.combat.getJupiterEventState();
     const uranus = this.combat.getUranusEventState();
     const mars = this.combat.getMarsEventState();
+    const neptune = this.combat.getNeptuneEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     const ammoText = ammo
@@ -3439,6 +3486,7 @@ export class Game {
       jupiter.active ? `Jupiter ${jupiter.timer.toFixed(1)}s - gas ${Math.round(jupiter.gasAlpha * 100)}% - sharks ${jupiter.sharkCount} - step bursts ${jupiter.footstepCount}` : "",
       uranus.active ? `Uranus ${uranus.timer.toFixed(1)}s - ${uranus.phase} - ring ${Math.round(uranus.ringSpeed)}px/s` : "",
       mars.active ? `Mars ${mars.timer.toFixed(1)}s - ${mars.phase} - clones ${mars.cloneCount}` : "",
+      neptune.active ? `Neptune ${neptune.timer.toFixed(1)}s - ${neptune.phase} - ${neptune.attack} - sea ${neptune.creatureCount}${neptune.floodActive ? " - flood" : ""}` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -3719,6 +3767,280 @@ export class Game {
     ctx.lineWidth = 3;
     ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
     ctx.restore();
+  }
+
+  private drawNeptuneEventWorld(ctx: CanvasRenderingContext2D): void {
+    const events = this.combat.getSnapshot().neptuneEvents;
+    if (events.length === 0) {
+      return;
+    }
+    const time = performance.now() * 0.001;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (const event of events) {
+      if (event.tilt.active || Math.abs(event.tilt.amount) > 0.02) {
+        ctx.globalAlpha = 0.16 + Math.abs(event.tilt.amount) * 0.18;
+        ctx.fillStyle = event.tilt.direction < 0 ? "rgba(90, 215, 255, 0.34)" : "rgba(189, 239, 255, 0.28)";
+        ctx.beginPath();
+        if (event.tilt.direction < 0) {
+          ctx.moveTo(0, 0);
+          ctx.lineTo(this.canvas.width * 0.42, 0);
+          ctx.lineTo(0, this.canvas.height);
+        } else {
+          ctx.moveTo(this.canvas.width, 0);
+          ctx.lineTo(this.canvas.width * 0.58, 0);
+          ctx.lineTo(this.canvas.width, this.canvas.height);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (!this.shouldUse3DEventVisuals()) {
+        this.drawNeptuneBossFallback(ctx, event);
+      }
+      if (event.flood.active || event.flood.alpha > 0) {
+        const level = Math.round(event.flood.level - this.camera.y);
+        ctx.globalAlpha = Math.min(0.7, event.flood.alpha);
+        ctx.fillStyle = "rgba(61, 174, 214, 0.64)";
+        ctx.fillRect(0, level, this.canvas.width, this.canvas.height - level);
+        ctx.globalAlpha = Math.min(0.52, event.flood.alpha + 0.16);
+        ctx.fillStyle = "#bdefff";
+        for (let index = 0; index < 24; index += 1) {
+          const x = Math.round((index * 173 + time * 130 + event.age * 45) % (this.canvas.width + 120) - 60);
+          const y = level + 18 + (index % 7) * 34 + Math.round(Math.sin(time * 2.4 + index) * 8);
+          ctx.fillRect(x, y, 64 + (index % 4) * 18, 4);
+        }
+        if (event.flood.suck > 0) {
+          const mouth = this.neptuneScreenPoint({ x: event.body.x, y: event.body.y - event.body.radius * 0.7 });
+          ctx.globalAlpha = Math.min(0.56, event.flood.suck);
+          ctx.strokeStyle = "#d6f2ff";
+          ctx.lineWidth = 5;
+          for (let index = 0; index < 6; index += 1) {
+            ctx.beginPath();
+            ctx.moveTo(0, level + index * 38);
+            ctx.quadraticCurveTo(mouth.x - 160, mouth.y + index * 12, mouth.x, mouth.y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(this.canvas.width, level + index * 42);
+            ctx.quadraticCurveTo(mouth.x + 160, mouth.y - index * 10, mouth.x, mouth.y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawNeptuneBossFallback(ctx: CanvasRenderingContext2D, event: NeptuneEventState): void {
+    const body = this.neptuneScreenPoint(event.body);
+    const radius = Math.round(event.body.radius);
+    ctx.save();
+    ctx.globalAlpha = event.visualOnly ? 0.52 : 0.74;
+    ctx.fillStyle = "rgba(90, 215, 255, 0.14)";
+    ctx.fillRect(body.x - radius - 30, body.y - radius - 30, radius * 2 + 60, radius * 2 + 80);
+    const blues = ["#113e6a", "#1f73a6", "#39b7d7", "#164f7c", "#6ddfff"];
+    for (let face = 0; face < 12; face += 1) {
+      const a0 = face * (Math.PI * 2 / 12) + event.age * 0.04;
+      const a1 = a0 + Math.PI * 2 / 12;
+      ctx.fillStyle = blues[face % blues.length];
+      ctx.beginPath();
+      ctx.moveTo(body.x, body.y);
+      ctx.lineTo(body.x + Math.cos(a0) * radius * 0.92, body.y + Math.sin(a0) * radius * 0.78);
+      ctx.lineTo(body.x + Math.cos(a1) * radius * 0.92, body.y + Math.sin(a1) * radius * 0.78);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = "#bdefff";
+    ctx.fillRect(body.x - 54, body.y - radius - 52, 108, 52);
+    ctx.fillStyle = "#ffd84d";
+    for (let spike = -2; spike <= 2; spike += 1) {
+      ctx.beginPath();
+      ctx.moveTo(body.x + spike * 24, body.y - radius - 48);
+      ctx.lineTo(body.x + spike * 24 + 12, body.y - radius - 94 - Math.abs(spike) * 8);
+      ctx.lineTo(body.x + spike * 24 + 24, body.y - radius - 48);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(body.x - 70, body.y - radius * 0.42, 42, 22);
+    ctx.fillRect(body.x + 28, body.y - radius * 0.42, 42, 22);
+    ctx.fillStyle = "#5ad7ff";
+    ctx.fillRect(body.x - 62, body.y - radius * 0.38, 26, 8);
+    ctx.fillRect(body.x + 36, body.y - radius * 0.38, 26, 8);
+    ctx.fillStyle = "#001018";
+    ctx.fillRect(body.x - 70, body.y - radius * 0.14, 140, 36);
+    ctx.fillStyle = "rgba(90, 215, 255, 0.62)";
+    ctx.fillRect(body.x - 54, body.y - radius * 0.1, 108, 8);
+    this.drawNeptuneHandFallback(ctx, event.leftHand);
+    this.drawNeptuneHandFallback(ctx, event.rightHand);
+    ctx.restore();
+  }
+
+  private drawNeptuneHandFallback(ctx: CanvasRenderingContext2D, hand: NeptuneEventState["leftHand"]): void {
+    const point = this.neptuneScreenPoint(hand);
+    const radius = Math.round(hand.radius);
+    ctx.globalAlpha = 0.62 + hand.slamAlpha * 0.28;
+    ctx.fillStyle = hand.slamAlpha > 0.4 ? "#bdefff" : "#2f93c2";
+    ctx.beginPath();
+    ctx.ellipse(point.x, point.y, radius * 0.84, radius * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5ad7ff";
+    for (let finger = -2; finger <= 2; finger += 1) {
+      ctx.fillRect(point.x + finger * 28 - 11, point.y - radius * 0.64, 22, radius * 0.48);
+    }
+  }
+
+  private drawNeptuneEventEffects(ctx: CanvasRenderingContext2D): void {
+    const events = this.combat.getSnapshot().neptuneEvents;
+    if (events.length === 0) {
+      return;
+    }
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (const event of events) {
+      if (event.roarAlpha > 0) {
+        ctx.globalAlpha = Math.min(1, event.roarAlpha);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "bold 58px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+        ctx.shadowColor = "rgba(90, 215, 255, 0.9)";
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = "#d6f2ff";
+        ctx.fillText("NEPTUNE", this.canvas.width / 2, 112 + (1 - event.roarAlpha) * 26);
+        ctx.shadowBlur = 0;
+      }
+      for (const hand of [event.leftHand, event.rightHand]) {
+        const point = this.neptuneScreenPoint(hand);
+        const alpha = Math.max(hand.warningAlpha * 0.5, hand.slamAlpha * 0.72);
+        if (alpha <= 0) {
+          continue;
+        }
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = hand.slamAlpha > 0.35 ? "#ffffff" : "#5ad7ff";
+        ctx.lineWidth = hand.slamAlpha > 0.35 ? 8 : 3;
+        ctx.beginPath();
+        ctx.ellipse(point.x, point.y, hand.radius, hand.radius * 0.42, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        if (hand.slamAlpha > 0.2) {
+          ctx.globalAlpha = hand.slamAlpha * 0.38;
+          ctx.fillStyle = "#d6f2ff";
+          ctx.fillRect(point.x - hand.radius, point.y - 8, hand.radius * 2, 16);
+        }
+      }
+      if (event.tilt.active && event.tilt.warningAlpha > 0) {
+        ctx.globalAlpha = event.tilt.warningAlpha * 0.62;
+        ctx.fillStyle = "#5ad7ff";
+        const x = event.tilt.direction < 0 ? 18 : this.canvas.width - 208;
+        ctx.fillRect(x, 150, 190, 24);
+        ctx.fillStyle = "#05060a";
+        ctx.font = "bold 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(event.tilt.direction < 0 ? "LEFT SLAM" : "RIGHT SLAM", x + 95, 162);
+      }
+      if (event.laser.active) {
+        const from = this.neptuneScreenPoint({ x: event.laser.fromX, y: event.laser.fromY });
+        const to = this.neptuneScreenPoint({ x: event.laser.toX, y: event.laser.toY });
+        ctx.globalAlpha = event.laser.firing ? 0.92 : 0.32 + event.laser.warningAlpha * 0.36;
+        ctx.strokeStyle = event.laser.firing ? "#ffffff" : "#5ad7ff";
+        ctx.lineWidth = event.laser.firing ? event.laser.width : 5;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        if (event.laser.firing) {
+          ctx.globalAlpha = 0.62;
+          ctx.strokeStyle = "#5ad7ff";
+          ctx.lineWidth = Math.max(3, event.laser.width * 0.34);
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawNeptuneCreatureCombatant(ctx: CanvasRenderingContext2D, combatant: Combatant, creature: NeptuneCreatureState): void {
+    const x = Math.round(combatant.x - this.camera.x);
+    const y = Math.round(combatant.y - this.camera.y);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = creature.visualOnly ? 0.68 : 1;
+    if (creature.kind === "urchin") {
+      ctx.fillStyle = "#17182b";
+      ctx.fillRect(x + 12, y + 12, combatant.width - 24, combatant.height - 24);
+      ctx.fillStyle = "#b096ff";
+      for (let spike = 0; spike < 12; spike += 1) {
+        const angle = spike * Math.PI * 2 / 12 + creature.age * 0.8;
+        ctx.fillRect(Math.round(x + combatant.width / 2 + Math.cos(angle) * 26), Math.round(y + combatant.height / 2 + Math.sin(angle) * 26), 6, 6);
+      }
+    } else if (creature.kind === "octopus") {
+      ctx.fillStyle = "#7e54c9";
+      ctx.fillRect(x + 22, y + 2, 52, 42);
+      ctx.fillStyle = "#b096ff";
+      for (let arm = 0; arm < 8; arm += 1) {
+        const side = arm < 4 ? -1 : 1;
+        ctx.fillRect(x + 44 + side * (10 + (arm % 4) * 8), y + 38 + (arm % 4) * 6, side * 28, 8);
+      }
+    } else if (creature.kind === "giant-shark") {
+      const sharkLike: JupiterSharkState = {
+        id: creature.id,
+        eventId: creature.eventId,
+        ownerId: creature.ownerId,
+        x: creature.x,
+        y: creature.y,
+        vx: creature.vx,
+        vy: creature.vy,
+        width: creature.width,
+        height: creature.height,
+        hp: creature.hp,
+        maxHp: creature.maxHp,
+        age: creature.age,
+        lifetime: creature.lifetime,
+        biteCooldown: creature.attackCooldown,
+        angle: Math.atan2(creature.vy, creature.vx || 1),
+        visualOnly: creature.visualOnly,
+      };
+      this.drawJupiterShark(ctx, sharkLike);
+    } else {
+      ctx.fillStyle = "#ff8f3d";
+      ctx.fillRect(x + 8, y + 10, combatant.width - 18, combatant.height - 18);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x + 18, y + 10, 8, combatant.height - 18);
+      ctx.fillRect(x + 38, y + 10, 8, combatant.height - 18);
+      ctx.fillStyle = "#05060a";
+      ctx.fillRect(x + combatant.width - 20, y + 17, 5, 5);
+      ctx.fillStyle = "#ffcf5a";
+      ctx.fillRect(x - 8, y + 15, 18, 14);
+    }
+    const ratio = creature.hp / Math.max(1, creature.maxHp);
+    ctx.fillStyle = "rgba(5, 6, 10, 0.75)";
+    ctx.fillRect(x, y - 10, combatant.width, 5);
+    ctx.fillStyle = "#5ad7ff";
+    ctx.fillRect(x, y - 10, Math.max(0, combatant.width * ratio), 5);
+    ctx.restore();
+  }
+
+  private drawNeptunePellet(ctx: CanvasRenderingContext2D, pellet: NeptunePelletState): void {
+    const x = Math.round(pellet.x - this.camera.x);
+    const y = Math.round(pellet.y - this.camera.y);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = Math.max(0.2, 1 - pellet.age / pellet.lifetime);
+    ctx.fillStyle = pellet.color;
+    ctx.beginPath();
+    ctx.ellipse(x, y, pellet.radius, Math.max(4, pellet.radius * 0.72), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d6f2ff";
+    ctx.fillRect(x - Math.round(pellet.radius * 0.25), y - Math.round(pellet.radius * 0.32), Math.max(3, Math.round(pellet.radius * 0.45)), 3);
+    ctx.restore();
+  }
+
+  private neptuneScreenPoint(point: { x: number; y: number }): { x: number; y: number } {
+    return {
+      x: Math.round(point.x - this.camera.x),
+      y: Math.round(point.y - this.camera.y),
+    };
   }
 
   private drawMoonEventWorld(ctx: CanvasRenderingContext2D): void {
@@ -4002,6 +4324,7 @@ export class Game {
     const jupiter = this.combat.getJupiterEventState();
     const uranus = this.combat.getUranusEventState();
     const mars = this.combat.getMarsEventState();
+    const neptune = this.combat.getNeptuneEventState();
     const localMoon = this.combat.getMoonEventState(this.localPlayer.state.id);
     const moon = localMoon.active ? localMoon : this.combat.getMoonEventState();
     ctx.save();
@@ -4088,6 +4411,23 @@ export class Game {
       ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
       ctx.fillStyle = "#7cff6b";
       ctx.fillText(`CLONES ${mars.cloneCount} - GREEN EXTRACTION`, x, y + 12);
+    }
+    if (neptune.active) {
+      const x = this.canvas.width / 2;
+      const lowerOffset = (uranus.active ? 56 : 0) + (mars.active ? 56 : 0);
+      const y = this.canvas.height - 86 - lowerOffset;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(4, 21, 32, 0.78)";
+      ctx.fillRect(x - 170, y - 25, 340, 50);
+      ctx.strokeStyle = "rgba(90, 215, 255, 0.72)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 170, y - 25, 340, 50);
+      ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#5ad7ff";
+      ctx.fillText(`NEPTUNE ${neptune.timer.toFixed(1)}s - ${neptune.phase.toUpperCase()}`, x, y - 7);
+      ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      ctx.fillStyle = "#d6f2ff";
+      ctx.fillText(`${neptune.attack.toUpperCase()} - SEA ${neptune.creatureCount}${neptune.floodActive ? " - FLOOD" : ""}`, x, y + 12);
     }
     ctx.restore();
   }
@@ -4218,6 +4558,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffd86a";
     case "mars":
       return "#ff7045";
+    case "neptune":
+      return "#5ad7ff";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -4338,6 +4680,10 @@ function weaponHudDetail(
       return runtime.marsActive
         ? `Mars ${runtime.marsTimer.toFixed(1)}s - ${runtime.marsPhase} - Clones ${runtime.marsCloneCount}`
         : "Q/E one-use green extraction clones";
+    case "neptune":
+      return runtime.neptuneActive
+        ? `Neptune ${runtime.neptuneTimer.toFixed(1)}s - ${runtime.neptunePhase} - ${runtime.neptuneAttack} - Sea ${runtime.neptuneCreatureCount}`
+        : "Q/E one-use boss event - flood, tilt, lasers, sea creatures";
     case "rocket":
       return runtime.rocketRiding ? "RIDING - Space jumps off" : runtime.rocketLit ? "Rocket lit - chaos rising" : runtime.rocketActive ? "Right click lights rocket" : "Left click places rocket";
     case "holy-bazooka":
@@ -4439,6 +4785,8 @@ function weaponHelper(id: WeaponId): string {
       return "Q/E one-use Uranus event - falling flash, moving ring, Ring Chomper";
     case "mars":
       return "Q/E one-use Mars event - green lasers pull out AI clones";
+    case "neptune":
+      return "Q/E one-use Neptune boss - flood, tilt, lasers, killable sea creatures";
     case "hands":
       return "Summon 5 face hands - lose your own hands for 40s";
     default:

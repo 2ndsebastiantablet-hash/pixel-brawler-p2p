@@ -330,6 +330,114 @@ export interface MarsCloneState {
   visualOnly?: boolean;
 }
 
+export type NeptuneEventPhase = "intro" | "active" | "ending";
+export type NeptuneAttackKind = "idle" | "flood" | "slam" | "laser" | "summon";
+type NeptuneRealAttackKind = Exclude<NeptuneAttackKind, "idle">;
+export type NeptuneCreatureKind = "urchin" | "octopus" | "giant-shark" | "clown-fish";
+
+export interface NeptuneHandState {
+  x: number;
+  y: number;
+  radius: number;
+  warningAlpha: number;
+  slamAlpha: number;
+}
+
+export interface NeptuneFloodState {
+  active: boolean;
+  level: number;
+  alpha: number;
+  suck: number;
+}
+
+export interface NeptuneTiltState {
+  active: boolean;
+  direction: -1 | 1;
+  amount: number;
+  warningAlpha: number;
+}
+
+export interface NeptuneLaserState {
+  active: boolean;
+  warningAlpha: number;
+  firing: boolean;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  width: number;
+  targetId?: string;
+}
+
+export interface NeptuneEventState {
+  id: string;
+  ownerId: string;
+  timer: number;
+  duration: number;
+  age: number;
+  phase: NeptuneEventPhase;
+  phaseTimer: number;
+  riseProgress: number;
+  descendProgress: number;
+  roarAlpha: number;
+  body: {
+    x: number;
+    y: number;
+    radius: number;
+  };
+  leftHand: NeptuneHandState;
+  rightHand: NeptuneHandState;
+  seed: number;
+  currentAttack: NeptuneAttackKind;
+  attackTimer: number;
+  attackIndex: number;
+  attackBag: NeptuneRealAttackKind[];
+  attackHistory: NeptuneAttackKind[];
+  flood: NeptuneFloodState;
+  tilt: NeptuneTiltState;
+  laser: NeptuneLaserState;
+  summonWave: number;
+  visualOnly?: boolean;
+}
+
+export interface NeptuneCreatureState {
+  id: string;
+  eventId: string;
+  ownerId: string;
+  kind: NeptuneCreatureKind;
+  targetId?: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  hp: number;
+  maxHp: number;
+  age: number;
+  lifetime: number;
+  attackCooldown: number;
+  grabbedTargetIds: string[];
+  stuckTargetIds: string[];
+  visualOnly?: boolean;
+}
+
+export interface NeptunePelletState {
+  id: string;
+  eventId: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  damage: number;
+  age: number;
+  lifetime: number;
+  color: string;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -460,6 +568,9 @@ export interface CombatSnapshot {
   uranusEvents: UranusEventState[];
   marsEvents: MarsEventState[];
   marsClones: MarsCloneState[];
+  neptuneEvents: NeptuneEventState[];
+  neptuneCreatures: NeptuneCreatureState[];
+  neptunePellets: NeptunePelletState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -666,6 +777,7 @@ const uranusFlashDuration = 1;
 const uranusRingSpeed = 128;
 const uranusInitialLeftKillX = -340;
 const uranusChomperRadius = 112;
+const uranusChomperOffset = 168;
 const marsEventDuration = 60;
 const marsRiseDuration = 1.15;
 const marsBeamDuration = 1.05;
@@ -677,6 +789,24 @@ const marsCloneReformDuration = 6.2;
 const marsCloneMaxSpeed = 285;
 const marsCloneAcceleration = 980;
 const marsCloneJumpVelocity = -610;
+const neptuneEventDuration = 60;
+const neptuneIntroDuration = 3.8;
+const neptuneEndingDuration = 4.2;
+const neptuneBodyRadius = 272;
+const neptuneHandRadius = 128;
+const neptuneFloodDuration = 5.2;
+const neptuneSlamDuration = 3.3;
+const neptuneLaserDuration = 3.8;
+const neptuneSummonDuration = 4.2;
+const neptuneFloodBuoyancy = 980;
+const neptuneFloodDrag = 0.72;
+const neptuneTiltSlideAcceleration = 680;
+const neptuneLaserDamage = 999;
+const neptuneLaserWidth = 28;
+const neptuneCreaturePoisonDuration = 10;
+const neptuneCreatureStuckDuration = 10;
+const neptunePelletLifetime = 3.2;
+const neptuneAttackCycle: NeptuneRealAttackKind[] = ["flood", "slam", "laser", "summon"];
 const zombieRiseDuration = 1.08;
 const zombieDetectRange = 560;
 const zombieBiteRange = 48;
@@ -857,6 +987,12 @@ export interface WeaponRuntimeState {
   marsTimer: number;
   marsPhase: MarsEventPhase | "idle";
   marsCloneCount: number;
+  neptuneActive: boolean;
+  neptuneTimer: number;
+  neptunePhase: NeptuneEventPhase | "idle";
+  neptuneAttack: NeptuneAttackKind;
+  neptuneCreatureCount: number;
+  neptuneFloodActive: boolean;
   zombieCount: number;
   attachedHands: number;
 }
@@ -909,6 +1045,9 @@ export class CombatSystem {
   private readonly uranusEvents: UranusEventState[] = [];
   private readonly marsEvents: MarsEventState[] = [];
   private readonly marsClones = new Map<string, MarsCloneState>();
+  private readonly neptuneEvents: NeptuneEventState[] = [];
+  private readonly neptuneCreatures = new Map<string, NeptuneCreatureState>();
+  private readonly neptunePellets: NeptunePelletState[] = [];
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -962,6 +1101,9 @@ export class CombatSystem {
     this.uranusEvents.length = 0;
     this.marsEvents.length = 0;
     this.marsClones.clear();
+    this.neptuneEvents.length = 0;
+    this.neptuneCreatures.clear();
+    this.neptunePellets.length = 0;
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1080,6 +1222,10 @@ export class CombatSystem {
       this.removeMarsClone(id, "CLONE GONE");
       return;
     }
+    if (this.neptuneCreatures.has(id)) {
+      this.removeNeptuneCreature(id, "CREATURE GONE");
+      return;
+    }
     if (this.spikeModes.has(id)) {
       this.endSpikeMode(id, false);
       this.spikeModes.delete(id);
@@ -1093,6 +1239,7 @@ export class CombatSystem {
     this.removeJupiterStateForOwner(id);
     this.removeUranusStateForOwner(id);
     this.removeMarsStateForOwner(id);
+    this.removeNeptuneStateForOwner(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1104,6 +1251,13 @@ export class CombatSystem {
       if (clone.targetId === id) {
         this.removeMarsClone(clone.id, "TARGET LOST");
       }
+    }
+    for (const creature of this.neptuneCreatures.values()) {
+      if (creature.targetId === id) {
+        creature.targetId = undefined;
+      }
+      removeWhere(creature.grabbedTargetIds, (targetId) => targetId === id);
+      removeWhere(creature.stuckTargetIds, (targetId) => targetId === id);
     }
     this.combatants.delete(id);
   }
@@ -1154,6 +1308,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "mars") {
       return this.activateMarsEvent(context);
+    }
+    if (this.inventory.equippedWeapon === "neptune") {
+      return this.activateNeptuneEvent(context);
     }
     if (this.inventory.equippedWeapon === "super-legs") {
       return { kind: "blocked", weaponId: "super-legs", label: "Super Legs passive" };
@@ -1219,6 +1376,9 @@ export class CombatSystem {
     }
     if (weapon.id === "mars") {
       return { kind: "blocked", weaponId: weapon.id, label: "Mars uses Q/E" };
+    }
+    if (weapon.id === "neptune") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Neptune uses Q/E" };
     }
     if (weapon.id === "super-legs") {
       return { kind: "blocked", weaponId: weapon.id, label: "Super Legs passive" };
@@ -1578,6 +1738,7 @@ export class CombatSystem {
     this.updateJupiterEvents(dt, players);
     this.updateUranusEvents(dt, players);
     this.updateMarsEvents(dt);
+    this.updateNeptuneEvents(dt, players);
     this.updateProjectiles(dt, players);
     this.updateCross(dt, players);
     this.updateTeleports(dt, players);
@@ -1628,7 +1789,10 @@ export class CombatSystem {
   }
 
   isMovementLocked(ownerId: string): boolean {
-    return this.axeRushes.has(ownerId) || this.spikeImpales.has(ownerId) || Boolean(this.getVanDrivenBy(ownerId));
+    return this.axeRushes.has(ownerId)
+      || this.spikeImpales.has(ownerId)
+      || Boolean(this.getVanDrivenBy(ownerId))
+      || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"));
   }
 
   getVirginBloodState(ownerId: string): { reviveAvailable: boolean; cooldown: number } {
@@ -1772,6 +1936,7 @@ export class CombatSystem {
     const jupiter = this.getJupiterEventForOwner(ownerId);
     const uranus = this.getUranusEventForOwner(ownerId);
     const mars = this.getMarsEventForOwner(ownerId);
+    const neptune = this.getNeptuneEventForOwner(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -1862,6 +2027,12 @@ export class CombatSystem {
       marsTimer: mars?.timer ?? 0,
       marsPhase: mars?.phase ?? "idle",
       marsCloneCount: mars ? [...this.marsClones.values()].filter((clone) => clone.eventId === mars.id && clone.phase !== "disintegrating").length : 0,
+      neptuneActive: Boolean(neptune && neptune.timer > 0),
+      neptuneTimer: neptune?.timer ?? 0,
+      neptunePhase: neptune?.phase ?? "idle",
+      neptuneAttack: neptune?.currentAttack ?? "idle",
+      neptuneCreatureCount: neptune ? [...this.neptuneCreatures.values()].filter((creature) => creature.eventId === neptune.id).length : 0,
+      neptuneFloodActive: neptune?.flood.active ?? false,
       zombieCount: [...this.zombies.values()].filter((zombie) => zombie.ownerId === ownerId).length,
       attachedHands: this.handAttachments.get(ownerId)?.attached ?? 0,
     };
@@ -1944,6 +2115,31 @@ export class CombatSystem {
       ownerId: active?.ownerId,
       phase: active?.phase ?? "idle",
       cloneCount: active ? [...this.marsClones.values()].filter((clone) => clone.eventId === active.id && clone.phase !== "disintegrating").length : 0,
+    };
+  }
+
+  getNeptuneEventState(ownerId?: string): {
+    active: boolean;
+    timer: number;
+    ownerId?: string;
+    phase: NeptuneEventPhase | "idle";
+    attack: NeptuneAttackKind;
+    creatureCount: number;
+    floodActive: boolean;
+    tiltAmount: number;
+  } {
+    const active = ownerId
+      ? this.getNeptuneEventForOwner(ownerId)
+      : [...this.neptuneEvents].filter((state) => state.timer > 0).sort((left, right) => right.timer - left.timer)[0];
+    return {
+      active: Boolean(active && active.timer > 0),
+      timer: active?.timer ?? 0,
+      ownerId: active?.ownerId,
+      phase: active?.phase ?? "idle",
+      attack: active?.currentAttack ?? "idle",
+      creatureCount: active ? [...this.neptuneCreatures.values()].filter((creature) => creature.eventId === active.id).length : 0,
+      floodActive: active?.flood.active ?? false,
+      tiltAmount: active?.tilt.amount ?? 0,
     };
   }
 
@@ -2098,7 +2294,7 @@ export class CombatSystem {
       leftKillX: uranusInitialLeftKillX,
       seed,
       chomper: {
-        x: uranusInitialLeftKillX + 92,
+        x: uranusInitialLeftKillX + uranusChomperOffset,
         y: DEFAULT_PHYSICS.groundY - 78,
         radius: uranusChomperRadius,
         mouthOpen: 0,
@@ -2164,6 +2360,92 @@ export class CombatSystem {
     if (!visualOnly) {
       this.queueSound("jupiter-activate");
       this.queueSound("lightning-strike");
+    }
+    return event;
+  }
+
+  private activateNeptuneEvent(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "neptune";
+    const existing = this.getNeptuneEventForOwner(context.ownerId);
+    if (existing && existing.timer > 0) {
+      return { kind: "blocked", weaponId, label: "Neptune active" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No bearer" };
+    }
+    const origin = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const seed = Math.floor((context.now || performanceNow()) + context.ownerId.length * 11087) % 1000000;
+    this.startNeptuneEvent(context.ownerId, origin, false, seed);
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", origin, { x: 0, y: -1 }, "Neptune", context.now, {
+      range: seed,
+    }));
+    return { kind: "utility", weaponId, label: "Neptune" };
+  }
+
+  private startNeptuneEvent(ownerId: string, origin: Vec2, visualOnly: boolean, seed: number): NeptuneEventState {
+    const existing = this.getNeptuneEventForOwner(ownerId);
+    if (existing && existing.timer > 0) {
+      return existing;
+    }
+    const bodyX = clamp(origin.x, DEFAULT_PHYSICS.platformLeft + 420, DEFAULT_PHYSICS.platformRight - 420);
+    const event: NeptuneEventState = {
+      id: this.makeId(visualOnly ? "remote-neptune" : "neptune"),
+      ownerId,
+      timer: neptuneEventDuration,
+      duration: neptuneEventDuration,
+      age: 0,
+      phase: "intro",
+      phaseTimer: 0,
+      riseProgress: 0,
+      descendProgress: 0,
+      roarAlpha: 1,
+      body: {
+        x: bodyX,
+        y: DEFAULT_PHYSICS.groundY + neptuneBodyRadius * 0.78,
+        radius: neptuneBodyRadius,
+      },
+      leftHand: {
+        x: bodyX - 330,
+        y: DEFAULT_PHYSICS.groundY + neptuneHandRadius * 0.45,
+        radius: neptuneHandRadius,
+        warningAlpha: 1,
+        slamAlpha: 0,
+      },
+      rightHand: {
+        x: bodyX + 330,
+        y: DEFAULT_PHYSICS.groundY + neptuneHandRadius * 0.45,
+        radius: neptuneHandRadius,
+        warningAlpha: 1,
+        slamAlpha: 0,
+      },
+      seed,
+      currentAttack: "idle",
+      attackTimer: 0,
+      attackIndex: 0,
+      attackBag: [],
+      attackHistory: [],
+      flood: { active: false, level: DEFAULT_PHYSICS.groundY + 80, alpha: 0, suck: 0 },
+      tilt: { active: false, direction: 1, amount: 0, warningAlpha: 0 },
+      laser: {
+        active: false,
+        warningAlpha: 0,
+        firing: false,
+        fromX: bodyX,
+        fromY: DEFAULT_PHYSICS.groundY - 430,
+        toX: bodyX,
+        toY: DEFAULT_PHYSICS.groundY - 120,
+        width: neptuneLaserWidth,
+      },
+      summonWave: 0,
+      visualOnly,
+    };
+    this.neptuneEvents.push(event);
+    this.addEffect("shockwave", bodyX, DEFAULT_PHYSICS.groundY, bodyX + 340, DEFAULT_PHYSICS.groundY, colorForWeapon("neptune"), "NEPTUNE RISE");
+    this.addEffect("aura", bodyX, DEFAULT_PHYSICS.groundY, bodyX, DEFAULT_PHYSICS.groundY - 360, "#5ad7ff", "NEPTUNE");
+    if (!visualOnly) {
+      this.queueSound("neptune-roar");
+      this.queueSound("neptune-wave");
     }
     return event;
   }
@@ -3242,7 +3524,7 @@ export class CombatSystem {
     event.leftKillX = uranusInitialLeftKillX + event.ringScroll;
     event.chomper.mouthOpen = 0.2 + 0.8 * ((Math.sin(event.age * 7.2 + event.seed * 0.001) + 1) / 2);
     event.chomper.mouthAngle = -0.1 + event.chomper.mouthOpen * 0.95;
-    event.chomper.x = event.leftKillX + 92;
+    event.chomper.x = event.leftKillX + uranusChomperOffset;
     event.chomper.y = DEFAULT_PHYSICS.groundY - 80 + Math.sin(event.age * 3.1) * 10;
     event.chomper.mouthRadius = event.chomper.radius * (0.62 + event.chomper.mouthOpen * 0.26);
     if (event.visualOnly) {
@@ -3714,6 +3996,709 @@ export class CombatSystem {
     return this.marsClones.has(id);
   }
 
+  private getNeptuneEventForOwner(ownerId: string): NeptuneEventState | undefined {
+    return [...this.neptuneEvents].reverse().find((event) => event.ownerId === ownerId && event.timer > 0);
+  }
+
+  private updateNeptuneEvents(dt: number, players: PlayerPhysicsState[]): void {
+    if (this.neptuneEvents.length === 0 && this.neptuneCreatures.size === 0 && this.neptunePellets.length === 0) {
+      return;
+    }
+    const ended: NeptuneEventState[] = [];
+    for (const event of this.neptuneEvents) {
+      event.age += dt;
+      event.timer = Math.max(0, event.timer - dt);
+      this.updateNeptunePhase(event, dt);
+      this.updateNeptuneBody(event);
+      if (event.phase === "intro") {
+        this.applyNeptuneHandCrush(event);
+      }
+      if (event.phase === "active") {
+        this.updateNeptuneActiveAttack(event, dt, players);
+      }
+      if (event.timer <= 0) {
+        ended.push(event);
+      }
+    }
+    this.updateNeptuneCreatures(dt);
+    this.updateNeptunePellets(dt);
+    for (const event of ended) {
+      this.finishNeptuneEvent(event);
+    }
+  }
+
+  private updateNeptunePhase(event: NeptuneEventState, dt: number): void {
+    event.phaseTimer += dt;
+    event.descendProgress = event.timer <= neptuneEndingDuration
+      ? clamp(1 - event.timer / neptuneEndingDuration, 0, 1)
+      : 0;
+    event.roarAlpha = event.phase === "intro" ? clamp(1 - event.phaseTimer / 1.8, 0, 1) : 0;
+    if (event.timer <= neptuneEndingDuration && event.phase !== "ending") {
+      event.phase = "ending";
+      event.phaseTimer = neptuneEndingDuration - event.timer;
+      event.currentAttack = "idle";
+      event.flood = { active: false, level: DEFAULT_PHYSICS.groundY + 80, alpha: 0, suck: 0 };
+      event.tilt = { active: false, direction: event.tilt.direction, amount: 0, warningAlpha: 0 };
+      event.laser = { ...event.laser, active: false, warningAlpha: 0, firing: false };
+      return;
+    }
+    if (event.phase === "intro") {
+      event.riseProgress = clamp(event.phaseTimer / neptuneIntroDuration, 0, 1);
+      if (event.phaseTimer >= neptuneIntroDuration) {
+        event.phase = "active";
+        event.phaseTimer = 0;
+        event.riseProgress = 1;
+        this.beginNeptuneAttack(event);
+      }
+      return;
+    }
+    if (event.phase === "ending") {
+      event.riseProgress = 1 - event.descendProgress;
+    }
+  }
+
+  private updateNeptuneBody(event: NeptuneEventState): void {
+    const rise = easeOutCubicNumber(event.riseProgress);
+    const descend = easeInCubicNumber(event.descendProgress);
+    const hiddenY = DEFAULT_PHYSICS.groundY + neptuneBodyRadius * 0.82;
+    const visibleY = DEFAULT_PHYSICS.groundY - neptuneBodyRadius * 0.72;
+    event.body.y = lerp(hiddenY, visibleY, rise);
+    if (event.phase === "ending") {
+      event.body.y = lerp(visibleY, hiddenY, descend);
+    }
+    const handBaseY = DEFAULT_PHYSICS.groundY + neptuneHandRadius * 0.45;
+    const handVisibleY = DEFAULT_PHYSICS.groundY - neptuneHandRadius * 0.18;
+    event.leftHand.y = lerp(handBaseY, handVisibleY, Math.min(1, rise * 1.18));
+    event.rightHand.y = event.leftHand.y + Math.sin(event.age * 1.7) * 5;
+    if (event.phase === "ending") {
+      const y = lerp(handVisibleY, handBaseY, descend);
+      event.leftHand.y = y;
+      event.rightHand.y = y;
+    }
+    event.leftHand.warningAlpha = event.phase === "intro" ? clamp(1 - event.phaseTimer / neptuneIntroDuration, 0.15, 1) : 0;
+    event.rightHand.warningAlpha = event.leftHand.warningAlpha;
+    const introSlam = event.phase === "intro" && event.phaseTimer > 0.35 && event.phaseTimer < 1.45
+      ? Math.sin(clamp((event.phaseTimer - 0.35) / 1.1, 0, 1) * Math.PI)
+      : 0;
+    event.leftHand.slamAlpha = Math.max(introSlam, event.leftHand.slamAlpha * 0.8);
+    event.rightHand.slamAlpha = Math.max(introSlam, event.rightHand.slamAlpha * 0.8);
+  }
+
+  private beginNeptuneAttack(event: NeptuneEventState): void {
+    const attack = this.nextNeptuneAttack(event);
+    event.attackIndex += 1;
+    event.currentAttack = attack;
+    event.attackTimer = 0;
+    event.attackHistory = [...event.attackHistory, attack].slice(-12);
+    event.flood = { active: false, level: DEFAULT_PHYSICS.groundY + 80, alpha: 0, suck: 0 };
+    event.tilt = {
+      active: false,
+      direction: seededUnit(event.seed, event.attackIndex, 97) < 0.5 ? -1 : 1,
+      amount: 0,
+      warningAlpha: 0,
+    };
+    event.laser = {
+      ...event.laser,
+      active: false,
+      warningAlpha: 0,
+      firing: false,
+      targetId: undefined,
+      width: neptuneLaserWidth,
+    };
+    if (attack === "flood") {
+      event.flood.active = true;
+      event.flood.alpha = 0.42;
+      this.addEffect("shockwave", event.body.x, DEFAULT_PHYSICS.groundY, event.body.x, DEFAULT_PHYSICS.groundY - 260, colorForWeapon("neptune"), "FLOOD");
+      if (!event.visualOnly) {
+        this.queueSound("neptune-wave");
+      }
+    } else if (attack === "slam") {
+      event.tilt.active = true;
+      event.tilt.warningAlpha = 1;
+      this.addEffect("slam", event.tilt.direction < 0 ? DEFAULT_PHYSICS.platformLeft + 160 : DEFAULT_PHYSICS.platformRight - 160, DEFAULT_PHYSICS.groundY, event.body.x, event.body.y, colorForWeapon("neptune"), "HAND SLAM");
+    } else if (attack === "laser") {
+      event.laser.active = true;
+      event.laser.warningAlpha = 1;
+      const target = this.findNeptuneTarget(event);
+      event.laser.targetId = target?.id;
+      const to = target
+        ? { x: target.x + target.width / 2, y: target.y + target.height / 2 }
+        : { x: event.body.x + (seededUnit(event.seed, event.attackIndex, 211) - 0.5) * 720, y: DEFAULT_PHYSICS.groundY - 120 };
+      event.laser.fromX = event.body.x;
+      event.laser.fromY = event.body.y - event.body.radius * 1.02;
+      event.laser.toX = to.x;
+      event.laser.toY = to.y;
+    } else if (attack === "summon") {
+      event.summonWave += 1;
+      this.spawnNeptuneWaveCreatures(event);
+      if (!event.visualOnly) {
+        this.queueSound("neptune-creature");
+      }
+    }
+  }
+
+  private nextNeptuneAttack(event: NeptuneEventState): NeptuneRealAttackKind {
+    if (event.attackIndex === 0) {
+      return "flood";
+    }
+    if (event.attackBag.length === 0) {
+      this.refillNeptuneAttackBag(event);
+    }
+    return event.attackBag.shift() ?? "summon";
+  }
+
+  private refillNeptuneAttackBag(event: NeptuneEventState): void {
+    const source = event.attackHistory.length <= 1
+      ? neptuneAttackCycle.filter((attack) => attack !== "flood")
+      : [...neptuneAttackCycle];
+    for (let index = source.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(seededUnit(event.seed, event.attackIndex + index, 1201 + index * 61) * (index + 1));
+      [source[index], source[swapIndex]] = [source[swapIndex], source[index]];
+    }
+    if (source.length > 1 && source[0] === event.currentAttack) {
+      const swapIndex = 1 + Math.floor(seededUnit(event.seed, event.attackIndex, 1747) * (source.length - 1));
+      [source[0], source[swapIndex]] = [source[swapIndex], source[0]];
+    }
+    event.attackBag = source;
+  }
+
+  private updateNeptuneActiveAttack(event: NeptuneEventState, dt: number, players: PlayerPhysicsState[]): void {
+    if (event.currentAttack === "idle") {
+      this.beginNeptuneAttack(event);
+    }
+    event.attackTimer += dt;
+    if (event.currentAttack === "flood") {
+      this.updateNeptuneFlood(event, dt, players);
+      if (event.attackTimer >= neptuneFloodDuration) {
+        this.beginNeptuneAttack(event);
+      }
+      return;
+    }
+    if (event.currentAttack === "slam") {
+      this.updateNeptuneSlam(event, dt, players);
+      if (event.attackTimer >= neptuneSlamDuration) {
+        this.beginNeptuneAttack(event);
+      }
+      return;
+    }
+    if (event.currentAttack === "laser") {
+      this.updateNeptuneLaser(event);
+      if (event.attackTimer >= neptuneLaserDuration) {
+        this.beginNeptuneAttack(event);
+      }
+      return;
+    }
+    if (event.currentAttack === "summon" && event.attackTimer >= neptuneSummonDuration) {
+      this.beginNeptuneAttack(event);
+    }
+  }
+
+  private updateNeptuneFlood(event: NeptuneEventState, dt: number, players: PlayerPhysicsState[]): void {
+    const fill = clamp(event.attackTimer / 1.2, 0, 1);
+    const drain = clamp((neptuneFloodDuration - event.attackTimer) / 1.2, 0, 1);
+    const visible = Math.min(fill, drain);
+    const level = lerp(DEFAULT_PHYSICS.groundY + 88, DEFAULT_PHYSICS.groundY - 182, easeOutCubicNumber(visible));
+    event.flood = {
+      active: true,
+      level,
+      alpha: 0.18 + visible * 0.52,
+      suck: event.attackTimer > neptuneFloodDuration - 1.25 ? clamp((event.attackTimer - (neptuneFloodDuration - 1.25)) / 1.25, 0, 1) : 0,
+    };
+    if (event.visualOnly) {
+      return;
+    }
+    for (const combatant of this.neptuneValidTargets()) {
+      const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+      if (center.y < level - 120) {
+        continue;
+      }
+      const pull = normalize({ x: event.body.x - center.x, y: event.body.y - event.body.radius * 0.9 - center.y });
+      const buoyancy = (center.y - level + 140) / 220;
+      this.pushCombatantAndPlayer(combatant.id, {
+        x: pull.x * 240 * event.flood.suck * dt - combatant.velocityX * neptuneFloodDrag * dt,
+        y: -neptuneFloodBuoyancy * clamp(buoyancy, 0.25, 1) * dt + pull.y * 340 * event.flood.suck * dt,
+      }, players);
+      combatant.hitstun = Math.max(combatant.hitstun, 0.04);
+    }
+    for (const van of this.damageableVans()) {
+      if (van.y + van.height > level) {
+        van.velocityY -= neptuneFloodBuoyancy * 0.42 * dt;
+        van.velocityX *= Math.max(0, 1 - dt * 0.9);
+      }
+    }
+  }
+
+  private updateNeptuneSlam(event: NeptuneEventState, dt: number, players: PlayerPhysicsState[]): void {
+    const warn = clamp(1 - event.attackTimer / 1.05, 0, 1);
+    const slam = event.attackTimer >= 1.05 && event.attackTimer <= 1.55
+      ? Math.sin(clamp((event.attackTimer - 1.05) / 0.5, 0, 1) * Math.PI)
+      : 0;
+    event.tilt.active = true;
+    event.tilt.warningAlpha = warn;
+    event.tilt.amount = event.attackTimer < 1.05 ? 0 : event.tilt.direction * clamp((event.attackTimer - 1.05) / 0.65, 0, 1) * clamp((neptuneSlamDuration - event.attackTimer) / 1.2, 0, 1);
+    const hand = event.tilt.direction < 0 ? event.leftHand : event.rightHand;
+    hand.slamAlpha = Math.max(hand.slamAlpha * 0.78, slam);
+    hand.warningAlpha = Math.max(hand.warningAlpha, warn);
+    if (!event.visualOnly && slam > 0.72) {
+      this.applyNeptuneHandCrush(event);
+      for (const combatant of this.neptuneValidTargets()) {
+        this.pushCombatantAndPlayer(combatant.id, {
+          x: event.tilt.direction * neptuneTiltSlideAcceleration * dt,
+          y: -120 * dt,
+        }, players);
+      }
+      for (const van of this.damageableVans()) {
+        van.velocityX += event.tilt.direction * neptuneTiltSlideAcceleration * 0.7 * dt;
+      }
+      this.queueSound("neptune-slam");
+    }
+  }
+
+  private updateNeptuneLaser(event: NeptuneEventState): void {
+    const target = event.laser.targetId ? this.combatants.get(event.laser.targetId) : this.findNeptuneTarget(event);
+    if (target && target.respawnTimer <= 0 && target.hp > 0) {
+      event.laser.targetId = target.id;
+      event.laser.toX = target.x + target.width / 2;
+      event.laser.toY = target.y + target.height / 2;
+    }
+    event.laser.fromX = event.body.x - 18;
+    event.laser.fromY = event.body.y - event.body.radius * 1.02;
+    event.laser.warningAlpha = clamp(1 - event.attackTimer / 1.15, 0, 1);
+    event.laser.firing = event.attackTimer >= 1.15 && event.attackTimer <= neptuneLaserDuration - 0.35;
+    if (!event.laser.firing || event.visualOnly) {
+      return;
+    }
+    for (const combatant of this.neptuneValidTargets()) {
+      const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+      const closest = nearestPointOnSegment(center, { x: event.laser.fromX, y: event.laser.fromY }, { x: event.laser.toX, y: event.laser.toY });
+      if (closest.distance <= event.laser.width + Math.max(combatant.width, combatant.height) * 0.3) {
+        this.applyNeptuneFatalHit(event, combatant, "NEPTUNE LASER", { x: Math.sign(center.x - event.body.x || 1) * 840, y: -560 });
+      }
+    }
+    for (const van of this.damageableVans()) {
+      const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+      const closest = nearestPointOnSegment(center, { x: event.laser.fromX, y: event.laser.fromY }, { x: event.laser.toX, y: event.laser.toY });
+      if (closest.distance <= event.laser.width + van.height * 0.32) {
+        this.damageVan(van.id, 999, event.ownerId, performanceNow(), { x: Math.sign(center.x - event.body.x || 1) * 900, y: -620 });
+      }
+    }
+    if (Math.floor(event.attackTimer * 10) % 4 === 0) {
+      this.queueSound("neptune-laser");
+    }
+  }
+
+  private applyNeptuneHandCrush(event: NeptuneEventState): void {
+    if (event.visualOnly) {
+      return;
+    }
+    for (const hand of [event.leftHand, event.rightHand]) {
+      for (const combatant of this.neptuneValidTargets()) {
+        const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+        const distance = Math.hypot(center.x - hand.x, center.y - hand.y);
+        if (distance <= hand.radius * 0.86 && combatant.y + combatant.height >= DEFAULT_PHYSICS.groundY - 12) {
+          this.applyNeptuneFatalHit(event, combatant, "NEPTUNE HAND", { x: Math.sign(center.x - hand.x || 1) * 620, y: -480 });
+        }
+      }
+      for (const van of this.damageableVans()) {
+        const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
+        if (Math.hypot(center.x - hand.x, center.y - hand.y) <= hand.radius + van.width * 0.25) {
+          this.damageVan(van.id, 999, event.ownerId, performanceNow(), { x: Math.sign(center.x - hand.x || 1) * 700, y: -520 });
+        }
+      }
+    }
+  }
+
+  private spawnNeptuneWaveCreatures(event: NeptuneEventState): void {
+    const kinds: NeptuneCreatureKind[] = ["urchin", "octopus", "giant-shark", "clown-fish"];
+    for (let index = 0; index < kinds.length; index += 1) {
+      const kind = kinds[index];
+      if ([...this.neptuneCreatures.values()].some((creature) => creature.eventId === event.id && creature.kind === kind)) {
+        continue;
+      }
+      const side = index % 2 === 0 ? -1 : 1;
+      const profile = neptuneCreatureProfile(kind);
+      const creature: NeptuneCreatureState = {
+        id: this.makeId(`neptune-${kind}`),
+        eventId: event.id,
+        ownerId: event.ownerId,
+        kind,
+        x: clamp(event.body.x + side * (260 + index * 94), DEFAULT_PHYSICS.platformLeft + 80, DEFAULT_PHYSICS.platformRight - profile.width - 80),
+        y: DEFAULT_PHYSICS.groundY - profile.height - (kind === "giant-shark" ? 80 : kind === "octopus" ? 12 : 0),
+        vx: side * profile.speed,
+        vy: kind === "clown-fish" ? -240 : 0,
+        width: profile.width,
+        height: profile.height,
+        hp: profile.hp,
+        maxHp: profile.hp,
+        age: 0,
+        lifetime: event.timer,
+        attackCooldown: 0.35 + index * 0.22,
+        grabbedTargetIds: [],
+        stuckTargetIds: [],
+        visualOnly: event.visualOnly,
+      };
+      this.neptuneCreatures.set(creature.id, creature);
+      if (!event.visualOnly) {
+        this.combatants.set(creature.id, {
+          id: creature.id,
+          name: neptuneCreatureName(kind),
+          x: creature.x,
+          y: creature.y,
+          width: creature.width,
+          height: creature.height,
+          spawnX: creature.x,
+          spawnY: creature.y,
+          hp: creature.hp,
+          maxHp: creature.maxHp,
+          velocityX: creature.vx,
+          velocityY: creature.vy,
+          hitstun: 0,
+          invulnerable: 0,
+          respawnTimer: 0,
+          color: profile.color,
+          statuses: [],
+        });
+      }
+    }
+  }
+
+  private updateNeptuneCreatures(dt: number): void {
+    for (const creature of [...this.neptuneCreatures.values()]) {
+      const event = this.neptuneEvents.find((item) => item.id === creature.eventId);
+      if (!event || event.timer <= 0 || event.phase === "ending" || creature.lifetime <= 0) {
+        this.removeNeptuneCreature(creature.id, "SEA GONE");
+        continue;
+      }
+      creature.age += dt;
+      creature.lifetime = Math.max(0, creature.lifetime - dt);
+      creature.attackCooldown = Math.max(0, creature.attackCooldown - dt);
+      const body = this.combatants.get(creature.id);
+      if (body) {
+        creature.hp = body.hp;
+        creature.x = body.x;
+        creature.y = body.y;
+        creature.vx = body.velocityX;
+        creature.vy = body.velocityY;
+      }
+      if (creature.kind === "urchin") {
+        this.updateNeptuneUrchin(creature, dt);
+      } else if (creature.kind === "octopus") {
+        this.updateNeptuneOctopus(creature, dt);
+      } else if (creature.kind === "giant-shark") {
+        this.updateNeptuneGiantShark(creature, dt);
+      } else {
+        this.updateNeptuneClownFish(creature, event, dt);
+      }
+      this.syncNeptuneCreatureBody(creature);
+    }
+  }
+
+  private updateNeptuneUrchin(creature: NeptuneCreatureState, dt: number): void {
+    if (Math.abs(creature.vx) < 80) {
+      creature.vx = Math.sign(creature.vx || 1) * 170;
+    }
+    creature.vy += DEFAULT_PHYSICS.gravity * 0.42 * dt;
+    creature.x += creature.vx * dt;
+    creature.y += creature.vy * dt;
+    if (creature.x < DEFAULT_PHYSICS.platformLeft + 40 || creature.x + creature.width > DEFAULT_PHYSICS.platformRight - 40) {
+      creature.vx *= -1;
+      creature.x = clamp(creature.x, DEFAULT_PHYSICS.platformLeft + 40, DEFAULT_PHYSICS.platformRight - creature.width - 40);
+    }
+    if (creature.y > DEFAULT_PHYSICS.groundY - creature.height) {
+      creature.y = DEFAULT_PHYSICS.groundY - creature.height;
+      creature.vy = 0;
+    }
+    if (creature.visualOnly) {
+      return;
+    }
+    for (const target of this.neptuneValidTargets()) {
+      if (!intersectsRect(creature, target)) {
+        continue;
+      }
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("neptuneStuck"));
+      target.hitstun = Math.max(target.hitstun, 0.18);
+      if (!creature.stuckTargetIds.includes(target.id)) {
+        creature.stuckTargetIds.push(target.id);
+      }
+      this.addEffect("spark", target.x + target.width / 2, target.y + target.height / 2, creature.x, creature.y, colorForWeapon("neptune"), "URCHIN STUCK");
+    }
+  }
+
+  private updateNeptuneOctopus(creature: NeptuneCreatureState, dt: number): void {
+    const target = this.findNeptuneCreatureTarget(creature);
+    if (target) {
+      const center = { x: creature.x + creature.width / 2, y: creature.y + creature.height / 2 };
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const desired = normalize({ x: targetCenter.x - center.x, y: targetCenter.y - center.y });
+      creature.vx += desired.x * 360 * dt;
+      creature.vy += desired.y * 180 * dt;
+      creature.vx = clamp(creature.vx, -240, 240);
+      creature.vy = clamp(creature.vy, -220, 220);
+    }
+    creature.vy += DEFAULT_PHYSICS.gravity * 0.25 * dt;
+    creature.x += creature.vx * dt;
+    creature.y += creature.vy * dt;
+    creature.x = clamp(creature.x, DEFAULT_PHYSICS.platformLeft + 40, DEFAULT_PHYSICS.platformRight - creature.width - 40);
+    creature.y = clamp(creature.y, DEFAULT_PHYSICS.groundY - 280, DEFAULT_PHYSICS.groundY - creature.height);
+    if (creature.visualOnly || creature.attackCooldown > 0) {
+      return;
+    }
+    const grabbed = this.neptuneValidTargets()
+      .filter((target) => distanceBetweenRects(creature, target) <= 92)
+      .slice(0, 8);
+    if (grabbed.length === 0) {
+      return;
+    }
+    creature.grabbedTargetIds = grabbed.map((target) => target.id);
+    for (const target of grabbed) {
+      const direction = Math.sign(target.x + target.width / 2 - (creature.x + creature.width / 2) || 1);
+      target.velocityX += direction * (520 + seededUnit(creature.age, target.id.length, 13) * 260);
+      target.velocityY = -520 - seededUnit(creature.age * 7, target.id.length, 19) * 220;
+      target.hitstun = Math.max(target.hitstun, 0.48);
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("daze"));
+      this.addEffect("whip-pull", creature.x + creature.width / 2, creature.y + creature.height / 2, target.x + target.width / 2, target.y + target.height / 2, colorForWeapon("neptune"), "OCTOPUS FLING");
+    }
+    creature.attackCooldown = 1.3;
+    this.queueSound("neptune-creature");
+  }
+
+  private updateNeptuneGiantShark(creature: NeptuneCreatureState, dt: number): void {
+    const target = this.findNeptuneCreatureTarget(creature);
+    if (target) {
+      const center = { x: creature.x + creature.width / 2, y: creature.y + creature.height / 2 };
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const desired = normalize({ x: targetCenter.x - center.x, y: targetCenter.y - center.y });
+      creature.targetId = target.id;
+      creature.vx = lerp(creature.vx, desired.x * 420, clamp(dt * 2.6, 0, 1));
+      creature.vy = lerp(creature.vy, desired.y * 320, clamp(dt * 2.2, 0, 1));
+    }
+    creature.x += creature.vx * dt;
+    creature.y += creature.vy * dt;
+    creature.x = clamp(creature.x, DEFAULT_PHYSICS.platformLeft - 140, DEFAULT_PHYSICS.platformRight - creature.width + 140);
+    creature.y = clamp(creature.y, DEFAULT_PHYSICS.groundY - 420, DEFAULT_PHYSICS.groundY - creature.height + 22);
+    if (creature.visualOnly || creature.attackCooldown > 0) {
+      return;
+    }
+    for (const target of this.neptuneValidTargets()) {
+      if (!intersectsRect(creature, target)) {
+        continue;
+      }
+      this.applyDamage({
+        sourceId: creature.ownerId,
+        targetId: target.id,
+        weaponId: "neptune",
+        damage: 68,
+        knockback: { x: Math.sign(target.x - creature.x || 1) * 760, y: -420 },
+        stun: 0.62,
+        label: "GIANT SHARK",
+        status: "daze",
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+      creature.attackCooldown = 0.85;
+      this.queueSound("jupiter-shark");
+      break;
+    }
+  }
+
+  private updateNeptuneClownFish(creature: NeptuneCreatureState, event: NeptuneEventState, dt: number): void {
+    const target = this.findNeptuneCreatureTarget(creature);
+    creature.vy += DEFAULT_PHYSICS.gravity * 0.74 * dt;
+    creature.x += creature.vx * dt;
+    creature.y += creature.vy * dt;
+    if (creature.y > DEFAULT_PHYSICS.groundY - creature.height) {
+      creature.y = DEFAULT_PHYSICS.groundY - creature.height;
+      creature.vy = -260 - seededUnit(event.seed, creature.age * 100, 23) * 220;
+      creature.vx = (seededUnit(event.seed, creature.age * 70, 29) < 0.5 ? -1 : 1) * (90 + seededUnit(event.seed, creature.age * 33, 31) * 180);
+    }
+    if (creature.x < DEFAULT_PHYSICS.platformLeft + 40 || creature.x + creature.width > DEFAULT_PHYSICS.platformRight - 40) {
+      creature.vx *= -1;
+      creature.x = clamp(creature.x, DEFAULT_PHYSICS.platformLeft + 40, DEFAULT_PHYSICS.platformRight - creature.width - 40);
+    }
+    if (!target || creature.visualOnly || creature.attackCooldown > 0) {
+      return;
+    }
+    const center = { x: creature.x + creature.width / 2, y: creature.y + creature.height / 2 };
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    const aim = normalize({ x: targetCenter.x - center.x, y: targetCenter.y - center.y });
+    const radius = 8 + Math.round(seededUnit(event.seed, creature.age * 91 + event.summonWave, 37) * 20);
+    this.neptunePellets.push({
+      id: this.makeId("neptune-pellet"),
+      eventId: event.id,
+      ownerId: event.ownerId,
+      x: center.x,
+      y: center.y,
+      vx: aim.x * (360 + radius * 8),
+      vy: aim.y * (320 + radius * 5),
+      radius,
+      damage: 8 + Math.round(radius * 0.7),
+      age: 0,
+      lifetime: neptunePelletLifetime,
+      color: radius > 20 ? "#5ad7ff" : "#bdefff",
+    });
+    creature.attackCooldown = 0.65 + seededUnit(event.seed, creature.age * 17, 41) * 0.5;
+    this.queueSound("neptune-wave");
+  }
+
+  private updateNeptunePellets(dt: number): void {
+    const expired = new Set<string>();
+    for (const pellet of this.neptunePellets) {
+      pellet.age += dt;
+      pellet.x += pellet.vx * dt;
+      pellet.y += pellet.vy * dt;
+      pellet.vx *= Math.max(0, 1 - dt * 0.28);
+      pellet.vy += DEFAULT_PHYSICS.gravity * 0.18 * dt;
+      if (pellet.age > pellet.lifetime || pellet.y > DEFAULT_PHYSICS.groundY + 90) {
+        expired.add(pellet.id);
+        continue;
+      }
+      if (pellet.visualOnly) {
+        continue;
+      }
+      for (const target of this.neptuneValidTargets()) {
+        const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+        if (Math.hypot(center.x - pellet.x, center.y - pellet.y) > pellet.radius + Math.max(target.width, target.height) * 0.42) {
+          continue;
+        }
+        this.applyDamage({
+          sourceId: pellet.ownerId,
+          targetId: target.id,
+          weaponId: "neptune",
+          damage: pellet.damage,
+          knockback: { x: Math.sign(target.x + target.width / 2 - pellet.x || 1) * (260 + pellet.radius * 10), y: -160 - pellet.radius * 6 },
+          stun: 0.24,
+          label: "WATER PELLET",
+          status: pellet.radius > 18 ? "daze" : undefined,
+          skipHitLocationScaling: true,
+          skipSourceScaling: true,
+        });
+        this.addEffect("spark", pellet.x, pellet.y, pellet.x + pellet.vx * 0.05, pellet.y + pellet.vy * 0.05, pellet.color, "SPLASH");
+        expired.add(pellet.id);
+        break;
+      }
+    }
+    removeWhere(this.neptunePellets, (pellet) => expired.has(pellet.id));
+  }
+
+  private syncNeptuneCreatureBody(creature: NeptuneCreatureState): void {
+    const body = this.combatants.get(creature.id);
+    if (!body) {
+      return;
+    }
+    body.x = creature.x;
+    body.y = creature.y;
+    body.width = creature.width;
+    body.height = creature.height;
+    body.velocityX = creature.vx;
+    body.velocityY = creature.vy;
+    body.hp = creature.hp;
+    body.maxHp = creature.maxHp;
+  }
+
+  private removeNeptuneCreature(id: string, label: string): void {
+    const creature = this.neptuneCreatures.get(id);
+    const body = this.combatants.get(id);
+    const x = body ? body.x + body.width / 2 : (creature?.x ?? 0) + (creature?.width ?? 0) / 2;
+    const y = body ? body.y + body.height / 2 : (creature?.y ?? DEFAULT_PHYSICS.groundY) + (creature?.height ?? 0) / 2;
+    this.neptuneCreatures.delete(id);
+    this.combatants.delete(id);
+    this.addEffect("aura", x, y, x, y - 46, colorForWeapon("neptune"), label);
+  }
+
+  private finishNeptuneEvent(event: NeptuneEventState): void {
+    removeWhere(this.neptuneEvents, (item) => item.id === event.id);
+    for (const creature of [...this.neptuneCreatures.values()].filter((item) => item.eventId === event.id)) {
+      this.removeNeptuneCreature(creature.id, "SEA RECEDES");
+    }
+    removeWhere(this.neptunePellets, (pellet) => pellet.eventId === event.id);
+    this.addEffect("shockwave", event.body.x, DEFAULT_PHYSICS.groundY, event.body.x + 260, DEFAULT_PHYSICS.groundY, colorForWeapon("neptune"), "NEPTUNE SINKS");
+    if (!event.visualOnly) {
+      this.queueSound("neptune-wave");
+    }
+  }
+
+  private removeNeptuneStateForOwner(ownerId: string): void {
+    const eventIds = this.neptuneEvents.filter((event) => event.ownerId === ownerId).map((event) => event.id);
+    removeWhere(this.neptuneEvents, (event) => event.ownerId === ownerId);
+    for (const creature of [...this.neptuneCreatures.values()]) {
+      if (creature.ownerId === ownerId || eventIds.includes(creature.eventId)) {
+        this.removeNeptuneCreature(creature.id, "NEPTUNE GONE");
+      }
+    }
+    removeWhere(this.neptunePellets, (pellet) => pellet.ownerId === ownerId || eventIds.includes(pellet.eventId));
+  }
+
+  private isNeptuneCreatureCombatant(id: string): boolean {
+    return this.neptuneCreatures.has(id);
+  }
+
+  private neptuneValidTargets(): Combatant[] {
+    return [...this.combatants.values()].filter((combatant) =>
+      combatant.respawnTimer <= 0
+      && combatant.hp > 0
+      && !this.isNeptuneCreatureCombatant(combatant.id)
+      && !this.isJupiterSharkCombatant(combatant.id)
+    );
+  }
+
+  private findNeptuneTarget(event: NeptuneEventState): Combatant | undefined {
+    let nearest: { target: Combatant; distance: number } | undefined;
+    for (const target of this.neptuneValidTargets()) {
+      const distance = Math.hypot(target.x + target.width / 2 - event.body.x, target.y + target.height / 2 - event.body.y);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { target, distance };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private findNeptuneCreatureTarget(creature: NeptuneCreatureState): Combatant | undefined {
+    let nearest: { target: Combatant; distance: number } | undefined;
+    for (const target of this.neptuneValidTargets()) {
+      const distance = Math.hypot(target.x + target.width / 2 - (creature.x + creature.width / 2), target.y + target.height / 2 - (creature.y + creature.height / 2));
+      if (!nearest || distance < nearest.distance) {
+        nearest = { target, distance };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private pushCombatantAndPlayer(id: string, velocity: Vec2, players: PlayerPhysicsState[]): void {
+    const combatant = this.combatants.get(id);
+    if (combatant) {
+      combatant.velocityX += velocity.x;
+      combatant.velocityY += velocity.y;
+    }
+    const player = players.find((item) => item.id === id);
+    if (player) {
+      player.velocityX += velocity.x;
+      player.velocityY += velocity.y;
+    }
+  }
+
+  private applyNeptuneFatalHit(event: NeptuneEventState, target: Combatant, label: string, knockback: Vec2): boolean {
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: event.ownerId,
+      targetId: target.id,
+      weaponId: "neptune",
+      damage: neptuneLaserDamage,
+      knockback,
+      stun: 0.62,
+      label,
+      status: "daze",
+      skipHitLocationScaling: true,
+      skipSourceScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+    } else {
+      this.addEffect("explosion", target.x + target.width / 2, target.y + target.height / 2, event.body.x, event.body.y, colorForWeapon("neptune"), label);
+    }
+    return hit.applied;
+  }
+
   applyRemoteEvent(event: CombatEventPacket): void {
     const weapon = weaponRegistry.get(event.weaponId);
     if (event.action === "hit" && event.targetId && typeof event.damage === "number" && !this.appliedRemoteEvents.has(event.id)) {
@@ -3816,6 +4801,10 @@ export class CombatSystem {
       this.spawnRemoteMarsVisual(event);
       return;
     }
+    if (event.weaponId === "neptune") {
+      this.spawnRemoteNeptuneVisual(event);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -3882,6 +4871,12 @@ export class CombatSystem {
   private spawnRemoteMarsVisual(event: CombatEventPacket): void {
     if (event.label === "Mars") {
       this.startMarsEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
+    }
+  }
+
+  private spawnRemoteNeptuneVisual(event: CombatEventPacket): void {
+    if (event.label === "Neptune") {
+      this.startNeptuneEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
     }
   }
 
@@ -4112,6 +5107,9 @@ export class CombatSystem {
       uranusEvents: this.uranusEvents,
       marsEvents: this.marsEvents,
       marsClones: [...this.marsClones.values()],
+      neptuneEvents: this.neptuneEvents,
+      neptuneCreatures: [...this.neptuneCreatures.values()],
+      neptunePellets: this.neptunePellets,
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -7822,6 +8820,11 @@ export class CombatSystem {
         combatant.velocityY += DEFAULT_PHYSICS.gravity * dt * deathFrozenGravityMultiplier;
         combatant.hitstun = Math.max(combatant.hitstun, 0.1);
       }
+      if (combatant.statuses.some((status) => status.id === "neptuneStuck")) {
+        combatant.velocityX *= 0.15;
+        combatant.velocityY = Math.max(combatant.velocityY, -90);
+        combatant.hitstun = Math.max(combatant.hitstun, 0.08);
+      }
       const risingZombie = this.zombies.get(combatant.id);
       if (risingZombie && risingZombie.riseTimer > 0) {
         combatant.velocityX = 0;
@@ -7865,6 +8868,10 @@ export class CombatSystem {
     }
     if (target.id.startsWith("zombie-")) {
       this.removeZombiePermanently(target.id, "ZOMBIE DOWN");
+      return;
+    }
+    if (this.isNeptuneCreatureCombatant(target.id)) {
+      this.removeNeptuneCreature(target.id, "SEA CREATURE DOWN");
       return;
     }
     if (this.isMarsCloneCombatant(target.id)) {
@@ -9649,6 +10656,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ffd86a";
     case "mars":
       return "#ff7045";
+    case "neptune":
+      return "#5ad7ff";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -9826,6 +10835,16 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "No Hands", duration: handsMissingDuration, stacks: 1 };
     case "superLegs":
       return { id, label: "Super Legs", duration: superLegsStatusRefresh, stacks: 1 };
+    case "neptuneStuck":
+      return {
+        id,
+        label: "Urchin Stuck",
+        duration: neptuneCreatureStuckDuration,
+        stacks: 1,
+        tickDamage: 1,
+        tickEvery: Math.max(0.5, neptuneCreaturePoisonDuration / 10),
+        tickTimer: 1,
+      };
   }
 }
 
@@ -9932,6 +10951,65 @@ function createRopePoints(start: Vec2, end: Vec2, count: number): GrappleRopePoi
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function easeOutCubicNumber(value: number): number {
+  const t = clamp(value, 0, 1);
+  return 1 - (1 - t) ** 3;
+}
+
+function easeInCubicNumber(value: number): number {
+  const t = clamp(value, 0, 1);
+  return t ** 3;
+}
+
+function distanceBetweenRects(a: RectLike, b: RectLike): number {
+  const ax = a.x + a.width / 2;
+  const ay = a.y + a.height / 2;
+  const bx = b.x + b.width / 2;
+  const by = b.y + b.height / 2;
+  return Math.hypot(ax - bx, ay - by);
+}
+
+function nearestPointOnSegment(point: Vec2, start: Vec2, end: Vec2): { point: Vec2; distance: number } {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = Math.max(1, dx * dx + dy * dy);
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  const projected = {
+    x: start.x + dx * t,
+    y: start.y + dy * t,
+  };
+  return {
+    point: projected,
+    distance: Math.hypot(point.x - projected.x, point.y - projected.y),
+  };
+}
+
+function neptuneCreatureProfile(kind: NeptuneCreatureKind): { width: number; height: number; hp: number; speed: number; color: string } {
+  switch (kind) {
+    case "urchin":
+      return { width: 58, height: 58, hp: 24, speed: 170, color: "#242941" };
+    case "octopus":
+      return { width: 96, height: 72, hp: 46, speed: 120, color: "#b096ff" };
+    case "giant-shark":
+      return { width: 168, height: 86, hp: 72, speed: 240, color: "#7f959c" };
+    case "clown-fish":
+      return { width: 72, height: 42, hp: 30, speed: 150, color: "#ff9f3d" };
+  }
+}
+
+function neptuneCreatureName(kind: NeptuneCreatureKind): string {
+  switch (kind) {
+    case "urchin":
+      return "Sea Urchin";
+    case "octopus":
+      return "Octopus";
+    case "giant-shark":
+      return "Giant Shark";
+    case "clown-fish":
+      return "Clown Fish";
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

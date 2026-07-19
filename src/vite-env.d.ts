@@ -44,6 +44,8 @@ interface PixelBrawlerDebugSnapshot {
       ringChompers: number;
       moons: number;
       marsPlanets: number;
+      neptuneBosses: number;
+      neptuneCreatures: number;
     };
     error?: string;
   };

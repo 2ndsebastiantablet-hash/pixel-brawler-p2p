@@ -29,7 +29,7 @@ The foundation lives in `src/game/render3d/`:
 - `ThreeLayer.ts`: Owns the Three.js scene, camera, lights, WebGL renderer, resize handling, per-frame update, render call, fallback behavior, and debug status.
 - `Render3DTypes.ts`: Defines render-frame types, feature flags, and `worldToThreePosition()` for mapping 2D world points into Three space.
 - `ModelRegistry.ts`: Registers model actor factories, tracks live actors, updates them each frame, removes them from the scene, and disposes geometries/materials.
-- `LowPolyFactory.ts`: Creates real low-poly Three meshes/groups for the demo cube and current event visuals: Jupiter sharks, Saturn/Uranus planet rings, Ring Chomper, Moon, and Mars.
+- `LowPolyFactory.ts`: Creates real low-poly Three meshes/groups for the demo cube and current event visuals: Jupiter sharks, Saturn/Uranus planet rings, the remade Ring Chomper, Moon, Mars, Neptune, and Neptune sea creatures.
 
 `Game.ts` constructs the layer once, resizes it with the 2D canvas, sends it camera/viewport timing and event visual snapshots each tick, and calls its render method after the 2D draw. The layer does not mutate players, combatants, weapons, events, or network packets.
 
@@ -87,9 +87,10 @@ The current event conversions use `ModelRegistry` actors that are driven by exis
 
 - Jupiter sharks: `low-poly-shark` actors follow `jupiterSharks` positions, velocity, bite cooldown, and lifetime state with a simple PS1-style body, head wedge, fins, tail, eyes, and mouth. The 2D shark combat body remains authoritative and the actor is removed when the shark leaves the snapshot.
 - Uranus/Saturn planet: a translucent rotating `saturn-planet` actor appears during the active Uranus ring arena, stays centered in the screen background, and uses separate front/back ring meshes driven by the existing ring scroll. Before the arena phase, a `uranus-intro` actor falls and grows toward center screen for the impact beat.
-- Ring Chomper: a yellow `ring-chomper` actor stays anchored to the left side of the screen; its jaws animate from the existing mouth-open state while the 2D hazard radius remains authoritative.
+- Ring Chomper: a yellow `ring-chomper` actor stays anchored to the left side of the screen; its jagged jaws, dark mouth interior, eyes, and fins/spikes animate from the existing mouth-open state while the invisible 2D hazard radius remains authoritative.
 - Moon: live gameplay draws the Moon event in the 2D background layer behind fighters so it cannot obscure combat. The factory still includes `moon-sphere` for model tests and future non-obstructing 3D use, but Moon floors, side switching, and timers remain in 2D gameplay code.
 - Mars: a red/orange `mars-planet` model rises, pulses with green glow/ring accents during extraction, then descends. Green beam lines, clone pull/release state, clone AI, reform timers, and cleanup remain authoritative in 2D combat snapshots.
+- Neptune: a giant `neptune-boss` actor rises with only torso, arms, hands, neck, head, and crown visible, then sinks during cleanup. Separate sea-creature actors mirror killable `neptuneCreatures` snapshot entries: spiky urchins, 8-arm octopuses, oversized giant sharks, and clown fish. Flood water, tilt force, hand crush, lasers, pellets, creature health, and damage remain authoritative in `CombatSystem`.
 - Space-series events: keep gameplay in `CombatSystem`, sync through current snapshots/events, and make Three actors pure visual adapters.
 
 When `?render3d=0`, stored WebGL disable is active, or WebGL initialization fails, the original 2D canvas visuals render instead. The safe rule remains: Three meshes may display state, but they should not own rules, damage, collision, timers, or multiplayer authority.

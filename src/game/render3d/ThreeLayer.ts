@@ -5,11 +5,16 @@ import {
   createLowPolySharkPlaceholder,
   createMarsPlanet,
   createMoonSphere,
+  createNeptuneBoss,
+  createNeptuneClownFish,
+  createNeptuneGiantShark,
+  createNeptuneOctopus,
+  createNeptuneSeaUrchin,
   createRingChomper,
   createSaturnPlanet,
 } from "./LowPolyFactory";
 import { ModelRegistry, type ModelActor, createModelActor } from "./ModelRegistry";
-import type { Render3DCamera2D, Render3DConfig, Render3DEventVisuals, Render3DFrame, Render3DJupiterSharkVisual, Render3DMarsVisual, Render3DMoonVisual, Render3DUranusVisual, Render3DViewport } from "./Render3DTypes";
+import type { Render3DCamera2D, Render3DConfig, Render3DEventVisuals, Render3DFrame, Render3DJupiterSharkVisual, Render3DMarsVisual, Render3DMoonVisual, Render3DNeptuneCreatureVisual, Render3DNeptuneVisual, Render3DUranusVisual, Render3DViewport } from "./Render3DTypes";
 import { DEFAULT_RENDER3D_DEPTH, DEFAULT_RENDER3D_PIXELS_PER_UNIT, worldToThreePosition } from "./Render3DTypes";
 
 export interface Render3DRendererAdapter {
@@ -40,6 +45,8 @@ export interface Render3DModelCounts {
   ringChompers: number;
   moons: number;
   marsPlanets: number;
+  neptuneBosses: number;
+  neptuneCreatures: number;
 }
 
 export class ThreeLayer {
@@ -224,6 +231,32 @@ export class ThreeLayer {
       object: createMarsPlanet(id, { scale: 1 }),
       position,
     }));
+    this.registry.register("neptune-boss", ({ id, position }) => createModelActor({
+      id,
+      object: createNeptuneBoss(id, { scale: 1 }),
+      position,
+    }));
+    this.registry.register("neptune-urchin", ({ id, position }) => createModelActor({
+      id,
+      object: createNeptuneSeaUrchin(id, { scale: 1 }),
+      position,
+      update: rotateDemoActor,
+    }));
+    this.registry.register("neptune-octopus", ({ id, position }) => createModelActor({
+      id,
+      object: createNeptuneOctopus(id, { scale: 1 }),
+      position,
+    }));
+    this.registry.register("neptune-giant-shark", ({ id, position }) => createModelActor({
+      id,
+      object: createNeptuneGiantShark(id, { scale: 1 }),
+      position,
+    }));
+    this.registry.register("neptune-clown-fish", ({ id, position }) => createModelActor({
+      id,
+      object: createNeptuneClownFish(id, { scale: 1 }),
+      position,
+    }));
   }
 
   private addDemoActor(scene: THREE.Scene): void {
@@ -255,6 +288,8 @@ export class ThreeLayer {
     this.syncUranusEvents(events.uranusEvents, frame);
     this.syncMoonEvents(events.moonEvents, frame);
     this.syncMarsEvents(events.marsEvents, frame);
+    this.syncNeptuneEvents(events.neptuneEvents, frame);
+    this.syncNeptuneCreatures(events.neptuneCreatures, frame);
   }
 
   private syncJupiterSharks(sharks: Render3DJupiterSharkVisual[], frame: Render3DFrame): void {
@@ -360,7 +395,7 @@ export class ThreeLayer {
         const chomperId = `uranus-chomper:${event.id}`;
         liveChompers.add(chomperId);
         const chomper = this.ensureActor("ring-chomper", chomperId);
-        const chomperScreenX = Math.min(Math.max(event.chomper.x - frame.camera.x, 82), Math.max(104, frame.viewport.width * 0.16));
+        const chomperScreenX = Math.min(Math.max(event.chomper.x - frame.camera.x, 72), Math.max(96, frame.viewport.width * 0.12));
         const chomperAnchor = {
           x: frame.camera.x + chomperScreenX,
           y: event.chomper.y,
@@ -456,6 +491,84 @@ export class ThreeLayer {
     this.removeStaleActors("mars-planet:", liveIds);
   }
 
+  private syncNeptuneEvents(events: Render3DNeptuneVisual[], frame: Render3DFrame): void {
+    const liveIds = new Set<string>();
+    for (const event of events) {
+      const actorId = `neptune-boss:${event.id}`;
+      liveIds.add(actorId);
+      const actor = this.ensureActor("neptune-boss", actorId);
+      const rise = easeOutCubic(event.riseProgress);
+      const descend = easeInCubic(event.descendProgress);
+      const anchor = {
+        x: frame.camera.x + frame.viewport.width * 0.5,
+        y: frame.camera.y + frame.viewport.height * (event.phase === "ending" ? lerp(0.58, 0.9, descend) : lerp(0.92, 0.42, rise)),
+      };
+      const position = worldToThreePosition(anchor, frame.camera, frame.viewport, {
+        pixelsPerUnit: this.pixelsPerUnit,
+        depth: -9.4,
+      });
+      actor.object.position.set(position.x, position.y, position.z);
+      actor.object.scale.setScalar(Math.max(2.7, Math.min(4.6, frame.viewport.width / 330)) * (0.86 + rise * 0.14));
+      actor.object.rotation.y = Math.sin(event.age * 0.34) * 0.12;
+      actor.object.rotation.z = event.tilt.amount * -0.09 + Math.sin(event.age * 0.2) * 0.035;
+      setObjectOpacity(actor.object, event.phase === "ending" ? 0.54 : 0.86);
+      const leftHand = actor.object.userData.leftHand as THREE.Object3D | undefined;
+      const rightHand = actor.object.userData.rightHand as THREE.Object3D | undefined;
+      if (leftHand) {
+        leftHand.position.y = -0.44 + (event.leftHand.slamAlpha ?? 0) * -0.38;
+        leftHand.rotation.z = -0.22 + Math.sin(event.age * 1.8) * 0.08;
+      }
+      if (rightHand) {
+        rightHand.position.y = -0.44 + (event.rightHand.slamAlpha ?? 0) * -0.38;
+        rightHand.rotation.z = 0.22 + Math.sin(event.age * 1.8 + 1.3) * 0.08;
+      }
+      const glow = actor.object.userData.waterGlow as THREE.Object3D | undefined;
+      if (glow) {
+        glow.scale.setScalar(1 + (event.flood.active ? 0.18 : 0.08) + Math.sin(frame.timeSeconds * 4.2) * 0.04);
+        setObjectOpacity(glow, event.flood.active ? 0.34 : 0.18);
+      }
+      const leftEye = actor.object.userData.leftEye as THREE.Object3D | undefined;
+      const rightEye = actor.object.userData.rightEye as THREE.Object3D | undefined;
+      for (const eye of [leftEye, rightEye]) {
+        if (eye) {
+          eye.scale.setScalar(event.laser.active ? 1.55 + Math.sin(frame.timeSeconds * 18) * 0.18 : 1);
+        }
+      }
+    }
+    this.removeStaleActors("neptune-boss:", liveIds);
+  }
+
+  private syncNeptuneCreatures(creatures: Render3DNeptuneCreatureVisual[], frame: Render3DFrame): void {
+    const liveIds = new Set<string>();
+    for (const creature of creatures) {
+      const actorId = `neptune-creature:${creature.id}`;
+      liveIds.add(actorId);
+      const actor = this.ensureActor(neptuneCreatureActorKind(creature.kind), actorId);
+      const center = { x: creature.x + creature.width / 2, y: creature.y + creature.height / 2 };
+      const position = worldToThreePosition(center, frame.camera, frame.viewport, {
+        pixelsPerUnit: this.pixelsPerUnit,
+        depth: creature.kind === "giant-shark" ? -3.1 : -2.7,
+      });
+      actor.object.position.set(position.x, position.y, position.z);
+      actor.object.scale.setScalar(neptuneCreatureScale(creature));
+      actor.object.rotation.z = creature.kind === "urchin"
+        ? creature.age * 1.8
+        : Math.atan2(-creature.vy, creature.vx || 1) * (creature.kind === "giant-shark" ? 0.6 : 0.18);
+      actor.object.rotation.y = Math.sin(creature.age * 4.4) * 0.16;
+      if (creature.kind === "octopus") {
+        for (let index = 0; index < 8; index += 1) {
+          const arm = actor.object.getObjectByName(`arm-${index}`);
+          if (arm) {
+            arm.rotation.z += Math.sin(frame.timeSeconds * 5 + index) * 0.08;
+          }
+        }
+      }
+      const ratio = creature.hp / Math.max(1, creature.maxHp);
+      setObjectOpacity(actor.object, creature.hp <= 0 ? 0.32 : 0.72 + ratio * 0.22);
+    }
+    this.removeStaleActors("neptune-creature:", liveIds);
+  }
+
   private ensureActor(kind: string, id: string): ModelActor {
     const existing = this.registry.get(id);
     if (existing) {
@@ -483,6 +596,8 @@ export class ThreeLayer {
       ringChompers: this.registry.idsWithPrefix("uranus-chomper:").length,
       moons: this.registry.idsWithPrefix("moon:").length,
       marsPlanets: this.registry.idsWithPrefix("mars-planet:").length,
+      neptuneBosses: this.registry.idsWithPrefix("neptune-boss:").length,
+      neptuneCreatures: this.registry.idsWithPrefix("neptune-creature:").length,
     };
   }
 }
@@ -508,7 +623,35 @@ function emptyModelCounts(): Render3DModelCounts {
     ringChompers: 0,
     moons: 0,
     marsPlanets: 0,
+    neptuneBosses: 0,
+    neptuneCreatures: 0,
   };
+}
+
+function neptuneCreatureActorKind(kind: Render3DNeptuneCreatureVisual["kind"]): string {
+  switch (kind) {
+    case "urchin":
+      return "neptune-urchin";
+    case "octopus":
+      return "neptune-octopus";
+    case "giant-shark":
+      return "neptune-giant-shark";
+    case "clown-fish":
+      return "neptune-clown-fish";
+  }
+}
+
+function neptuneCreatureScale(creature: Render3DNeptuneCreatureVisual): number {
+  switch (creature.kind) {
+    case "urchin":
+      return Math.max(0.72, creature.width / 66);
+    case "octopus":
+      return Math.max(0.92, creature.width / 92);
+    case "giant-shark":
+      return Math.max(1.18, creature.width / 112);
+    case "clown-fish":
+      return Math.max(0.72, creature.width / 78);
+  }
 }
 
 function easeOutCubic(value: number): number {

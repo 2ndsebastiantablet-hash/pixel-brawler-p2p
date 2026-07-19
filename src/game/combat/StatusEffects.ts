@@ -20,7 +20,8 @@ export type StatusEffectId =
   | "winded"
   | "scrambled"
   | "handsMissing"
-  | "superLegs";
+  | "superLegs"
+  | "neptuneStuck";
 
 export interface StatusEffect {
   id: StatusEffectId;

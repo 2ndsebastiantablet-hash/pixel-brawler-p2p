@@ -88,6 +88,7 @@ const strapWeapons = new Set<WeaponId>([
   "jupiter",
   "uranus",
   "mars",
+  "neptune",
 ]);
 
 const legWeapons = new Set<WeaponId>([
@@ -359,7 +360,7 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   if (id === "spikes" || id === "van" || id === "spirit-fighter") {
     return "body";
   }
-  if (id === "moon" || id === "jupiter" || id === "uranus" || id === "mars") {
+  if (id === "moon" || id === "jupiter" || id === "uranus" || id === "mars" || id === "neptune") {
     return "space";
   }
   if (id === "wings") {

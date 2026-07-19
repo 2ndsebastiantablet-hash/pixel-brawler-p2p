@@ -74,11 +74,79 @@ export interface Render3DMarsVisual {
   spin: number;
 }
 
+export interface Render3DNeptuneVisual {
+  id: string;
+  age: number;
+  phase: "intro" | "active" | "ending";
+  timer: number;
+  riseProgress: number;
+  descendProgress: number;
+  roarAlpha: number;
+  body: {
+    x: number;
+    y: number;
+    radius: number;
+  };
+  leftHand: {
+    x: number;
+    y: number;
+    radius: number;
+    warningAlpha: number;
+    slamAlpha?: number;
+  };
+  rightHand: {
+    x: number;
+    y: number;
+    radius: number;
+    warningAlpha: number;
+    slamAlpha?: number;
+  };
+  currentAttack: "idle" | "flood" | "slam" | "laser" | "summon";
+  flood: {
+    active: boolean;
+    level: number;
+    alpha: number;
+    suck: number;
+  };
+  tilt: {
+    active: boolean;
+    direction: -1 | 1;
+    amount: number;
+    warningAlpha: number;
+  };
+  laser: {
+    active: boolean;
+    warningAlpha: number;
+    firing: boolean;
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    width: number;
+  };
+}
+
+export interface Render3DNeptuneCreatureVisual {
+  id: string;
+  kind: "urchin" | "octopus" | "giant-shark" | "clown-fish";
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  age: number;
+  hp: number;
+  maxHp: number;
+}
+
 export interface Render3DEventVisuals {
   jupiterSharks: Render3DJupiterSharkVisual[];
   uranusEvents: Render3DUranusVisual[];
   moonEvents: Render3DMoonVisual[];
   marsEvents: Render3DMarsVisual[];
+  neptuneEvents: Render3DNeptuneVisual[];
+  neptuneCreatures: Render3DNeptuneCreatureVisual[];
 }
 
 export interface Render3DConfig {

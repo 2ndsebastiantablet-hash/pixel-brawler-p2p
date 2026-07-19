@@ -6,6 +6,11 @@ import {
   createLowPolySharkPlaceholder,
   createMarsPlanet,
   createMoonSphere,
+  createNeptuneBoss,
+  createNeptuneClownFish,
+  createNeptuneGiantShark,
+  createNeptuneOctopus,
+  createNeptuneSeaUrchin,
   createRingChomper,
   createSaturnPlanet,
 } from "../src/game/render3d/LowPolyFactory";
@@ -93,21 +98,31 @@ describe("hybrid 3D rendering foundation", () => {
     expect(shark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head-wedge", "tail", "dorsal-fin"]));
   });
 
-  it("creates real event model groups for sharks, Saturn, Ring Chomper, Moon, and Mars", () => {
+  it("creates real event model groups for sharks, Saturn, Ring Chomper, Moon, Mars, and Neptune", () => {
     const shark = createLowPolySharkPlaceholder("shark-model");
     const saturn = createSaturnPlanet("uranus-saturn");
     const chomper = createRingChomper("ring-chomper", { mouthOpen: 0.7 });
     const moon = createMoonSphere("moon-model");
     const mars = createMarsPlanet("mars-model");
+    const neptune = createNeptuneBoss("neptune-model");
+    const urchin = createNeptuneSeaUrchin("urchin-model");
+    const octopus = createNeptuneOctopus("octopus-model");
+    const giantShark = createNeptuneGiantShark("giant-shark-model");
+    const clownFish = createNeptuneClownFish("clown-fish-model");
 
     expect(shark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head-wedge", "tail", "dorsal-fin", "left-fin", "right-fin", "left-eye", "right-eye"]));
     expect(shark.children.length).toBeLessThanOrEqual(10);
     expect(saturn.children.map((child) => child.name)).toEqual(expect.arrayContaining(["planet", "rings-front", "rings-back", "arena-ring-front", "arena-ring-back"]));
-    expect(chomper.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "upper-jaw", "lower-jaw", "left-eye", "right-eye"]));
+    expect(chomper.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "upper-jaw", "lower-jaw", "left-eye", "right-eye", "mouth-interior", "teeth", "spikes"]));
     expect(moon.children.map((child) => child.name)).toEqual(expect.arrayContaining(["sphere", "crater-a", "crater-b", "glow"]));
     expect(mars.children.map((child) => child.name)).toEqual(expect.arrayContaining(["planet", "green-glow", "crater-a", "crater-b"]));
+    expect(neptune.children.map((child) => child.name)).toEqual(expect.arrayContaining(["torso", "neck", "head", "crown", "left-hand", "right-hand", "water-glow"]));
+    expect(urchin.children.map((child) => child.name)).toEqual(expect.arrayContaining(["core", "spikes"]));
+    expect(octopus.children.map((child) => child.name)).toEqual(expect.arrayContaining(["head", "arm-0", "arm-7"]));
+    expect(giantShark.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "head-wedge", "tail", "dorsal-fin"]));
+    expect(clownFish.children.map((child) => child.name)).toEqual(expect.arrayContaining(["body", "tail", "stripe-0", "left-eye"]));
 
-    for (const group of [shark, saturn, chomper, moon, mars]) {
+    for (const group of [shark, saturn, chomper, moon, mars, neptune, urchin, octopus, giantShark, clownFish]) {
       expect(group).toBeInstanceOf(THREE.Group);
       expect(group.children.length).toBeGreaterThanOrEqual(4);
       for (const child of group.children) {
@@ -234,18 +249,41 @@ describe("hybrid 3D rendering foundation", () => {
             spin: 0.5,
           },
         ],
+        neptuneEvents: [
+          {
+            id: "neptune-a",
+            age: 5,
+            phase: "active",
+            timer: 54,
+            riseProgress: 1,
+            descendProgress: 0,
+            roarAlpha: 0,
+            body: { x: 640, y: 260, radius: 260 },
+            leftHand: { x: 360, y: 430, radius: 120, warningAlpha: 0 },
+            rightHand: { x: 920, y: 430, radius: 120, warningAlpha: 0 },
+            currentAttack: "summon",
+            flood: { active: false, level: 0, alpha: 0, suck: 0 },
+            tilt: { active: false, direction: 1, amount: 0, warningAlpha: 0 },
+            laser: { active: true, warningAlpha: 1, firing: false, fromX: 640, fromY: 160, toX: 740, toY: 420, width: 24 },
+          },
+        ],
+        neptuneCreatures: [
+          { id: "urchin-a", kind: "urchin", x: 650, y: 540, vx: 120, vy: 0, width: 58, height: 58, age: 1.2, hp: 24, maxHp: 24 },
+        ],
       },
     });
 
     expect(layer.status).toMatchObject({
       available: true,
-      actorCount: 5,
+      actorCount: 7,
       modelCounts: {
         jupiterSharks: 1,
         uranusPlanets: 1,
         ringChompers: 1,
         moons: 1,
         marsPlanets: 1,
+        neptuneBosses: 1,
+        neptuneCreatures: 1,
       },
     });
     expect(layer.getActorObject("jupiter-shark:shark-a")).toBeInstanceOf(THREE.Group);
@@ -253,6 +291,8 @@ describe("hybrid 3D rendering foundation", () => {
     expect(layer.getActorObject("uranus-chomper:uranus-a")).toBeInstanceOf(THREE.Group);
     expect(layer.getActorObject("moon:moon-a")).toBeInstanceOf(THREE.Group);
     expect(layer.getActorObject("mars-planet:mars-a")).toBeInstanceOf(THREE.Group);
+    expect(layer.getActorObject("neptune-boss:neptune-a")).toBeInstanceOf(THREE.Group);
+    expect(layer.getActorObject("neptune-creature:urchin-a")).toBeInstanceOf(THREE.Group);
     const uranus = layer.getActorObject("uranus-planet:uranus-a")!;
     expect(uranus.position.x).toBeCloseTo(0, 1);
     expect(uranus.scale.x).toBeLessThanOrEqual(3.35);
@@ -269,6 +309,8 @@ describe("hybrid 3D rendering foundation", () => {
         uranusEvents: [],
         moonEvents: [],
         marsEvents: [],
+        neptuneEvents: [],
+        neptuneCreatures: [],
       },
     });
 
@@ -278,14 +320,18 @@ describe("hybrid 3D rendering foundation", () => {
       ringChompers: 0,
       moons: 0,
       marsPlanets: 0,
+      neptuneBosses: 0,
+      neptuneCreatures: 0,
     });
     expect(layer.getActorObject("jupiter-shark:shark-a")?.position.x).toBeGreaterThan(sharkX);
     expect(layer.getActorObject("uranus-planet:uranus-a")).toBeUndefined();
     expect(layer.getActorObject("uranus-chomper:uranus-a")).toBeUndefined();
     expect(layer.getActorObject("moon:moon-a")).toBeUndefined();
     expect(layer.getActorObject("mars-planet:mars-a")).toBeUndefined();
+    expect(layer.getActorObject("neptune-boss:neptune-a")).toBeUndefined();
+    expect(layer.getActorObject("neptune-creature:urchin-a")).toBeUndefined();
 
-    layer.update({ ...frame, events: { jupiterSharks: [], uranusEvents: [], moonEvents: [], marsEvents: [] } });
+    layer.update({ ...frame, events: { jupiterSharks: [], uranusEvents: [], moonEvents: [], marsEvents: [], neptuneEvents: [], neptuneCreatures: [] } });
     expect(layer.status.actorCount).toBe(0);
   });
 
@@ -327,6 +373,8 @@ describe("hybrid 3D rendering foundation", () => {
         ],
         moonEvents: [],
         marsEvents: [],
+        neptuneEvents: [],
+        neptuneCreatures: [],
       },
     });
 
@@ -353,6 +401,8 @@ describe("hybrid 3D rendering foundation", () => {
         ],
         moonEvents: [],
         marsEvents: [],
+        neptuneEvents: [],
+        neptuneCreatures: [],
       },
     });
 
@@ -383,6 +433,8 @@ describe("hybrid 3D rendering foundation", () => {
         uranusEvents: [],
         moonEvents: [],
         marsEvents: [],
+        neptuneEvents: [],
+        neptuneCreatures: [],
       },
     })).not.toThrow();
     expect(layer.status).toMatchObject({ enabled: false, available: false, actorCount: 0 });
