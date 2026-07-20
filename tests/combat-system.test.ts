@@ -4001,7 +4001,7 @@ describe("combat system", () => {
     expect(api.getSuperBombRuntime(owner.id).weaknessStacks).toBe(1);
   });
 
-  it("uses Clown Kit as a head item with empty-hand finger-gun knockback", () => {
+  it("uses Clown Kit as a head item with one open hand for finger-gun knockback", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
     const owner = { ...playerState, id: "clown-user", x: 0, velocityX: 0, velocityY: 0 };
@@ -4012,6 +4012,7 @@ describe("combat system", () => {
       useClownKitPrimary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
     };
 
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never, rightHand: "pistol" } as never);
     expect(api.getClownKitRuntime(owner.id)).toMatchObject({ equipped: true, usable: true, stageCooldown: 0, balloonCount: 0 });
     const fired = api.useClownKitPrimary({
       ownerId: owner.id,
@@ -4029,7 +4030,7 @@ describe("combat system", () => {
     expect(bullet.knockback.y).toBeLessThanOrEqual(-850);
     expect(bullet.radius).toBeLessThanOrEqual(8);
 
-    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never, rightHand: "pistol" } as never);
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never, leftHand: "pistol", rightHand: "knife" } as never);
     expect(api.getClownKitRuntime(owner.id)).toMatchObject({ usable: false, disabledReason: "hand occupied" });
     expect(api.useClownKitPrimary({
       ownerId: owner.id,

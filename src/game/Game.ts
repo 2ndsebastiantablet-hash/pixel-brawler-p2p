@@ -973,8 +973,10 @@ export class Game {
     }
 
     const clownRuntime = this.combat.getWeaponRuntimeState("clown-kit", this.localPlayer.state.id);
-    const clownOwnsMouse = clownRuntime.clownKitEquipped && !this.loadout.leftHand && !this.loadout.rightHand;
-    const clownChordActive = clownOwnsMouse && input.primaryHeld && input.secondaryHeld;
+    const clownPrimaryHandOpen = !this.loadout.leftHand;
+    const clownSecondaryHandOpen = !this.loadout.rightHand;
+    const clownHasOpenHand = clownRuntime.clownKitEquipped && (clownPrimaryHandOpen || clownSecondaryHandOpen);
+    const clownChordActive = clownHasOpenHand && input.primaryHeld && input.secondaryHeld;
     const clownChordWithinWindow = Math.abs(this.primaryHeldMs - this.secondaryHeldMs) <= 180 || (input.primaryPressed && input.secondaryPressed);
     const clownChordStarted = !moonChordActive
       && !spikeModeActive
@@ -1005,8 +1007,8 @@ export class Game {
     }
 
     let clownMouseConsumed = false;
-    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && !superBombMouseConsumed && !clownChordSuppress && clownOwnsMouse) {
-      if (input.primaryPressed || input.primaryHeld) {
+    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && !superBombMouseConsumed && !clownChordSuppress && clownHasOpenHand) {
+      if (clownPrimaryHandOpen && (input.primaryPressed || input.primaryHeld)) {
         this.recordAttack(this.combat.useClownKitPrimary({
           ownerId: this.localPlayer.state.id,
           player: this.localPlayer.state,
@@ -1016,7 +1018,7 @@ export class Game {
           isNewPress: input.primaryPressed,
         }), "primary");
         clownMouseConsumed = true;
-      } else if (input.secondaryPressed) {
+      } else if (clownSecondaryHandOpen && input.secondaryPressed) {
         this.recordAttack(this.combat.useClownKitSecondary({
           ownerId: this.localPlayer.state.id,
           player: this.localPlayer.state,
@@ -4505,7 +4507,7 @@ export class Game {
       superBomb.reforming ? `Reforming ${superBomb.reformTimer.toFixed(1)}s` : "",
       superBomb.weaknessStacks > 0 ? `Bomb weakness x${superBomb.weaknessStacks} - power ${Math.round(superBomb.weaknessScale * 100)}%` : "",
       clown.clownKitEquipped
-        ? `Clown Kit ${clown.clownKitUsable ? "empty hands armed" : clown.clownKitDisabledReason ?? "needs empty hands"}${clown.clownKitBalloonCooldown > 0 ? ` - balloon ${clown.clownKitBalloonCooldown.toFixed(1)}s` : ""}${clown.clownKitStageCooldown > 0 ? ` - stage ${clown.clownKitStageCooldown.toFixed(1)}s` : ""}${clown.clownKitBalloonCount > 0 ? ` - balloons ${clown.clownKitBalloonCount}` : ""}${clown.clownKitMonkeyCount > 0 ? ` - monkeys ${clown.clownKitMonkeyCount}` : ""}${clown.clownKitActiveStage ? " - performing" : ""}`
+        ? `Clown Kit ${clown.clownKitUsable ? "open hand armed" : clown.clownKitDisabledReason ?? "needs open hand"}${clown.clownKitBalloonCooldown > 0 ? ` - balloon ${clown.clownKitBalloonCooldown.toFixed(1)}s` : ""}${clown.clownKitStageCooldown > 0 ? ` - stage ${clown.clownKitStageCooldown.toFixed(1)}s` : ""}${clown.clownKitBalloonCount > 0 ? ` - balloons ${clown.clownKitBalloonCount}` : ""}${clown.clownKitMonkeyCount > 0 ? ` - monkeys ${clown.clownKitMonkeyCount}` : ""}${clown.clownKitActiveStage ? " - performing" : ""}`
         : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
@@ -5858,7 +5860,7 @@ function weaponHudDetail(
         return "Head slot item";
       }
       if (!runtime.clownKitUsable) {
-        return `Disabled - ${runtime.clownKitDisabledReason ?? "empty hands required"}`;
+        return `Disabled - ${runtime.clownKitDisabledReason ?? "open hand required"}`;
       }
       return `Finger gun - balloon ${runtime.clownKitBalloonCooldown.toFixed(1)}s - stage ${runtime.clownKitStageCooldown.toFixed(1)}s`;
     case "super-legs":
@@ -5967,7 +5969,7 @@ function weaponHelper(id: WeaponId): string {
     case "super-bomb":
       return "Strap only - empty hands: left pop, right limb bomb, both full body";
     case "clown-kit":
-      return "Head item - empty hands: left finger gun, right balloons, both Comedy Stage";
+      return "Head item - open hand: left finger gun, right balloons, both Comedy Stage";
     case "super-legs":
       return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":

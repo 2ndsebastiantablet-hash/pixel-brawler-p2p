@@ -10762,7 +10762,7 @@ export class CombatSystem {
       return "performing";
     }
     const loadout = this.playerLoadouts.get(ownerId);
-    if (loadout?.leftHand || loadout?.rightHand) {
+    if (loadout?.leftHand && loadout?.rightHand) {
       return "hand occupied";
     }
     return undefined;
