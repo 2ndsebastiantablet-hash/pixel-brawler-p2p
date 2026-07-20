@@ -33,11 +33,22 @@ describe("loadout equipment slots", () => {
       backStrap: "death-aura",
       attachment: "axe",
       legs: "rocket",
+      head: "clown-kit" as never,
     })).toEqual({
       leftHand: "rocket",
       rightHand: "rocket",
       backStrap: "death-aura",
       attachment: "axe",
+      head: "clown-kit",
+    });
+    expect(normalizeLoadout({
+      head: "clown-kit" as never,
+      frontStrap: "clown-kit" as never,
+      rightHand: "clown-kit" as never,
+      attachment: "clown-kit" as never,
+      legs: "clown-kit" as never,
+    })).toEqual({
+      head: "clown-kit",
     });
     expect(normalizeLoadout({
       frontStrap: "spikes",
@@ -216,6 +227,16 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("super-bomb" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("super-bomb" as never, "grabber" as never)).toBe(false);
     expect(isSlotCompatible("super-bomb" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "head" as never)).toBe(true);
+    expect(isSlotCompatible("clown-kit" as never, "frontStrap")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "backStrap")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "grabber" as never)).toBe(false);
+    expect(isSlotCompatible("clown-kit" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("pistol", "head" as never)).toBe(false);
+    expect(isSlotCompatible("wings", "head" as never)).toBe(false);
     expect(isSlotCompatible("grabber" as never, "frontStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "backStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "leftHand")).toBe(false);
@@ -321,6 +342,17 @@ describe("loadout equipment slots", () => {
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],
     });
+    const withClownKit = assignLoadoutItem(DEFAULT_LOADOUT, "head" as never, "clown-kit" as never);
+    expect((withClownKit as Record<string, unknown>).head).toBe("clown-kit");
+    expect(loadoutHasWeapon(withClownKit, "clown-kit" as never)).toBe(true);
+    expect(assignLoadoutItem(withClownKit, "rightHand", "clown-kit" as never).rightHand).toBeUndefined();
+    expect(assignLoadoutItem(withClownKit, "attachment", "clown-kit" as never).attachment).toBeUndefined();
+    expect(assignLoadoutItem(withClownKit, "legs", "clown-kit" as never).legs).toBeUndefined();
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("clown-kit" as never))).toMatchObject({
+      category: "utility",
+      handedness: "head",
+      compatibleSlots: ["head"],
+    });
     const withGrabber = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "grabber" as never);
     expect(withGrabber.frontStrap).toBe("grabber");
     expect(loadoutHasWeapon(withGrabber, "grabber" as never)).toBe(true);
@@ -351,14 +383,22 @@ describe("loadout equipment slots", () => {
       frontStrap: "wings",
       backStrap: "death-aura",
       legs: "super-legs",
+      head: "clown-kit" as never,
     });
     expect(clearLoadoutSlot(withStrapAndLegs, "frontStrap")).toEqual({
       backStrap: "death-aura",
       legs: "super-legs",
+      head: "clown-kit",
     });
     expect(clearLoadoutSlot(withStrapAndLegs, "legs")).toEqual({
       frontStrap: "wings",
       backStrap: "death-aura",
+      head: "clown-kit",
+    });
+    expect(clearLoadoutSlot(withStrapAndLegs, "head" as never)).toEqual({
+      frontStrap: "wings",
+      backStrap: "death-aura",
+      legs: "super-legs",
     });
 
     const withGrabberSlot = normalizeLoadout({

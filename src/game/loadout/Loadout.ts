@@ -1,7 +1,7 @@
 import type { WeaponId } from "../combat/Weapon";
 import { WEAPON_IDS, weaponRegistry } from "../combat/WeaponRegistry";
 
-export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment" | "grabber" | "legs";
+export type LoadoutSlotId = "frontStrap" | "backStrap" | "leftHand" | "rightHand" | "attachment" | "grabber" | "legs" | "head";
 export type LoadoutCategory =
   | "all"
   | "guns"
@@ -23,6 +23,7 @@ export interface LoadoutState {
   attachment?: WeaponId;
   grabber?: WeaponId;
   legs?: WeaponId;
+  head?: WeaponId;
 }
 
 export interface LoadoutItemDefinition {
@@ -31,7 +32,7 @@ export interface LoadoutItemDefinition {
   summary: string;
   category: LoadoutCategory;
   compatibleSlots: LoadoutSlotId[];
-  handedness: "one-handed" | "two-handed" | "strap" | "attachment" | "legs";
+  handedness: "one-handed" | "two-handed" | "strap" | "attachment" | "legs" | "head";
 }
 
 export const DEFAULT_LOADOUT: LoadoutState = {};
@@ -52,6 +53,7 @@ export const LOADOUT_SLOT_LABELS: Record<LoadoutSlotId, string> = {
   attachment: "F Attachment",
   grabber: "Grabber",
   legs: "Legs",
+  head: "Head",
 };
 
 const twoHandedWeapons = new Set<WeaponId>([
@@ -100,6 +102,10 @@ const legWeapons = new Set<WeaponId>([
   "super-legs",
 ]);
 
+const headWeapons = new Set<WeaponId>([
+  "clown-kit",
+]);
+
 const attachmentWeapons = new Set<WeaponId>([
   ...oneHandedWeapons,
   ...twoHandedWeapons,
@@ -121,15 +127,20 @@ export const LOADOUT_ITEMS: LoadoutItemDefinition[] = WEAPON_IDS.map((id) => {
   if (legWeapons.has(id)) {
     compatibleSlots.push("legs");
   }
+  if (headWeapons.has(id)) {
+    compatibleSlots.push("head");
+  }
   const handedness = twoHandedWeapons.has(id)
     ? "two-handed"
     : oneHandedWeapons.has(id)
       ? "one-handed"
       : legWeapons.has(id)
         ? "legs"
-        : attachmentWeapons.has(id)
-          ? "attachment"
-          : "strap";
+        : headWeapons.has(id)
+          ? "head"
+          : attachmentWeapons.has(id)
+            ? "attachment"
+            : "strap";
   return {
     id,
     name: weapon.name,
@@ -151,6 +162,7 @@ export function normalizeLoadout(input: Partial<LoadoutState> = {}): LoadoutStat
     normalizeSlot(input, next, "grabber");
   }
   normalizeSlot(input, next, "legs");
+  normalizeSlot(input, next, "head");
 
   return next;
 }
@@ -345,6 +357,9 @@ export function isSlotCompatible(weaponId: WeaponId, slot: LoadoutSlotId): boole
   if (slot === "legs") {
     return legWeapons.has(weaponId);
   }
+  if (slot === "head") {
+    return headWeapons.has(weaponId);
+  }
   if (slot === "grabber") {
     return attachmentWeapons.has(weaponId);
   }
@@ -374,7 +389,8 @@ export function loadoutHasWeapon(loadout: Partial<LoadoutState>, weaponId: Weapo
     || loadout.rightHand === weaponId
     || loadout.attachment === weaponId
     || loadout.grabber === weaponId
-    || loadout.legs === weaponId;
+    || loadout.legs === weaponId
+    || loadout.head === weaponId;
 }
 
 function hasGrabberEquipped(loadout: Partial<LoadoutState>): boolean {
@@ -438,6 +454,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
     return "body";
   }
   if (id === "grabber") {
+    return "utility";
+  }
+  if (id === "clown-kit") {
     return "utility";
   }
   if (id === "spikes" || id === "van" || id === "spirit-fighter" || id === "super-bomb") {

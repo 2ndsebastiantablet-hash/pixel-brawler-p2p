@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, SuperBombLimbLossState, SuperBombReformationState, SuperBombSplatterState, TridentFloodState, TridentTransformationState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, ClownBalloonState, ClownMonkeyState, ClownStageState, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, SuperBombLimbLossState, SuperBombReformationState, SuperBombSplatterState, TridentFloodState, TridentTransformationState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -163,6 +163,7 @@ export class Game {
   private moonChordHeld = false;
   private tridentChordHeld = false;
   private superBombChordHeld = false;
+  private clownChordHeld = false;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -222,7 +223,7 @@ export class Game {
     this.attachmentVisual.initialized = false;
     const equipped = this.combat.getPlayerInventory().equippedWeapon;
     if (!loadoutHasWeapon(this.loadout, equipped)) {
-      this.combat.setEquippedWeapon(this.loadout.leftHand ?? this.loadout.frontStrap ?? "pistol");
+      this.combat.setEquippedWeapon(this.preferredEquippedWeapon());
     }
     this.renderCombatHud();
   }
@@ -319,7 +320,7 @@ export class Game {
     this.loadout = normalizeLoadout(profile.loadout);
     this.attachmentVisual.initialized = false;
     this.combat.start(createDefaultInventory());
-    this.combat.setEquippedWeapon(this.loadout.leftHand ?? this.loadout.frontStrap ?? "pistol");
+    this.combat.setEquippedWeapon(this.preferredEquippedWeapon());
     this.combatHud.hidden = false;
     this.shakeTimer = 0;
     this.primaryHeldMs = 0;
@@ -327,6 +328,7 @@ export class Game {
     this.moonChordHeld = false;
     this.tridentChordHeld = false;
     this.superBombChordHeld = false;
+    this.clownChordHeld = false;
     this.footstepTimer = 0;
     this.attackVisual = null;
     this.running = true;
@@ -406,6 +408,7 @@ export class Game {
     const previousState = { ...this.localPlayer.state };
     this.localPlayer.update(activeMovementInput, dt, this.getWeightedPhysics());
     this.applyLocalNeptuneWaterInput(activeMovementInput, dt);
+    this.applyLocalNeptuneTiltCollision(activeMovementInput, dt);
     this.playMovementFeedback(previousState, this.localPlayer.state, dt);
     this.updateAttachmentVisual(dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
@@ -856,12 +859,40 @@ export class Game {
       });
     }
 
+    const tridentTransformationActive = Boolean(this.combat.getTridentTransformationState(this.localPlayer.state.id));
+    let tridentTransformationMouseConsumed = false;
+    if (!moonChordActive && !spikeModeActive && !spiritActive && tridentTransformationActive) {
+      if (input.primaryPressed) {
+        this.recordAttack(this.combat.usePrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: true,
+        }), "primary");
+        tridentTransformationMouseConsumed = true;
+      }
+      if (input.secondaryPressed) {
+        this.recordAttack(this.combat.useSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.secondaryHeldMs,
+          isNewPress: true,
+        }), "secondary");
+        tridentTransformationMouseConsumed = true;
+      }
+    }
+
     const tridentEquipped = this.combat.getPlayerInventory().equippedWeapon === "trident";
     const tridentChordActive = tridentEquipped && input.primaryHeld && input.secondaryHeld;
     const tridentChordWithinWindow = Math.abs(this.primaryHeldMs - this.secondaryHeldMs) <= 180 || (input.primaryPressed && input.secondaryPressed);
     const tridentChordStarted = !moonChordActive
       && !spikeModeActive
       && !spiritActive
+      && !tridentTransformationMouseConsumed
       && tridentChordActive
       && !this.tridentChordHeld
       && tridentChordWithinWindow
@@ -890,6 +921,7 @@ export class Game {
     const superBombChordStarted = !moonChordActive
       && !spikeModeActive
       && !spiritActive
+      && !tridentTransformationMouseConsumed
       && !tridentChordSuppress
       && superBombChordActive
       && !this.superBombChordHeld
@@ -913,7 +945,7 @@ export class Game {
     }
 
     let superBombMouseConsumed = false;
-    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentChordSuppress && !superBombChordSuppress && superBombOwnsMouse) {
+    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && superBombOwnsMouse) {
       if (input.primaryPressed) {
         this.recordAttack(this.combat.useSuperBombPrimary({
           ownerId: this.localPlayer.state.id,
@@ -940,7 +972,64 @@ export class Game {
       }
     }
 
-    const mouseSuppressed = moonChordActive || spikeModeActive || spiritActive || tridentChordSuppress || superBombChordSuppress || superBombMouseConsumed;
+    const clownRuntime = this.combat.getWeaponRuntimeState("clown-kit", this.localPlayer.state.id);
+    const clownOwnsMouse = clownRuntime.clownKitEquipped && !this.loadout.leftHand && !this.loadout.rightHand;
+    const clownChordActive = clownOwnsMouse && input.primaryHeld && input.secondaryHeld;
+    const clownChordWithinWindow = Math.abs(this.primaryHeldMs - this.secondaryHeldMs) <= 180 || (input.primaryPressed && input.secondaryPressed);
+    const clownChordStarted = !moonChordActive
+      && !spikeModeActive
+      && !spiritActive
+      && !tridentTransformationMouseConsumed
+      && !tridentChordSuppress
+      && !superBombChordSuppress
+      && !superBombMouseConsumed
+      && clownChordActive
+      && !this.clownChordHeld
+      && clownChordWithinWindow
+      && (input.primaryPressed || input.secondaryPressed);
+    if (clownChordStarted) {
+      this.recordAttack(this.combat.useClownKitSuper({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim,
+        now: time,
+        heldMs: Math.max(this.primaryHeldMs, this.secondaryHeldMs),
+        isNewPress: true,
+      }), "primary");
+    }
+    const clownChordSuppress = clownChordStarted || (clownChordActive && this.clownChordHeld);
+    if (clownChordStarted) {
+      this.clownChordHeld = true;
+    } else if (!clownChordActive) {
+      this.clownChordHeld = false;
+    }
+
+    let clownMouseConsumed = false;
+    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && !superBombMouseConsumed && !clownChordSuppress && clownOwnsMouse) {
+      if (input.primaryPressed || input.primaryHeld) {
+        this.recordAttack(this.combat.useClownKitPrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: input.primaryPressed,
+        }), "primary");
+        clownMouseConsumed = true;
+      } else if (input.secondaryPressed) {
+        this.recordAttack(this.combat.useClownKitSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.secondaryHeldMs,
+          isNewPress: true,
+        }), "secondary");
+        clownMouseConsumed = true;
+      }
+    }
+
+    const mouseSuppressed = moonChordActive || spikeModeActive || spiritActive || tridentTransformationMouseConsumed || tridentChordSuppress || superBombChordSuppress || superBombMouseConsumed || clownChordSuppress || clownMouseConsumed;
     const primaryAction = mouseSuppressed ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
@@ -1037,7 +1126,7 @@ export class Game {
       this.loadout = clearLoadoutSlot(this.loadout, slot);
     }
     if ((slot === "frontStrap" || slot === "backStrap") && previousWeapon) {
-      const fallback = this.loadout.leftHand ?? this.loadout.rightHand ?? this.loadout.frontStrap ?? this.loadout.backStrap ?? "pistol";
+      const fallback = this.preferredEquippedWeapon();
       const consumedPrevious = previousWeapon === weaponId && !loadoutHasWeapon(this.loadout, weaponId);
       this.combat.setEquippedWeapon(consumedPrevious ? fallback : previousWeapon);
     }
@@ -1072,15 +1161,26 @@ export class Game {
         ? "rightHand"
         : isSlotCompatible(weaponId, "frontStrap")
           ? "frontStrap"
-          : isSlotCompatible(weaponId, "legs")
-            ? "legs"
-            : null;
+          : isSlotCompatible(weaponId, "head")
+            ? "head"
+            : isSlotCompatible(weaponId, "legs")
+              ? "legs"
+              : null;
     if (!slot) {
       return;
     }
     this.loadout = assignLoadoutItem(this.loadout, slot, weaponId);
     this.attachmentVisual.initialized = false;
     this.combat.setEquippedWeapon(slot === "grabber" ? fallbackEquipped ?? this.loadout.rightHand ?? this.loadout.leftHand ?? weaponId : weaponId);
+  }
+
+  private preferredEquippedWeapon(): WeaponId {
+    return this.loadout.leftHand
+      ?? this.loadout.rightHand
+      ?? this.loadout.frontStrap
+      ?? this.loadout.backStrap
+      ?? this.loadout.head
+      ?? "pistol";
   }
 
   private preferredHandSlot(): Extract<LoadoutSlotId, "leftHand" | "rightHand"> {
@@ -1575,6 +1675,41 @@ export class Game {
     }
   }
 
+  private applyLocalNeptuneTiltCollision(input: InputFrame, dt: number): void {
+    if (this.combat.getVanDrivenBy(this.localPlayer.state.id)) {
+      return;
+    }
+    const state = this.localPlayer.state;
+    const centerX = state.x + state.width / 2;
+    if (centerX < PLATFORM_LEFT || centerX > PLATFORM_RIGHT) {
+      return;
+    }
+    const groundY = this.combat.getNeptuneTiltedGroundY(centerX);
+    if (typeof groundY !== "number") {
+      return;
+    }
+    const topY = groundY - state.height;
+    const snapRange = Math.max(18, Math.abs(state.velocityY) * dt + 8);
+    if (state.y >= topY - snapRange && state.velocityY >= -360) {
+      state.y = topY;
+      state.grounded = true;
+      state.velocityY = Math.min(0, state.velocityY);
+    }
+    if (!state.grounded) {
+      return;
+    }
+    const leftGround = this.combat.getNeptuneTiltedGroundY(centerX - 28) ?? groundY;
+    const rightGround = this.combat.getNeptuneTiltedGroundY(centerX + 28) ?? groundY;
+    const slope = clampNumber((rightGround - leftGround) / 56, -2, 2);
+    if (Math.abs(slope) < 0.04) {
+      return;
+    }
+    const downhill = Math.sign(slope);
+    const inputDirection = Number(input.right) - Number(input.left);
+    const slideForce = (260 + Math.min(620, Math.abs(slope) * 540)) * (inputDirection === -downhill ? 0.45 : 1);
+    state.velocityX = clampNumber(state.velocityX + downhill * slideForce * dt, -DEFAULT_PHYSICS.slideSpeed * 1.1, DEFAULT_PHYSICS.slideSpeed * 1.1);
+  }
+
   private updateAttachmentVisual(dt: number): void {
     if (!this.loadout.attachment) {
       this.attachmentVisual.initialized = false;
@@ -1619,6 +1754,11 @@ export class Game {
     this.pixelRect(ctx, cx - 2, y + 11, 4, 31);
     ctx.fillStyle = color;
     this.pixelRect(ctx, cx - facing * 12 - 2, y + 16, 4, 18);
+    if (loadout.head === "clown-kit") {
+      this.drawClownKitGear(ctx, state);
+    } else if (loadout.head) {
+      this.drawTinyLoadoutItem(ctx, loadout.head, cx, y + 8, 7);
+    }
     if (loadout.frontStrap) {
       this.drawTinyLoadoutItem(ctx, loadout.frontStrap, cx + facing * 16, y + 17, 8);
     }
@@ -1637,6 +1777,31 @@ export class Game {
     if (loadout.legs) {
       this.drawTinyLoadoutItem(ctx, loadout.legs, cx, y + 49, 9);
     }
+    ctx.restore();
+  }
+
+  private drawClownKitGear(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState): void {
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const cx = x + Math.round(state.width / 2);
+    const facing = state.facing || 1;
+    const bob = Math.round(Math.sin(performance.now() * 0.012 + state.x * 0.04) * 1);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, cx - 11, y + 9 + bob, 22, 12);
+    ctx.fillStyle = "#05060a";
+    this.pixelRect(ctx, cx - 7, y + 13 + bob, 3, 3);
+    this.pixelRect(ctx, cx + 4, y + 13 + bob, 3, 3);
+    ctx.fillStyle = "#ff2f5f";
+    this.pixelRect(ctx, cx - 2, y + 16 + bob, 4, 4);
+    ctx.fillStyle = "#ff5fcf";
+    this.pixelRect(ctx, cx - 15, y + 6 + bob, 6, 7);
+    this.pixelRect(ctx, cx + 9, y + 6 + bob, 6, 7);
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, cx - 25, y + 35, 9, 8);
+    this.pixelRect(ctx, cx + 16, y + 35, 9, 8);
+    this.pixelRect(ctx, cx + facing * 19 - 4, y + 28, 8, 9);
     ctx.restore();
   }
 
@@ -1814,6 +1979,19 @@ export class Game {
       this.pixelRect(ctx, Math.round(x - size / 3), Math.round(y - size / 3), Math.max(3, Math.round(size * 0.65)), Math.max(3, Math.round(size * 0.65)));
       ctx.fillStyle = "#fff4a8";
       this.pixelRect(ctx, Math.round(x + size / 4), Math.round(y - size / 2 - 1), Math.max(3, Math.round(size * 0.38)), 3);
+      return;
+    }
+    if (weaponId === "clown-kit") {
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+      ctx.fillStyle = "#ff2f5f";
+      this.pixelRect(ctx, Math.round(x - 1), Math.round(y - 1), 3, 3);
+      ctx.fillStyle = "#05060a";
+      this.pixelRect(ctx, Math.round(x - size / 3), Math.round(y - size / 4), 2, 2);
+      this.pixelRect(ctx, Math.round(x + size / 4), Math.round(y - size / 4), 2, 2);
+      ctx.fillStyle = "#ff5fcf";
+      this.pixelRect(ctx, Math.round(x - size / 2 - 2), Math.round(y - size / 2 + 1), 3, 5);
+      this.pixelRect(ctx, Math.round(x + size / 2 - 1), Math.round(y - size / 2 + 1), 3, 5);
       return;
     }
     ctx.fillStyle = colorForWeapon(weaponId);
@@ -2714,6 +2892,9 @@ export class Game {
     for (const splatter of snapshot.superBombSplatters) {
       this.drawSuperBombSplatter(ctx, splatter);
     }
+    for (const stage of snapshot.clownStages) {
+      this.drawClownStage(ctx, stage);
+    }
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
     }
@@ -2763,6 +2944,12 @@ export class Game {
     for (const spike of snapshot.spikes) {
       this.drawSpike(ctx, spike);
     }
+    for (const balloon of snapshot.clownBalloons) {
+      this.drawClownBalloon(ctx, balloon);
+    }
+    for (const monkey of snapshot.clownMonkeys) {
+      this.drawClownMonkey(ctx, monkey);
+    }
     for (const shield of snapshot.crossShields) {
       this.drawCrossShield(ctx, shield);
     }
@@ -2805,20 +2992,132 @@ export class Game {
     }
   }
 
+  private drawClownStage(ctx: CanvasRenderingContext2D, stage: ClownStageState): void {
+    const x = Math.round(stage.x - this.camera.x);
+    const y = Math.round(stage.y - this.camera.y);
+    const progress = 1 - stage.timer / Math.max(0.01, stage.duration);
+    const pulse = 0.5 + Math.sin(stage.age * 7.5) * 0.5;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = stage.visualOnly ? 0.62 : 0.88;
+    ctx.fillStyle = "rgba(4, 6, 12, 0.76)";
+    ctx.fillRect(x - 170, y - 86, 340, 96);
+    ctx.fillStyle = "#ff5fcf";
+    ctx.fillRect(x - 182, y - 92, 364, 8);
+    ctx.fillRect(x - 182, y + 10, 364, 10);
+    ctx.fillStyle = "#fff4a8";
+    for (let light = -150; light <= 150; light += 50) {
+      const flicker = Math.round(pulse * 4 + (light % 3));
+      ctx.fillRect(x + light - 6, y - 106 - flicker, 12, 12);
+    }
+    ctx.strokeStyle = stage.finalPulse ? "rgba(255, 244, 168, 0.72)" : "rgba(255, 95, 207, 0.48)";
+    ctx.lineWidth = stage.finalPulse ? 5 : 3;
+    ctx.beginPath();
+    ctx.ellipse(x, y - 48, 120 + progress * 180 + pulse * 12, 34 + progress * 70, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(stage.finalPulse ? "PUNCHLINE" : "HA HA", x, y - 44);
+    ctx.restore();
+  }
+
+  private drawClownBalloon(ctx: CanvasRenderingContext2D, balloon: ClownBalloonState): void {
+    const x = Math.round(balloon.x - this.camera.x);
+    const y = Math.round(balloon.y - this.camera.y);
+    const wobble = Math.sin(balloon.age * 8) * 3;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = balloon.visualOnly ? 0.62 : 0.96;
+    if (balloon.form === "flower") {
+      ctx.strokeStyle = "#7cff6b";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.round(wobble), y - 34);
+      ctx.stroke();
+      for (let petal = 0; petal < 6; petal += 1) {
+        const angle = petal * Math.PI / 3 + balloon.age * 0.2;
+        ctx.fillStyle = petal % 2 === 0 ? "#ff5fcf" : "#fff4a8";
+        this.pixelRect(ctx, x + Math.round(Math.cos(angle) * 14) - 6, y - 42 + Math.round(Math.sin(angle) * 10) - 5, 12, 10);
+      }
+      ctx.fillStyle = "#ff2f5f";
+      this.pixelRect(ctx, x - 5, y - 47, 10, 10);
+      ctx.fillStyle = "rgba(90, 215, 255, 0.58)";
+      this.pixelRect(ctx, x + 14, y - 44, 42, 5);
+    } else {
+      ctx.fillStyle = "#ff5fcf";
+      this.pixelRect(ctx, x - 23, y - 18, 42, 20);
+      this.pixelRect(ctx, x + 11, y - 28, 18, 16);
+      this.pixelRect(ctx, x - 25, y + 1, 9, 20);
+      this.pixelRect(ctx, x + 10, y + 1, 9, 20);
+      ctx.fillStyle = "#ffffff";
+      this.pixelRect(ctx, x + 22, y - 22, 4, 4);
+      ctx.strokeStyle = "#ff5fcf";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(x - 24, y - 12, 16 + wobble, Math.PI * 0.2, Math.PI * 1.2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  private drawClownMonkey(ctx: CanvasRenderingContext2D, monkey: ClownMonkeyState): void {
+    const x = Math.round(monkey.x - this.camera.x);
+    const y = Math.round(monkey.y - this.camera.y);
+    const facing = Math.sign(monkey.vx || 1);
+    const run = Math.sin(monkey.age * 14);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = monkey.visualOnly ? 0.62 : 0.96;
+    ctx.fillStyle = "#7d5cff";
+    this.pixelRect(ctx, x - 10, y - 14, 20, 18);
+    this.pixelRect(ctx, x - 8, y - 28, 16, 16);
+    ctx.fillStyle = "#d7c4ff";
+    this.pixelRect(ctx, x - 12, y - 2 + Math.round(run * 2), 7, 18);
+    this.pixelRect(ctx, x + 5, y - 2 - Math.round(run * 2), 7, 18);
+    this.pixelRect(ctx, x - 18, y - 12, 8, 14);
+    this.pixelRect(ctx, x + 10, y - 12, 8, 14);
+    ctx.fillStyle = "#05060a";
+    this.pixelRect(ctx, x - 5, y - 23, 3, 3);
+    this.pixelRect(ctx, x + 3, y - 23, 3, 3);
+    ctx.strokeStyle = "#d7c4ff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x - facing * 13, y - 8, 18, -Math.PI * 0.2 * facing, Math.PI * 0.95 * facing);
+    ctx.stroke();
+    if (monkey.stolenItem) {
+      this.drawTinyLoadoutItem(ctx, monkey.stolenItem, x + facing * 24, y - 16, 9);
+    }
+    ctx.restore();
+  }
+
   private drawTridentFlood(ctx: CanvasRenderingContext2D, flood: TridentFloodState): void {
     const y = Math.round(flood.level - this.camera.y);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = Math.min(0.72, flood.alpha);
+    ctx.globalAlpha = Math.min(0.68, flood.alpha);
     ctx.fillStyle = "#157fb4";
-    ctx.fillRect(0, y, this.canvas.width, this.canvas.height - y);
-    ctx.globalAlpha = Math.min(0.36, flood.alpha * 0.55);
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.globalAlpha = Math.min(0.32, flood.alpha * 0.5);
     ctx.fillStyle = "#5ad7ff";
     const scroll = Math.round((flood.age * 170) % 96);
-    for (let line = -scroll; line < this.canvas.width + 96; line += 96) {
-      const waveY = y + 24 + Math.round(Math.sin((line + flood.age * 40) * 0.02) * 12);
-      ctx.fillRect(line, waveY, 68, 4);
-      ctx.fillRect(line + 22, waveY + 44, 88, 3);
+    for (let row = 12; row < this.canvas.height + 80; row += 46) {
+      for (let line = -scroll - (row % 3) * 34; line < this.canvas.width + 96; line += 96) {
+        const waveY = row + Math.round(Math.sin((line + flood.age * 40 + row) * 0.02) * 8);
+        ctx.fillRect(line, waveY, 68, 4);
+        ctx.fillRect(line + 22, waveY + 22, 88, 3);
+      }
+    }
+    if (y > 0 && y < this.canvas.height) {
+      ctx.globalAlpha = Math.min(0.44, flood.alpha * 0.7);
+      ctx.fillStyle = "#bdefff";
+      ctx.fillRect(0, y - 3, this.canvas.width, 6);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.32)";
+      for (let line = -scroll; line < this.canvas.width + 96; line += 84) {
+        ctx.fillRect(line, y - 10 + Math.round(Math.sin(line * 0.04 + flood.age * 5) * 4), 48, 3);
+      }
     }
     ctx.globalAlpha = Math.min(0.42, flood.suck * 0.5);
     ctx.strokeStyle = "#d6f2ff";
@@ -2977,23 +3276,28 @@ export class Game {
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.lineCap = "round";
+    const halfArc = (shield.arcRadians || Math.PI) / 2;
     ctx.strokeStyle = "rgba(0, 0, 0, 0.92)";
-    ctx.lineWidth = Math.max(18, Math.round(radius * 0.22));
+    ctx.lineWidth = Math.max(18, Math.round(shield.thickness || radius * 0.22));
     ctx.beginPath();
-    ctx.ellipse(0, 0, radius, Math.round(radius * 0.58), 0, -Math.PI * 0.78, Math.PI * 0.78);
+    ctx.arc(0, 0, radius, -halfArc, halfArc);
     ctx.stroke();
     ctx.strokeStyle = "#fff4a8";
     ctx.lineWidth = Math.max(5, Math.round(radius * 0.055));
     ctx.beginPath();
-    ctx.ellipse(2, 0, Math.max(8, radius - 8), Math.round(radius * 0.5), 0, -Math.PI * 0.74, Math.PI * 0.74);
+    ctx.arc(0, 0, Math.max(8, radius - 8), -halfArc, halfArc);
     ctx.stroke();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.86)";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.ellipse(8, 0, Math.max(6, radius - 22), Math.round(radius * 0.4), 0, -Math.PI * 0.66, Math.PI * 0.66);
+    ctx.arc(0, 0, Math.max(6, radius - 22), -Math.max(0.1, halfArc - 0.1), Math.max(0.1, halfArc - 0.1));
     ctx.stroke();
     ctx.fillStyle = "rgba(255, 244, 168, 0.18)";
-    ctx.fillRect(Math.round(radius * 0.2), -Math.round(radius * 0.45), Math.round(radius * 0.18), Math.round(radius * 0.9));
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, radius, -halfArc, halfArc);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
@@ -4152,6 +4456,7 @@ export class Game {
     const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
     const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
+    const clown = this.combat.getWeaponRuntimeState("clown-kit", this.localPlayer.state.id);
     const superBomb = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
     const judgment = this.combat.getJudgmentDayState();
     const jupiter = this.combat.getJupiterEventState();
@@ -4199,6 +4504,9 @@ export class Game {
         : "",
       superBomb.reforming ? `Reforming ${superBomb.reformTimer.toFixed(1)}s` : "",
       superBomb.weaknessStacks > 0 ? `Bomb weakness x${superBomb.weaknessStacks} - power ${Math.round(superBomb.weaknessScale * 100)}%` : "",
+      clown.clownKitEquipped
+        ? `Clown Kit ${clown.clownKitUsable ? "empty hands armed" : clown.clownKitDisabledReason ?? "needs empty hands"}${clown.clownKitBalloonCooldown > 0 ? ` - balloon ${clown.clownKitBalloonCooldown.toFixed(1)}s` : ""}${clown.clownKitStageCooldown > 0 ? ` - stage ${clown.clownKitStageCooldown.toFixed(1)}s` : ""}${clown.clownKitBalloonCount > 0 ? ` - balloons ${clown.clownKitBalloonCount}` : ""}${clown.clownKitMonkeyCount > 0 ? ` - monkeys ${clown.clownKitMonkeyCount}` : ""}${clown.clownKitActiveStage ? " - performing" : ""}`
+        : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -4206,7 +4514,7 @@ export class Game {
     ].filter(Boolean).join(" - ");
     const hpText = local ? `HP ${Math.ceil(local.hp)}/${local.maxHp}` : "HP --";
     const weightText = `Weight ${weapon.weight.label} - Move ${Math.round(weapon.weight.moveSpeedMultiplier * 100)}% - Jump ${Math.round(weapon.weight.jumpMultiplier * 100)}%`;
-    const loadoutSlots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    const loadoutSlots: LoadoutSlotId[] = ["head", "frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
     if (this.loadout.frontStrap === "grabber" || this.loadout.backStrap === "grabber") {
       loadoutSlots.push("grabber");
     }
@@ -4277,9 +4585,8 @@ export class Game {
     const width = PLATFORM_RIGHT - PLATFORM_LEFT;
     const tilt = this.getActiveNeptuneTilt();
     if (tilt && Math.abs(tilt.amount) > 0.035) {
-      const drop = Math.round(Math.min(148, Math.abs(tilt.amount) * 82));
-      const leftY = y + (tilt.amount < 0 ? drop : 0);
-      const rightY = y + (tilt.amount > 0 ? drop : 0);
+      const leftY = Math.round((this.combat.getNeptuneTiltedGroundY(PLATFORM_LEFT) ?? DEFAULT_PHYSICS.groundY) - this.camera.y);
+      const rightY = Math.round((this.combat.getNeptuneTiltedGroundY(PLATFORM_RIGHT) ?? DEFAULT_PHYSICS.groundY) - this.camera.y);
       const yAt = (screenX: number): number => {
         const t = clampNumber((screenX - x) / Math.max(1, width), 0, 1);
         return Math.round(lerpNumber(leftY, rightY, t));
@@ -5406,6 +5713,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#5ad7ff";
     case "super-bomb":
       return "#ff6f91";
+    case "clown-kit":
+      return "#ff5fcf";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -5544,6 +5853,14 @@ function weaponHudDetail(
         return `SUPER BOMB disabled - ${runtime.superBombDisabledReason ?? "empty hand required"}`;
       }
       return `Empty-hand pop ${runtime.superBombPrimaryCooldown.toFixed(1)}s - limb ${runtime.superBombLimbBombCooldown.toFixed(1)}s - full body ${runtime.superBombSuperCooldown.toFixed(1)}s`;
+    case "clown-kit":
+      if (!runtime.clownKitEquipped) {
+        return "Head slot item";
+      }
+      if (!runtime.clownKitUsable) {
+        return `Disabled - ${runtime.clownKitDisabledReason ?? "empty hands required"}`;
+      }
+      return `Finger gun - balloon ${runtime.clownKitBalloonCooldown.toFixed(1)}s - stage ${runtime.clownKitStageCooldown.toFixed(1)}s`;
     case "super-legs":
       return "Run/jump boost - Space kicks - leg armor";
     case "virgin-blood":
@@ -5649,6 +5966,8 @@ function weaponHelper(id: WeaponId): string {
       return "Left strikes - Right throws/pick up - both mouse buttons flood - hits transform";
     case "super-bomb":
       return "Strap only - empty hands: left pop, right limb bomb, both full body";
+    case "clown-kit":
+      return "Head item - empty hands: left finger gun, right balloons, both Comedy Stage";
     case "super-legs":
       return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":

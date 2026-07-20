@@ -445,6 +445,7 @@ export class LobbyUI {
     views.className = "loadout-views";
     views.append(
       this.createLoadoutView(root, "front", [
+        { slot: "head", label: "Head", className: "head" },
         { slot: "frontStrap", label: "Front", className: "front-strap" },
         { slot: "rightHand", label: "Hand", className: "hand" },
         { slot: "attachment", label: "F", className: "attachment" },
@@ -469,8 +470,12 @@ export class LobbyUI {
     }
     const loadout = normalizeLoadout(this.profile.loadout);
     const hasGrabber = loadout.frontStrap === "grabber" || loadout.backStrap === "grabber";
+    const hasClownKit = loadout.head === "clown-kit";
     if (view === "back" && hasGrabber) {
       figure.classList.add("has-grabber");
+    }
+    if (hasClownKit) {
+      figure.classList.add("has-clown-kit");
     }
 
     const title = document.createElement("div");
@@ -490,6 +495,15 @@ export class LobbyUI {
       glove.className = "loadout-grabber-glove";
       arm.append(glove);
       figure.append(arm);
+    }
+    if (hasClownKit) {
+      const mask = document.createElement("span");
+      mask.className = "loadout-clown-mask";
+      const leftGlove = document.createElement("span");
+      leftGlove.className = "loadout-clown-glove left";
+      const rightGlove = document.createElement("span");
+      rightGlove.className = "loadout-clown-glove right";
+      figure.append(mask, leftGlove, rightGlove);
     }
 
     for (const target of targets) {
@@ -612,7 +626,7 @@ export class LobbyUI {
     const container = requireElement(root, "[data-loadout-slots]");
     const loadout = normalizeLoadout(this.profile.loadout);
     container.replaceChildren();
-    const slots: LoadoutSlotId[] = ["frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
+    const slots: LoadoutSlotId[] = ["head", "frontStrap", "backStrap", "leftHand", "rightHand", "attachment"];
     if (loadout.frontStrap === "grabber" || loadout.backStrap === "grabber") {
       slots.push("grabber");
     }
@@ -1127,6 +1141,8 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#b8bfd7";
     case "spikes":
       return "#f2f2f2";
+    case "clown-kit":
+      return "#ff5fcf";
     case "van":
       return "#f2f2f2";
     case "hands":
@@ -1161,6 +1177,7 @@ function loadoutSlotFromTarget(target: HTMLElement): LoadoutSlotId | null {
     || value === "rightHand"
     || value === "attachment"
     || value === "grabber"
+    || value === "head"
     || value === "legs"
   ) {
     return value;

@@ -1,6 +1,7 @@
 import type { WeaponDefinition, WeaponId, WeaponInventoryState } from "./Weapon";
 import { axe } from "./weapons/Axe";
 import { chainsaw } from "./weapons/Chainsaw";
+import { clownKit } from "./weapons/ClownKit";
 import { cross } from "./weapons/Cross";
 import { deathAura } from "./weapons/DeathAura";
 import { grapplingHook } from "./weapons/GrapplingHook";
@@ -53,6 +54,7 @@ export const WEAPON_IDS = [
   "grabber",
   "trident",
   "super-bomb",
+  "clown-kit",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -87,6 +89,7 @@ const ALL_WEAPON_IDS = [
   "grabber",
   "trident",
   "super-bomb",
+  "clown-kit",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -124,6 +127,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   grabber,
   trident,
   superBomb,
+  clownKit,
   virginBlood,
   deathAura,
   rocket,

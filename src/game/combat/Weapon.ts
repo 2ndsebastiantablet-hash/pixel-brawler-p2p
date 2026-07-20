@@ -17,6 +17,7 @@ export type WeaponId =
   | "grabber"
   | "trident"
   | "super-bomb"
+  | "clown-kit"
   | "virgin-blood"
   | "death-aura"
   | "rocket"

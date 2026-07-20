@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PHYSICS, VOID_DEATH_Y, createPlayerState, stepPlayer } from "../src/game/Physics";
-import { CombatSystem } from "../src/game/combat/CombatSystem";
+import { CombatSystem, neptuneTiltedGroundY } from "../src/game/combat/CombatSystem";
 import { createCustomFighter } from "../src/game/combat/Fighter";
 import { COMBAT_TUNING } from "../src/game/combat/CombatTuning";
 import { createDefaultInventory } from "../src/game/combat/WeaponRegistry";
@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(34);
+    expect(fighter.weaponInventory).toHaveLength(35);
     expect(fighter.weaponInventory).toContain("grabber");
     expect(fighter.weaponInventory).toContain("trident");
     expect(fighter.weaponInventory).toContain("mars");
@@ -2878,6 +2878,49 @@ describe("combat system", () => {
     ]));
   });
 
+  it("limits Cross shield contact to the faced crescent instead of a full bubble", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("cross" as never);
+    const player = { ...playerState, id: "arc-cross-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(player, "Cross", "#fff4a8");
+    const front = { ...playerState, id: "front-cross-target", x: 96, velocityX: 0, velocityY: 0 };
+    const rear = { ...playerState, id: "rear-cross-target", x: 28, velocityX: 0, velocityY: 0 };
+    combat.syncRemotePlayer({
+      id: front.id,
+      name: "Front",
+      color: "#ff6f91",
+      x: front.x,
+      y: front.y,
+      width: front.width,
+      height: front.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.syncRemotePlayer({
+      id: rear.id,
+      name: "Rear",
+      color: "#b096ff",
+      x: rear.x,
+      y: rear.y,
+      width: rear.width,
+      height: rear.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const result = combat.usePrimary({ ownerId: player.id, player, aim: { x: 1, y: 0 }, now: 120, heldMs: 0, isNewPress: true });
+    expect(result).toMatchObject({ kind: "utility", weaponId: "cross", label: "Crescent Shield" });
+    const shield = (combat.getSnapshot() as unknown as { crossShields: Array<{ arcRadians: number }> }).crossShields.at(-1)!;
+    expect(shield.arcRadians).toBeLessThanOrEqual(Math.PI * 1.08);
+
+    combat.update(0.1, [player]);
+
+    expect(combat.getCombatant(front.id)!.velocityX).toBeGreaterThan(350);
+    expect(combat.getCombatant(rear.id)!.hp).toBe(100);
+    expect(Math.abs(combat.getCombatant(rear.id)!.velocityX)).toBeLessThan(20);
+  });
+
   it("activates The Moon as an independent one-minute map event with reversible user side switching", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -3583,6 +3626,11 @@ describe("combat system", () => {
     expect(snapshot.neptuneEvents[0].currentAttack).toBe("slam");
     expect(snapshot.neptuneEvents[0].tilt.active).toBe(true);
     expect(Math.abs(snapshot.neptuneEvents[0].tilt.amount)).toBeGreaterThan(1.45);
+    const leftGround = neptuneTiltedGroundY(DEFAULT_PHYSICS.groundY, DEFAULT_PHYSICS.platformLeft + 220, snapshot.neptuneEvents[0].tilt.direction, snapshot.neptuneEvents[0].tilt.amount);
+    const rightGround = neptuneTiltedGroundY(DEFAULT_PHYSICS.groundY, DEFAULT_PHYSICS.platformRight - 220, snapshot.neptuneEvents[0].tilt.direction, snapshot.neptuneEvents[0].tilt.amount);
+    expect(Math.abs(leftGround - DEFAULT_PHYSICS.groundY)).toBeGreaterThan(24);
+    expect(Math.abs(rightGround - DEFAULT_PHYSICS.groundY)).toBeGreaterThan(24);
+    expect(Math.sign(rightGround - leftGround)).toBe(snapshot.neptuneEvents[0].tilt.direction);
     expect(Math.sign(combat.getCombatant(victim.id)!.velocityX)).toBe(snapshot.neptuneEvents[0].tilt.direction);
     expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(250);
   });
@@ -3938,8 +3986,11 @@ describe("combat system", () => {
 
     victim.x = snapshot.superBombSplatters[0].x - victim.width / 2;
     victim.y = snapshot.superBombSplatters[0].y - victim.height / 2;
+    const splatterHpBefore = combat.getCombatant(victim.id)!.hp;
     combat.update(0.25, [owner]);
-    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === "poison")).toBe(true);
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("superBombPatchPoison" as never))).toBe(true);
+    combat.update(0.6, [owner]);
+    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(splatterHpBefore);
 
     combat.update(10.2, [owner]);
     snapshot = combat.getSnapshot() as unknown as typeof snapshot;
@@ -3948,6 +3999,163 @@ describe("combat system", () => {
     expect(api.getSuperBombRuntime(owner.id).reforming).toBe(false);
     expect(api.getSuperBombRuntime(owner.id).superCooldown).toBeLessThan(90);
     expect(api.getSuperBombRuntime(owner.id).weaknessStacks).toBe(1);
+  });
+
+  it("uses Clown Kit as a head item with empty-hand finger-gun knockback", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "clown-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Clown", "#18dff5");
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never } as never);
+    const api = combat as unknown as {
+      getClownKitRuntime(ownerId: string): { equipped: boolean; usable: boolean; disabledReason?: string; stageCooldown: number; balloonCount: number };
+      useClownKitPrimary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+    };
+
+    expect(api.getClownKitRuntime(owner.id)).toMatchObject({ equipped: true, usable: true, stageCooldown: 0, balloonCount: 0 });
+    const fired = api.useClownKitPrimary({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 1, y: -0.16 },
+      now: 100,
+      heldMs: 0,
+      isNewPress: true,
+    });
+
+    expect(fired).toMatchObject({ kind: "fired", weaponId: "clown-kit", label: "Finger Gun" });
+    const bullet = combat.getSnapshot().projectiles.find((projectile) => projectile.weaponId === ("clown-kit" as never))!;
+    expect(bullet.damage).toBe(2);
+    expect(Math.abs(bullet.knockback.x)).toBeGreaterThanOrEqual(1200);
+    expect(bullet.knockback.y).toBeLessThanOrEqual(-850);
+    expect(bullet.radius).toBeLessThanOrEqual(8);
+
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never, rightHand: "pistol" } as never);
+    expect(api.getClownKitRuntime(owner.id)).toMatchObject({ usable: false, disabledReason: "hand occupied" });
+    expect(api.useClownKitPrimary({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 1, y: 0 },
+      now: 120,
+      heldMs: 0,
+      isNewPress: true,
+    })).toMatchObject({ kind: "blocked", label: "Empty hand required" });
+  });
+
+  it("morphs Clown Kit balloons into flower, dog, and monkey tools with cleanup", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "clown-balloon-user", x: 0, velocityX: 0, velocityY: 0 };
+    const victim = { ...playerState, id: "clown-balloon-victim", x: 92, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Clown", "#18dff5");
+    combat.syncRemotePlayer({
+      id: victim.id,
+      name: "Target",
+      color: "#ff6f91",
+      x: victim.x,
+      y: victim.y,
+      width: victim.width,
+      height: victim.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never } as never);
+    const api = combat as unknown as {
+      getPlayerLoadout(id: string): { rightHand?: string } | undefined;
+      useClownKitSecondary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+    };
+    type ClownSnapshot = {
+      clownBalloons: Array<{ id: string; ownerId: string; form: "flower" | "dog"; timer: number; duration: number; targetId?: string }>;
+      clownMonkeys: Array<{ id: string; ownerId: string; timer: number; duration: number; stolenItem?: string; targetId?: string }>;
+      droppedWeapons: Array<{ weaponId: string }>;
+    };
+
+    expect(api.useClownKitSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 200, heldMs: 350, isNewPress: true })).toMatchObject({
+      kind: "utility",
+      weaponId: "clown-kit",
+      label: "Balloon Flower",
+    });
+    let snapshot = combat.getSnapshot() as unknown as ClownSnapshot;
+    expect(snapshot.clownBalloons).toEqual([expect.objectContaining({ ownerId: owner.id, form: "flower", duration: 30 })]);
+    combat.update(0.45, [owner, victim]);
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("clownStun" as never))).toBe(true);
+
+    combat.getPlayerInventory().cooldowns["clown-kit"] = 0;
+    const dogHpBefore = combat.getCombatant(victim.id)!.hp;
+    expect(api.useClownKitSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 900, heldMs: 350, isNewPress: true })).toMatchObject({
+      label: "Balloon Dog",
+    });
+    for (let tick = 0; tick < 12; tick += 1) {
+      combat.update(0.18, [owner, victim]);
+    }
+    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(dogHpBefore);
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("clownDistortion" as never))).toBe(true);
+
+    combat.getPlayerInventory().cooldowns["clown-kit"] = 0;
+    combat.setPlayerLoadout(victim.id, { rightHand: "pistol" } as never);
+    expect(api.useClownKitSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 1500, heldMs: 350, isNewPress: true })).toMatchObject({
+      label: "Mini Monkeys",
+    });
+    for (let tick = 0; tick < 22; tick += 1) {
+      combat.update(0.14, [owner, victim]);
+    }
+    snapshot = combat.getSnapshot() as unknown as ClownSnapshot;
+    expect(snapshot.clownMonkeys.some((monkey) => monkey.stolenItem === "pistol" && monkey.targetId === victim.id)).toBe(true);
+    expect(api.getPlayerLoadout(victim.id)?.rightHand).toBeUndefined();
+
+    combat.update(30.5, [owner, victim]);
+    snapshot = combat.getSnapshot() as unknown as ClownSnapshot;
+    expect(snapshot.clownMonkeys).toHaveLength(0);
+    expect(snapshot.clownBalloons).toHaveLength(0);
+    expect(snapshot.droppedWeapons.some((weapon) => weapon.weaponId === "pistol")).toBe(true);
+  });
+
+  it("builds Clown Kit comedy stage with laugh waves and final cleanup", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "clown-stage-user", x: 0, velocityX: 0, velocityY: 0 };
+    const victim = { ...playerState, id: "clown-stage-victim", x: 132, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Clown", "#18dff5");
+    combat.syncRemotePlayer({
+      id: victim.id,
+      name: "Target",
+      color: "#ff6f91",
+      x: victim.x,
+      y: victim.y,
+      width: victim.width,
+      height: victim.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never } as never);
+    const api = combat as unknown as {
+      getClownKitRuntime(ownerId: string): { stageCooldown: number; activeStage: boolean };
+      useClownKitSuper(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+    };
+
+    expect(api.useClownKitSuper({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 3000, heldMs: 0, isNewPress: true })).toMatchObject({
+      kind: "utility",
+      weaponId: "clown-kit",
+      label: "Comedy Stage",
+    });
+    let snapshot = combat.getSnapshot() as unknown as { clownStages: Array<{ ownerId: string; timer: number; duration: number; finalPulse: boolean }> };
+    expect(snapshot.clownStages).toEqual([expect.objectContaining({ ownerId: owner.id, duration: expect.any(Number), finalPulse: false })]);
+    expect(snapshot.clownStages[0].duration).toBeGreaterThanOrEqual(12);
+    expect(snapshot.clownStages[0].duration).toBeLessThanOrEqual(18);
+    expect(api.getClownKitRuntime(owner.id).stageCooldown).toBeGreaterThanOrEqual(60);
+    expect(api.getClownKitRuntime(owner.id).activeStage).toBe(true);
+    expect(combat.isMovementLocked(owner.id)).toBe(true);
+
+    const laughHpBefore = combat.getCombatant(victim.id)!.hp;
+    combat.update(2.15, [owner, victim]);
+    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(laughHpBefore);
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("clownLaugh" as never))).toBe(true);
+    expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(120);
+
+    combat.update(16.2, [owner, victim]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.clownStages).toHaveLength(0);
+    expect(api.getClownKitRuntime(owner.id).activeStage).toBe(false);
+    expect(combat.isMovementLocked(owner.id)).toBe(false);
   });
 
   it("lets Neptune, Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {

@@ -9,7 +9,7 @@ import type { AttackProfile, WeaponChargeState, WeaponId, WeaponInventoryState, 
 import { COMBAT_TUNING } from "./CombatTuning";
 import { getMarsAiItemStrategy, type MarsAiStrategyId } from "./MarsAiStrategies";
 import { WEAPON_IDS, createDefaultInventory, weaponRegistry } from "./WeaponRegistry";
-import type { LoadoutState } from "../loadout/Loadout";
+import { normalizeLoadout, type LoadoutState } from "../loadout/Loadout";
 import type { SoundId } from "../../audio/SoundSystem";
 
 export interface Combatant {
@@ -138,6 +138,8 @@ export interface CrossShieldState {
   dirX: number;
   dirY: number;
   radius: number;
+  arcRadians: number;
+  thickness: number;
   knockback: number;
   age: number;
   duration: number;
@@ -509,6 +511,56 @@ export interface SuperBombReformationState {
   visualOnly?: boolean;
 }
 
+export type ClownBalloonForm = "flower" | "dog";
+
+export interface ClownBalloonState {
+  id: string;
+  ownerId: string;
+  form: ClownBalloonForm;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  timer: number;
+  duration: number;
+  age: number;
+  attackCooldown: number;
+  targetId?: string;
+  affectedTargetIds: string[];
+  visualOnly?: boolean;
+}
+
+export interface ClownMonkeyState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  timer: number;
+  duration: number;
+  age: number;
+  stealCooldown: number;
+  targetId?: string;
+  stolenItem?: WeaponId;
+  stolenSlot?: Extract<keyof LoadoutState, "leftHand" | "rightHand">;
+  visualOnly?: boolean;
+}
+
+export interface ClownStageState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  timer: number;
+  duration: number;
+  age: number;
+  pulseTimer: number;
+  pulseIndex: number;
+  finalPulse: boolean;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -647,6 +699,9 @@ export interface CombatSnapshot {
   superBombLimbLosses: SuperBombLimbLossState[];
   superBombSplatters: SuperBombSplatterState[];
   superBombReformations: SuperBombReformationState[];
+  clownBalloons: ClownBalloonState[];
+  clownMonkeys: ClownMonkeyState[];
+  clownStages: ClownStageState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -928,6 +983,23 @@ const superBombReformDuration = 10;
 const superBombSplatterCount = 26;
 const superBombWeaknessPerStack = 0.1;
 const superBombWeaknessCap = 6;
+const clownFingerCooldown = 0.22;
+const clownFingerSpeed = 980;
+const clownFingerKnockbackX = 1320;
+const clownFingerKnockbackY = -920;
+const clownBalloonDuration = 30;
+const clownBalloonCooldown = 0.75;
+const clownFlowerRange = 145;
+const clownDogSpeed = 250;
+const clownDogDamage = 8;
+const clownDogKnockback = 360;
+const clownMonkeyCount = 4;
+const clownMonkeySpeed = 310;
+const clownStageDuration = 15;
+const clownStageCooldown = 75;
+const clownStagePulseEvery = 2.1;
+const clownStageRadius = 360;
+const clownFinalRadius = 520;
 
 interface PendingTeleport {
   ownerId: string;
@@ -1140,6 +1212,14 @@ export interface WeaponRuntimeState {
   superBombReforming: boolean;
   superBombReformTimer: number;
   superBombMissingLimbs: SuperBombLimbLossState[];
+  clownKitEquipped: boolean;
+  clownKitUsable: boolean;
+  clownKitDisabledReason?: string;
+  clownKitBalloonCooldown: number;
+  clownKitStageCooldown: number;
+  clownKitBalloonCount: number;
+  clownKitMonkeyCount: number;
+  clownKitActiveStage: boolean;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -1205,6 +1285,11 @@ export class CombatSystem {
   private readonly superBombLimbLosses = new Map<string, SuperBombLimbLossState[]>();
   private readonly superBombSplatters: SuperBombSplatterState[] = [];
   private readonly superBombReformations = new Map<string, SuperBombReformationState>();
+  private readonly clownBalloonCycle = new Map<string, number>();
+  private readonly clownStageCooldowns = new Map<string, number>();
+  private readonly clownBalloons: ClownBalloonState[] = [];
+  private readonly clownMonkeys: ClownMonkeyState[] = [];
+  private readonly clownStages: ClownStageState[] = [];
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -1273,6 +1358,11 @@ export class CombatSystem {
     this.superBombLimbLosses.clear();
     this.superBombSplatters.length = 0;
     this.superBombReformations.clear();
+    this.clownBalloonCycle.clear();
+    this.clownStageCooldowns.clear();
+    this.clownBalloons.length = 0;
+    this.clownMonkeys.length = 0;
+    this.clownStages.length = 0;
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1383,7 +1473,12 @@ export class CombatSystem {
   }
 
   setPlayerLoadout(id: string, loadout: Partial<LoadoutState>): void {
-    this.playerLoadouts.set(id, { ...loadout });
+    this.playerLoadouts.set(id, normalizeLoadout(loadout));
+  }
+
+  getPlayerLoadout(id: string): LoadoutState | undefined {
+    const loadout = this.playerLoadouts.get(id);
+    return loadout ? { ...loadout } : undefined;
   }
 
   removeCombatant(id: string): void {
@@ -1423,6 +1518,9 @@ export class CombatSystem {
     this.superBombLimbCooldowns.delete(id);
     this.superBombSuperCooldowns.delete(id);
     this.superBombWeaknessStacks.delete(id);
+    this.clearClownKitStateForOwner(id, true);
+    this.clownStageCooldowns.delete(id);
+    this.clownBalloonCycle.delete(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1489,6 +1587,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "super-bomb") {
       return { kind: "blocked", weaponId: "super-bomb", label: "Empty hand mouse" };
+    }
+    if (this.inventory.equippedWeapon === "clown-kit") {
+      return this.useClownKitPrimary(context);
     }
     if (this.inventory.equippedWeapon === "moon") {
       return this.activateMoonEvent(context);
@@ -1567,6 +1668,9 @@ export class CombatSystem {
     }
     if (weapon.id === "super-bomb") {
       return { kind: "blocked", weaponId: weapon.id, label: "Empty hand mouse" };
+    }
+    if (weapon.id === "clown-kit") {
+      return this.useClownKitSecondary(context);
     }
     if (weapon.id === "moon") {
       return { kind: "blocked", weaponId: weapon.id, label: "Moon uses Q/E" };
@@ -2280,6 +2384,7 @@ export class CombatSystem {
     this.updateTridentTransformations(dt, players);
     this.updateSuperBombs(dt, players);
     this.updateCombatants(dt);
+    this.updateClownKit(dt, players);
     this.updateMoonEvents(dt, players);
     this.updateJupiterEvents(dt, players);
     this.updateUranusEvents(dt, players);
@@ -2341,6 +2446,7 @@ export class CombatSystem {
       || this.spikeImpales.has(ownerId)
       || this.superBombReformations.has(ownerId)
       || Boolean(this.getVanDrivenBy(ownerId))
+      || this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0)
       || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"))
       || [...this.tridentTransformations.values()].some((state) => state.heldTargetIds.includes(ownerId));
   }
@@ -2364,6 +2470,13 @@ export class CombatSystem {
       cooldownTimer: state?.cooldownTimer ?? 0,
       suffering: state?.suffering ?? 0,
     };
+  }
+
+  getNeptuneTiltedGroundY(x: number, baseGroundY = DEFAULT_PHYSICS.groundY): number | undefined {
+    const tilt = this.neptuneEvents
+      .filter((event) => event.phase === "active" && event.tilt.active && event.tilt.amount > 0)
+      .sort((left, right) => right.tilt.amount - left.tilt.amount)[0]?.tilt;
+    return tilt ? neptuneTiltedGroundY(baseGroundY, x, tilt.direction, tilt.amount) : undefined;
   }
 
   getRocketState(ownerId: string): { active: boolean; lit: boolean; riding: boolean } {
@@ -2621,6 +2734,14 @@ export class CombatSystem {
       superBombReforming: this.getSuperBombRuntime(ownerId).reforming,
       superBombReformTimer: this.getSuperBombRuntime(ownerId).reformTimer,
       superBombMissingLimbs: this.getSuperBombRuntime(ownerId).missingLimbs,
+      clownKitEquipped: this.getClownKitRuntime(ownerId).equipped,
+      clownKitUsable: this.getClownKitRuntime(ownerId).usable,
+      clownKitDisabledReason: this.getClownKitRuntime(ownerId).disabledReason,
+      clownKitBalloonCooldown: this.getClownKitRuntime(ownerId).balloonCooldown,
+      clownKitStageCooldown: this.getClownKitRuntime(ownerId).stageCooldown,
+      clownKitBalloonCount: this.getClownKitRuntime(ownerId).balloonCount,
+      clownKitMonkeyCount: this.getClownKitRuntime(ownerId).monkeyCount,
+      clownKitActiveStage: this.getClownKitRuntime(ownerId).activeStage,
     };
   }
 
@@ -3172,6 +3293,8 @@ export class CombatSystem {
       dirX: aim.x,
       dirY: aim.y,
       radius,
+      arcRadians: Math.PI,
+      thickness: Math.max(18, radius * 0.22),
       knockback,
       age: 0,
       duration,
@@ -3247,7 +3370,7 @@ export class CombatSystem {
     for (const shield of this.crossShields) {
       shield.age += dt;
       this.applyCrossShieldContacts(shield);
-      this.deflectProjectilesWithCrossShield(shield);
+      this.deflectProjectilesWithCrossShield(shield, dt);
     }
     removeWhere(this.crossShields, (shield) => shield.age >= shield.duration);
 
@@ -3270,8 +3393,7 @@ export class CombatSystem {
       const center = { x: target.x + target.width / 2, y: target.y + target.height * 0.45 };
       const dx = center.x - shield.x;
       const dy = center.y - shield.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance > shield.radius + Math.max(target.width, target.height) * 0.35) {
+      if (!isPointInsideCrossShieldArc(shield, center, Math.max(target.width, target.height) * 0.35)) {
         continue;
       }
       const direction = normalize({ x: dx || shield.dirX || 1, y: dy || shield.dirY || -0.2 });
@@ -3300,8 +3422,7 @@ export class CombatSystem {
         continue;
       }
       const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
-      const distance = Math.hypot(center.x - shield.x, center.y - shield.y);
-      if (distance > shield.radius + van.width * 0.42) {
+      if (!isPointInsideCrossShieldArc(shield, center, van.width * 0.42)) {
         continue;
       }
       const direction = normalize({ x: center.x - shield.x || shield.dirX || 1, y: center.y - shield.y || -0.2 });
@@ -3315,7 +3436,7 @@ export class CombatSystem {
     }
   }
 
-  private deflectProjectilesWithCrossShield(shield: CrossShieldState): void {
+  private deflectProjectilesWithCrossShield(shield: CrossShieldState, dt: number): void {
     if (shield.visualOnly) {
       return;
     }
@@ -3323,8 +3444,9 @@ export class CombatSystem {
       if (projectile.ownerId === shield.ownerId || projectile.visualOnly || projectile.age > projectile.lifetime || shield.hits.includes(`projectile:${projectile.id}`)) {
         continue;
       }
-      const distance = Math.hypot(projectile.x - shield.x, projectile.y - shield.y);
-      if (distance > shield.radius + projectile.radius) {
+      const current = { x: projectile.x, y: projectile.y };
+      const previous = { x: projectile.x - projectile.vx * dt, y: projectile.y - projectile.vy * dt };
+      if (!isPointInsideCrossShieldArc(shield, current, projectile.radius) && !doesSegmentTouchCrossShieldArc(shield, previous, current, projectile.radius)) {
         continue;
       }
       const direction = normalize({ x: projectile.x - shield.x || shield.dirX || 1, y: projectile.y - shield.y || shield.dirY || -0.1 });
@@ -5536,6 +5658,8 @@ export class CombatSystem {
         dirX: aim.x,
         dirY: aim.y,
         radius,
+        arcRadians: Math.PI,
+        thickness: Math.max(18, radius * 0.22),
         knockback: lerp(crossShieldMinKnockback, crossShieldMaxKnockback, (radius - crossShieldMinRadius) / Math.max(1, crossShieldMaxRadius - crossShieldMinRadius)),
         age: 0,
         duration: crossShieldMaxDuration,
@@ -5872,6 +5996,9 @@ export class CombatSystem {
         poisonCooldowns: { ...state.poisonCooldowns },
       })),
       superBombReformations: [...this.superBombReformations.values()].map((state) => ({ ...state })),
+      clownBalloons: this.clownBalloons.map((state) => ({ ...state, affectedTargetIds: [...state.affectedTargetIds] })),
+      clownMonkeys: this.clownMonkeys.map((state) => ({ ...state })),
+      clownStages: this.clownStages.map((state) => ({ ...state })),
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -10064,7 +10191,8 @@ export class CombatSystem {
       if ((splatter.poisonCooldowns[target.id] ?? 0) > 0) {
         continue;
       }
-      target.statuses = upsertStatusEffect(target.statuses, createStatus("poison"));
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("superBombPatchPoison"));
+      target.hp = Math.max(0, target.hp - 1);
       target.hitstun = Math.max(target.hitstun, 0.04);
       splatter.poisonCooldowns[target.id] = 0.75;
       this.addEffect("aura", center.x, center.y, center.x, center.y - 36, "#7cff6b", "SPLATTER POISON");
@@ -10213,6 +10341,560 @@ export class CombatSystem {
     if (owner) {
       owner.statuses = owner.statuses.filter((status) => status.id !== "superBombReforming");
     }
+  }
+
+  getClownKitRuntime(ownerId: string): {
+    equipped: boolean;
+    usable: boolean;
+    disabledReason?: string;
+    balloonCooldown: number;
+    stageCooldown: number;
+    balloonCount: number;
+    monkeyCount: number;
+    activeStage: boolean;
+  } {
+    const equipped = this.hasClownKit(ownerId);
+    const disabledReason = this.clownKitDisabledReason(ownerId);
+    return {
+      equipped,
+      usable: equipped && !disabledReason,
+      disabledReason,
+      balloonCooldown: this.inventory.cooldowns["clown-kit"] ?? 0,
+      stageCooldown: this.clownStageCooldowns.get(ownerId) ?? 0,
+      balloonCount: this.clownBalloons.filter((balloon) => balloon.ownerId === ownerId).length,
+      monkeyCount: this.clownMonkeys.filter((monkey) => monkey.ownerId === ownerId).length,
+      activeStage: this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0),
+    };
+  }
+
+  useClownKitPrimary(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "clown-kit";
+    const blocked = this.validateClownKitUse(context.ownerId);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Clown cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId, label: "No clown" };
+    }
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing, y: -0.08 });
+    const start = {
+      x: owner.x + owner.width / 2 + aim.x * 22,
+      y: owner.y + 24 + aim.y * 12,
+    };
+    this.projectiles.push({
+      id: this.makeId("clown-finger"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: start.x,
+      y: start.y,
+      vx: aim.x * clownFingerSpeed,
+      vy: aim.y * clownFingerSpeed,
+      radius: 5,
+      damage: 2,
+      knockback: {
+        x: Math.sign(aim.x || context.player.facing || 1) * clownFingerKnockbackX,
+        y: clownFingerKnockbackY + Math.min(0, aim.y) * 160,
+      },
+      stun: 0.12,
+      age: 0,
+      lifetime: 1.1,
+      gravity: 0,
+      bounces: 0,
+      pierce: 0,
+      label: "Finger Gun",
+      color: colorForWeapon(weaponId),
+      trailColor: "#fff4a8",
+      hits: [],
+    });
+    this.inventory.cooldowns[weaponId] = clownFingerCooldown;
+    this.addEffect("muzzle", start.x, start.y, start.x + aim.x * 42, start.y + aim.y * 26, "#fff4a8", "POP");
+    this.queueSound("clown-finger");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", start, aim, "Finger Gun", context.now));
+    return { kind: "fired", weaponId, label: "Finger Gun" };
+  }
+
+  useClownKitSecondary(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "clown-kit";
+    const blocked = this.validateClownKitUse(context.ownerId);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    if ((this.inventory.cooldowns[weaponId] ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Balloon cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId, label: "No clown" };
+    }
+    const cycle = this.clownBalloonCycle.get(context.ownerId) ?? 0;
+    this.clownBalloonCycle.set(context.ownerId, cycle + 1);
+    this.inventory.cooldowns[weaponId] = clownBalloonCooldown;
+    const origin = this.clownHandPosition(owner);
+    const formIndex = cycle % 3;
+    const label = formIndex === 0 ? "Balloon Flower" : formIndex === 1 ? "Balloon Dog" : "Mini Monkeys";
+    if (formIndex === 2) {
+      this.spawnClownMonkeys(context.ownerId, origin, owner);
+    } else {
+      this.clownBalloons.push({
+        id: this.makeId(`clown-${formIndex === 0 ? "flower" : "dog"}`),
+        ownerId: context.ownerId,
+        form: formIndex === 0 ? "flower" : "dog",
+        x: origin.x,
+        y: origin.y,
+        vx: 0,
+        vy: 0,
+        timer: clownBalloonDuration,
+        duration: clownBalloonDuration,
+        age: 0,
+        attackCooldown: 0,
+        affectedTargetIds: [],
+      });
+    }
+    this.addEffect("aura", origin.x, origin.y, origin.x, origin.y - 52, colorForWeapon(weaponId), label);
+    this.queueSound("clown-balloon");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", origin, normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing, y: 0 }), label, context.now));
+    return { kind: "utility", weaponId, label };
+  }
+
+  useClownKitSuper(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "clown-kit";
+    const blocked = this.validateClownKitUse(context.ownerId, true);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    if ((this.clownStageCooldowns.get(context.ownerId) ?? 0) > 0) {
+      return { kind: "blocked", weaponId, label: "Stage cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId, label: "No clown" };
+    }
+    removeWhere(this.clownStages, (stage) => stage.ownerId === context.ownerId);
+    const center = { x: owner.x + owner.width / 2, y: DEFAULT_PHYSICS.groundY };
+    this.clownStages.push({
+      id: this.makeId("clown-stage"),
+      ownerId: context.ownerId,
+      x: center.x,
+      y: center.y,
+      timer: clownStageDuration,
+      duration: clownStageDuration,
+      age: 0,
+      pulseTimer: 0.35,
+      pulseIndex: 0,
+      finalPulse: false,
+    });
+    this.clownStageCooldowns.set(context.ownerId, clownStageCooldown);
+    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("clownPerforming"));
+    owner.velocityX = 0;
+    owner.velocityY = 0;
+    this.addEffect("aura", center.x, center.y - 54, center.x, center.y - 190, "#ff5fcf", "COMEDY STAGE");
+    this.addEffect("shockwave", center.x - 120, center.y, center.x + 120, center.y, "#fff4a8", "STAGE BUILDS");
+    this.queueSound("clown-stage");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, { x: 0, y: -1 }, "Comedy Stage", context.now, {
+      range: clownStageRadius,
+    }));
+    return { kind: "utility", weaponId, label: "Comedy Stage" };
+  }
+
+  private updateClownKit(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [ownerId, cooldown] of [...this.clownStageCooldowns.entries()]) {
+      const next = Math.max(0, cooldown - dt);
+      if (next <= 0) {
+        this.clownStageCooldowns.delete(ownerId);
+      } else {
+        this.clownStageCooldowns.set(ownerId, next);
+      }
+    }
+    for (const balloon of [...this.clownBalloons]) {
+      balloon.age += dt;
+      balloon.timer = Math.max(0, balloon.timer - dt);
+      balloon.attackCooldown = Math.max(0, balloon.attackCooldown - dt);
+      if (balloon.form === "flower") {
+        this.updateClownFlower(balloon);
+      } else {
+        this.updateClownDog(balloon, dt);
+      }
+      if (balloon.timer <= 0) {
+        this.popClownBalloon(balloon);
+      }
+    }
+    for (const monkey of [...this.clownMonkeys]) {
+      this.updateClownMonkey(monkey, dt);
+      if (monkey.timer <= 0) {
+        this.popClownMonkey(monkey);
+      }
+    }
+    for (const stage of [...this.clownStages]) {
+      this.updateClownStage(stage, dt, players);
+    }
+  }
+
+  private updateClownFlower(balloon: ClownBalloonState): void {
+    const owner = this.combatants.get(balloon.ownerId);
+    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
+      this.popClownBalloon(balloon);
+      return;
+    }
+    const hand = this.clownHandPosition(owner);
+    balloon.x = hand.x;
+    balloon.y = hand.y;
+    if (balloon.attackCooldown > 0) {
+      return;
+    }
+    const target = this.findNearestClownTarget(balloon.ownerId, balloon.x, balloon.y, clownFlowerRange);
+    if (!target) {
+      return;
+    }
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("clownStun"));
+    target.hitstun = Math.max(target.hitstun, 0.35);
+    balloon.attackCooldown = 0.45;
+    if (!balloon.affectedTargetIds.includes(target.id)) {
+      balloon.affectedTargetIds.push(target.id);
+    }
+    const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    this.addEffect("tracer", balloon.x, balloon.y, center.x, center.y, "#5ad7ff", "SQUIRT");
+    this.queueSound("clown-pop");
+  }
+
+  private updateClownDog(balloon: ClownBalloonState, dt: number): void {
+    const target = this.findNearestClownTarget(balloon.ownerId, balloon.x, balloon.y, 900);
+    if (!target) {
+      balloon.vx *= 0.9;
+      balloon.vy = Math.min(0, balloon.vy + 240 * dt);
+      balloon.x += balloon.vx * dt;
+      balloon.y += balloon.vy * dt;
+      return;
+    }
+    balloon.targetId = target.id;
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    const direction = normalize({ x: targetCenter.x - balloon.x, y: targetCenter.y - balloon.y });
+    balloon.vx = direction.x * clownDogSpeed;
+    balloon.vy = direction.y * clownDogSpeed;
+    balloon.x += balloon.vx * dt;
+    balloon.y += balloon.vy * dt;
+    if (Math.hypot(targetCenter.x - balloon.x, targetCenter.y - balloon.y) > 36 + Math.max(target.width, target.height) * 0.25 || balloon.attackCooldown > 0) {
+      return;
+    }
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const hit = this.applyDamage({
+      sourceId: balloon.ownerId,
+      targetId: target.id,
+      weaponId: "clown-kit",
+      damage: clownDogDamage,
+      knockback: { x: Math.sign(targetCenter.x - balloon.x || 1) * clownDogKnockback, y: -220 },
+      stun: 0.28,
+      label: "Balloon Dog",
+      status: "clownDistortion",
+      skipHitLocationScaling: true,
+      skipSourceScaling: true,
+    });
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+    }
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("clownDistortion"));
+    if (!balloon.affectedTargetIds.includes(target.id)) {
+      balloon.affectedTargetIds.push(target.id);
+    }
+    balloon.attackCooldown = 0.85;
+    this.addEffect("spark", targetCenter.x, targetCenter.y, targetCenter.x, targetCenter.y - 30, colorForWeapon("clown-kit"), "DOG BITE");
+    this.queueSound("clown-pop");
+  }
+
+  private updateClownMonkey(monkey: ClownMonkeyState, dt: number): void {
+    monkey.age += dt;
+    monkey.timer = Math.max(0, monkey.timer - dt);
+    monkey.stealCooldown = Math.max(0, monkey.stealCooldown - dt);
+    if (monkey.stolenItem) {
+      const owner = this.combatants.get(monkey.ownerId);
+      const awayFrom = owner ? normalize({ x: monkey.x - (owner.x + owner.width / 2) || 1, y: -0.15 }) : { x: Math.sign(monkey.vx || 1), y: -0.15 };
+      monkey.vx = awayFrom.x * clownMonkeySpeed;
+      monkey.vy += 520 * dt;
+    } else {
+      const target = this.findNearestClownItemTarget(monkey.ownerId, monkey.x, monkey.y);
+      if (target) {
+        monkey.targetId = target.id;
+        const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+        const direction = normalize({ x: center.x - monkey.x, y: center.y - monkey.y });
+        monkey.vx = direction.x * clownMonkeySpeed;
+        monkey.vy = direction.y * clownMonkeySpeed - 40;
+        if (Math.hypot(center.x - monkey.x, center.y - monkey.y) <= 48 && monkey.stealCooldown <= 0) {
+          this.tryClownMonkeySteal(monkey, target.id);
+        }
+      } else {
+        monkey.vx += Math.sin(monkey.age * 5 + monkey.x * 0.01) * 30 * dt;
+        monkey.vy += 620 * dt;
+      }
+    }
+    monkey.x += monkey.vx * dt;
+    monkey.y += monkey.vy * dt;
+    const floor = DEFAULT_PHYSICS.groundY - 10;
+    if (monkey.y > floor) {
+      monkey.y = floor;
+      monkey.vy = -260 - (monkey.id.length % 3) * 42;
+      monkey.vx *= 0.88;
+    }
+  }
+
+  private updateClownStage(stage: ClownStageState, dt: number, players: PlayerPhysicsState[]): void {
+    stage.age += dt;
+    stage.timer = Math.max(0, stage.timer - dt);
+    stage.pulseTimer -= dt;
+    const owner = this.combatants.get(stage.ownerId);
+    const ownerPlayer = players.find((player) => player.id === stage.ownerId);
+    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
+      this.finishClownStage(stage);
+      return;
+    }
+    owner.x = stage.x - owner.width / 2;
+    owner.y = DEFAULT_PHYSICS.groundY - owner.height;
+    owner.velocityX = 0;
+    owner.velocityY = 0;
+    owner.statuses = upsertStatusEffect(owner.statuses, { ...createStatus("clownPerforming"), duration: stage.timer });
+    if (ownerPlayer) {
+      ownerPlayer.x = owner.x;
+      ownerPlayer.y = owner.y;
+      ownerPlayer.velocityX = 0;
+      ownerPlayer.velocityY = 0;
+      ownerPlayer.grounded = true;
+    }
+    while (stage.pulseTimer <= 0 && stage.timer > 0) {
+      stage.pulseTimer += clownStagePulseEvery;
+      stage.pulseIndex += 1;
+      this.applyClownLaughWave(stage, false);
+    }
+    if (stage.timer <= 0) {
+      this.applyClownLaughWave(stage, true);
+      this.finishClownStage(stage);
+    }
+  }
+
+  private applyClownLaughWave(stage: ClownStageState, finalPulse: boolean): void {
+    const radius = finalPulse ? clownFinalRadius : clownStageRadius;
+    const damage = finalPulse ? 8 : 3 + Math.min(2, stage.pulseIndex);
+    const knockback = finalPulse ? 480 : 220 + stage.pulseIndex * 18;
+    for (const target of this.combatants.values()) {
+      if (target.id === stage.ownerId || target.hp <= 0 || target.respawnTimer > 0) {
+        continue;
+      }
+      const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const distance = Math.hypot(center.x - stage.x, center.y - (stage.y - 50));
+      if (distance > radius + Math.max(target.width, target.height) * 0.4) {
+        continue;
+      }
+      const direction = normalize({ x: center.x - stage.x || 1, y: center.y - (stage.y - 50) || -0.1 });
+      const previousInvulnerable = target.invulnerable;
+      target.invulnerable = 0;
+      const hit = this.applyDamage({
+        sourceId: stage.ownerId,
+        targetId: target.id,
+        weaponId: "clown-kit",
+        damage,
+        knockback: { x: direction.x * knockback, y: -160 - (finalPulse ? 120 : 0) },
+        stun: finalPulse ? 0.38 : 0.18,
+        label: finalPulse ? "FINAL PUNCHLINE" : "LAUGH WAVE",
+        status: "clownLaugh",
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+      if (!hit.applied) {
+        target.invulnerable = previousInvulnerable;
+      }
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("clownLaugh"));
+    }
+    stage.finalPulse = finalPulse || stage.finalPulse;
+    this.addEffect("shockwave", stage.x, stage.y - 48, stage.x + radius, stage.y - 48, finalPulse ? "#fff4a8" : colorForWeapon("clown-kit"), finalPulse ? "FINAL PUNCHLINE" : "HA!");
+    this.queueSound("clown-laugh");
+  }
+
+  private finishClownStage(stage: ClownStageState): void {
+    removeWhere(this.clownStages, (candidate) => candidate.id === stage.id);
+    const owner = this.combatants.get(stage.ownerId);
+    if (owner) {
+      owner.statuses = owner.statuses.filter((status) => status.id !== "clownPerforming");
+      this.addEffect("spark", stage.x - 60, stage.y - 30, stage.x + 60, stage.y - 90, "#fff4a8", "CONFETTI");
+    }
+    this.queueSound("clown-pop");
+  }
+
+  private clearClownKitStateForOwner(ownerId: string, dropItems: boolean): void {
+    for (const monkey of [...this.clownMonkeys]) {
+      if (monkey.ownerId === ownerId) {
+        if (dropItems) {
+          this.dropClownStolenItem(monkey);
+        }
+        removeWhere(this.clownMonkeys, (candidate) => candidate.id === monkey.id);
+      } else if (monkey.targetId === ownerId) {
+        monkey.targetId = undefined;
+      }
+    }
+    for (const balloon of [...this.clownBalloons]) {
+      if (balloon.ownerId === ownerId) {
+        this.popClownBalloon(balloon);
+      } else {
+        removeWhere(balloon.affectedTargetIds, (targetId) => targetId === ownerId);
+      }
+    }
+    for (const stage of [...this.clownStages]) {
+      if (stage.ownerId === ownerId) {
+        this.finishClownStage(stage);
+      }
+    }
+  }
+
+  private hasClownKit(ownerId: string): boolean {
+    return this.playerLoadouts.get(ownerId)?.head === "clown-kit";
+  }
+
+  private clownKitDisabledReason(ownerId: string): string | undefined {
+    if (!this.hasClownKit(ownerId)) {
+      return "No Clown Kit";
+    }
+    const owner = this.combatants.get(ownerId);
+    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
+      return "No clown";
+    }
+    if (this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0)) {
+      return "performing";
+    }
+    const loadout = this.playerLoadouts.get(ownerId);
+    if (loadout?.leftHand || loadout?.rightHand) {
+      return "hand occupied";
+    }
+    return undefined;
+  }
+
+  private validateClownKitUse(ownerId: string, allowStageCheck = false): string | undefined {
+    const disabled = this.clownKitDisabledReason(ownerId);
+    if (disabled === "hand occupied") {
+      return "Empty hand required";
+    }
+    if (allowStageCheck && disabled === "performing") {
+      return "Stage active";
+    }
+    return disabled;
+  }
+
+  private clownHandPosition(owner: Combatant): Vec2 {
+    const facing = Math.sign(owner.velocityX) || 1;
+    return { x: owner.x + owner.width / 2 + facing * 28, y: owner.y + 28 };
+  }
+
+  private spawnClownMonkeys(ownerId: string, origin: Vec2, owner: Combatant): void {
+    for (let index = 0; index < clownMonkeyCount; index += 1) {
+      const direction = index % 2 === 0 ? -1 : 1;
+      this.clownMonkeys.push({
+        id: this.makeId("clown-monkey"),
+        ownerId,
+        x: origin.x + direction * (18 + index * 7),
+        y: origin.y - index * 6,
+        vx: direction * (160 + index * 24),
+        vy: -260 - index * 18,
+        timer: clownBalloonDuration,
+        duration: clownBalloonDuration,
+        age: 0,
+        stealCooldown: 0.25 + index * 0.12,
+      });
+    }
+    this.addEffect("aura", owner.x + owner.width / 2, owner.y + 20, owner.x + owner.width / 2, owner.y - 70, colorForWeapon("clown-kit"), "MONKEYS");
+  }
+
+  private popClownBalloon(balloon: ClownBalloonState): void {
+    removeWhere(this.clownBalloons, (candidate) => candidate.id === balloon.id);
+    for (const targetId of balloon.affectedTargetIds) {
+      if (!this.clownBalloons.some((candidate) => candidate.form === "dog" && candidate.affectedTargetIds.includes(targetId))) {
+        const target = this.combatants.get(targetId);
+        if (target) {
+          target.statuses = target.statuses.filter((status) => status.id !== "clownDistortion");
+        }
+      }
+    }
+    this.addEffect("spark", balloon.x, balloon.y, balloon.x, balloon.y - 36, colorForWeapon("clown-kit"), "POP");
+    this.queueSound("clown-pop");
+  }
+
+  private popClownMonkey(monkey: ClownMonkeyState): void {
+    this.dropClownStolenItem(monkey);
+    removeWhere(this.clownMonkeys, (candidate) => candidate.id === monkey.id);
+    this.addEffect("spark", monkey.x, monkey.y, monkey.x, monkey.y - 28, colorForWeapon("clown-kit"), "POP");
+    this.queueSound("clown-pop");
+  }
+
+  private dropClownStolenItem(monkey: ClownMonkeyState): void {
+    if (!monkey.stolenItem) {
+      return;
+    }
+    this.droppedWeapons.push({
+      id: this.makeId("clown-drop"),
+      weaponId: monkey.stolenItem,
+      x: monkey.x,
+      y: monkey.y,
+      vx: Math.sign(monkey.vx || 1) * 95,
+      vy: -180,
+      age: -17,
+      pickupable: false,
+    });
+    monkey.stolenItem = undefined;
+    monkey.stolenSlot = undefined;
+  }
+
+  private tryClownMonkeySteal(monkey: ClownMonkeyState, targetId: string): void {
+    const targetLoadout = this.playerLoadouts.get(targetId);
+    if (!targetLoadout || monkey.stolenItem) {
+      return;
+    }
+    const slot: Extract<keyof LoadoutState, "leftHand" | "rightHand"> | undefined = targetLoadout.rightHand ? "rightHand" : targetLoadout.leftHand ? "leftHand" : undefined;
+    if (!slot) {
+      return;
+    }
+    const item = targetLoadout[slot];
+    if (!item) {
+      return;
+    }
+    const nextLoadout = { ...targetLoadout };
+    if (nextLoadout.leftHand === item && nextLoadout.rightHand === item) {
+      nextLoadout.leftHand = undefined;
+      nextLoadout.rightHand = undefined;
+    } else {
+      nextLoadout[slot] = undefined;
+    }
+    this.playerLoadouts.set(targetId, normalizeLoadout(nextLoadout));
+    monkey.stolenItem = item;
+    monkey.stolenSlot = slot;
+    monkey.targetId = targetId;
+    monkey.stealCooldown = 2;
+    this.addEffect("whip-pull", monkey.x, monkey.y, monkey.x, monkey.y - 42, colorForWeapon("clown-kit"), "STOLE ITEM");
+    this.queueSound("clown-pop");
+  }
+
+  private findNearestClownTarget(ownerId: string, x: number, y: number, maxDistance: number): Combatant | undefined {
+    return [...this.combatants.values()]
+      .filter((target) => target.id !== ownerId && target.hp > 0 && target.respawnTimer <= 0)
+      .map((target) => {
+        const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+        return { target, distance: Math.hypot(center.x - x, center.y - y) };
+      })
+      .filter((item) => item.distance <= maxDistance)
+      .sort((left, right) => left.distance - right.distance)[0]?.target;
+  }
+
+  private findNearestClownItemTarget(ownerId: string, x: number, y: number): Combatant | undefined {
+    return [...this.combatants.values()]
+      .filter((target) => target.id !== ownerId && target.hp > 0 && target.respawnTimer <= 0)
+      .filter((target) => {
+        const loadout = this.playerLoadouts.get(target.id);
+        return Boolean(loadout?.leftHand || loadout?.rightHand);
+      })
+      .map((target) => {
+        const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+        return { target, distance: Math.hypot(center.x - x, center.y - y) };
+      })
+      .filter((item) => item.distance <= 760)
+      .sort((left, right) => left.distance - right.distance)[0]?.target;
   }
 
   private useTridentCreatureAbility(context: WeaponUseContext, slot: "primary" | "secondary", state: TridentTransformationState): WeaponUseResult {
@@ -12057,6 +12739,46 @@ function normalize(vector: Vec2): Vec2 {
   return { x: vector.x / length, y: vector.y / length };
 }
 
+function isPointInsideCrossShieldArc(shield: CrossShieldState, point: Vec2, padding = 0): boolean {
+  const dx = point.x - shield.x;
+  const dy = point.y - shield.y;
+  const shieldDirection = normalize({ x: shield.dirX || 1, y: shield.dirY || 0 });
+  const forward = dx * shieldDirection.x + dy * shieldDirection.y;
+  const side = Math.abs(dx * -shieldDirection.y + dy * shieldDirection.x);
+  const rearTolerance = Math.min(Math.max(shield.thickness * 0.18, 3), Math.max(3, padding * 0.35));
+  return forward >= -rearTolerance && forward <= shield.radius + padding && side <= shield.radius + padding;
+}
+
+function doesSegmentTouchCrossShieldArc(shield: CrossShieldState, start: Vec2, end: Vec2, padding = 0): boolean {
+  for (let step = 0; step <= 4; step += 1) {
+    const t = step / 4;
+    if (isPointInsideCrossShieldArc(shield, { x: lerp(start.x, end.x, t), y: lerp(start.y, end.y, t) }, padding)) {
+      return true;
+    }
+  }
+  const shieldDirection = normalize({ x: shield.dirX || 1, y: shield.dirY || 0 });
+  const startDx = start.x - shield.x;
+  const startDy = start.y - shield.y;
+  const endDx = end.x - shield.x;
+  const endDy = end.y - shield.y;
+  const startForward = startDx * shieldDirection.x + startDy * shieldDirection.y;
+  const endForward = endDx * shieldDirection.x + endDy * shieldDirection.y;
+  const startSide = startDx * -shieldDirection.y + startDy * shieldDirection.x;
+  const endSide = endDx * -shieldDirection.y + endDy * shieldDirection.x;
+  const incoming = (end.x - start.x) * shieldDirection.x + (end.y - start.y) * shieldDirection.y < 0;
+  return incoming
+    && Math.min(startForward, endForward) <= shield.radius + padding
+    && Math.max(startForward, endForward) >= -Math.max(shield.thickness * 1.4, padding)
+    && Math.min(Math.abs(startSide), Math.abs(endSide), Math.abs((startSide + endSide) * 0.5)) <= shield.radius + padding;
+}
+
+export function neptuneTiltedGroundY(baseGroundY: number, x: number, direction: -1 | 1, amount: number): number {
+  const centerX = (DEFAULT_PHYSICS.platformLeft + DEFAULT_PHYSICS.platformRight) / 2;
+  const halfWidth = Math.max(1, (DEFAULT_PHYSICS.platformRight - DEFAULT_PHYSICS.platformLeft) / 2);
+  const normalizedX = clamp((x - centerX) / halfWidth, -1, 1);
+  return baseGroundY - normalizedX * direction * amount * 58;
+}
+
 function rotate(vector: Vec2, radians: number): Vec2 {
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
@@ -12437,6 +13159,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#5ad7ff";
     case "super-bomb":
       return "#ff6f91";
+    case "clown-kit":
+      return "#ff5fcf";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -12616,6 +13340,16 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Super Legs", duration: superLegsStatusRefresh, stacks: 1 };
     case "superBombReforming":
       return { id, label: "Reforming", duration: superBombReformDuration, stacks: 1 };
+    case "superBombPatchPoison":
+      return { id, label: "Patch Poison", duration: 4.5, stacks: 1, tickDamage: 1, tickEvery: 0.5, tickTimer: 0.5 };
+    case "clownStun":
+      return { id, label: "Flower Stun", duration: 5, stacks: 1 };
+    case "clownDistortion":
+      return { id, label: "Balloon Distortion", duration: clownBalloonDuration, stacks: 1 };
+    case "clownLaugh":
+      return { id, label: "Laughing", duration: 3.5, stacks: 1, tickDamage: 1, tickEvery: 0.7, tickTimer: 0.7 };
+    case "clownPerforming":
+      return { id, label: "Performing", duration: clownStageDuration, stacks: 1 };
     case "neptuneStuck":
       return {
         id,

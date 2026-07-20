@@ -127,6 +127,7 @@ describe("network player packets", () => {
         backStrap: "death-aura",
         attachment: "chainsaw",
         legs: "super-legs",
+        head: "clown-kit",
       },
     };
 
@@ -156,6 +157,7 @@ describe("network player packets", () => {
     expect(packet.bs).toBe("death-aura");
     expect(packet.at).toBe("chainsaw");
     expect(packet.lg).toBe("super-legs");
+    expect(packet.hd).toBe("clown-kit");
     expect(decodePlayerStatePacket(packet)).toEqual(state);
   });
 
@@ -185,6 +187,7 @@ describe("network player packets", () => {
     expect(packet.bs).toBeUndefined();
     expect(packet.at).toBeUndefined();
     expect(packet.lg).toBeUndefined();
+    expect(packet.hd).toBeUndefined();
     expect(decodePlayerStatePacket(packet).loadout).toBeUndefined();
   });
 

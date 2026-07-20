@@ -58,6 +58,7 @@ describe("player preferences", () => {
         backStrap: "hands",
         attachment: undefined,
         legs: "super-legs",
+        head: "clown-kit" as never,
       },
     });
 
@@ -65,6 +66,7 @@ describe("player preferences", () => {
       leftHand: "machete",
       backStrap: "hands",
       legs: "super-legs",
+      head: "clown-kit",
     });
     expect(loadPlayerProfile()).toEqual(saved);
   });

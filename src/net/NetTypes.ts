@@ -111,6 +111,7 @@ export interface PlayerStatePacket {
   at?: WeaponId;
   gb?: WeaponId;
   lg?: WeaponId;
+  hd?: WeaponId;
   act?: number;
 }
 
@@ -222,6 +223,7 @@ export function encodePlayerStatePacket(state: PlayerNetState): PlayerStatePacke
     ...(state.loadout?.attachment ? { at: state.loadout.attachment } : {}),
     ...(state.loadout?.grabber ? { gb: state.loadout.grabber } : {}),
     ...(state.loadout?.legs ? { lg: state.loadout.legs } : {}),
+    ...(state.loadout?.head ? { hd: state.loadout.head } : {}),
     ...(typeof state.lastActivityAt === "number" ? { act: Math.round(state.lastActivityAt) } : {}),
   };
 }
@@ -279,7 +281,7 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
         honkCooldown: packet.vhc ?? 0,
       },
     } : {}),
-    ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at || packet.gb || packet.lg ? {
+    ...(packet.lh || packet.rh || packet.fs || packet.bs || packet.at || packet.gb || packet.lg || packet.hd ? {
       loadout: {
         ...(packet.lh ? { leftHand: packet.lh } : {}),
         ...(packet.rh ? { rightHand: packet.rh } : {}),
@@ -288,6 +290,7 @@ export function decodePlayerStatePacket(packet: unknown): PlayerNetState {
         ...(packet.at ? { attachment: packet.at } : {}),
         ...(packet.gb ? { grabber: packet.gb } : {}),
         ...(packet.lg ? { legs: packet.lg } : {}),
+        ...(packet.hd ? { head: packet.hd } : {}),
       },
     } : {}),
     ...(typeof packet.act === "number" ? { lastActivityAt: packet.act } : {}),
@@ -349,7 +352,9 @@ export function isStatePacket(packet: unknown): packet is PlayerStatePacket {
     (value.fs === undefined || typeof value.fs === "string") &&
     (value.bs === undefined || typeof value.bs === "string") &&
     (value.at === undefined || typeof value.at === "string") &&
+    (value.gb === undefined || typeof value.gb === "string") &&
     (value.lg === undefined || typeof value.lg === "string") &&
+    (value.hd === undefined || typeof value.hd === "string") &&
     (value.act === undefined || typeof value.act === "number")
   );
 }

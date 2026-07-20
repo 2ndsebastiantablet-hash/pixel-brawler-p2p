@@ -81,6 +81,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-drop-slot="frontStrap"]')?.textContent).toContain("Front");
     expect(root.querySelector('[data-loadout-drop-slot="backStrap"]')?.textContent).toContain("Back");
     expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
+    expect(root.querySelector('[data-loadout-drop-slot="head"]')?.textContent).toContain("Head");
     expect(root.querySelector('[data-loadout-drop-slot="attachment"]')?.textContent).toContain("F");
     expect(root.querySelector('[data-loadout-drop-slot="legs"]')?.textContent).toContain("Legs");
     expect(root.textContent).not.toContain("Virgin Blood cannot attach");
@@ -99,6 +100,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-item="uranus"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="mars"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="neptune"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="clown-kit"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="grabber"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="trident"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="super-bomb"]')).toBeInstanceOf(HTMLButtonElement);
@@ -134,6 +136,7 @@ describe("lobby loadout menu", () => {
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "rocket");
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="attachment"]'), "virgin-blood");
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="legs"]'), "super-legs");
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="head"]'), "clown-kit");
     root.querySelector<HTMLButtonElement>("[data-offline]")?.click();
 
     expect(startOffline).toHaveBeenCalledWith(expect.objectContaining({
@@ -144,6 +147,7 @@ describe("lobby loadout menu", () => {
         rightHand: "rocket",
         attachment: "virgin-blood",
         legs: "super-legs",
+        head: "clown-kit",
       }),
     }));
   });
@@ -383,6 +387,14 @@ describe("lobby loadout menu", () => {
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="legs"]'), "rocket");
     expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Rocket");
     expect(root.querySelector('[data-loadout-drop-slot="legs"]')?.textContent).toContain("Legs");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="head"]'), "pistol");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Pistol");
+    expect(root.querySelector('[data-loadout-drop-slot="head"]')?.textContent).toContain("Head");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "clown-kit");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Clown Kit");
+    expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
   });
 
   it("clears equipped slots without restoring pre-filled defaults", () => {

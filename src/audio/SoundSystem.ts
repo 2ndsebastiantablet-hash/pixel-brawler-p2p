@@ -93,6 +93,11 @@ export type SoundId =
   | "super-bomb-limb"
   | "super-bomb-super"
   | "super-bomb-reform"
+  | "clown-finger"
+  | "clown-balloon"
+  | "clown-pop"
+  | "clown-stage"
+  | "clown-laugh"
   | "virgin-blood-activate"
   | "virgin-blood-revive"
   | "death-aura"
@@ -258,6 +263,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "super-bomb-limb": { category: "weapon", frequency: 260, endFrequency: 90, duration: 0.18, noise: true, minInterval: 0.18 },
   "super-bomb-super": { category: "heavy", frequency: 54, endFrequency: 960, duration: 0.84, noise: true, minInterval: 0.9 },
   "super-bomb-reform": { category: "combat", frequency: 220, endFrequency: 680, duration: 0.24, type: "triangle", minInterval: 0.18 },
+  "clown-finger": { category: "weapon", frequency: 760, endFrequency: 1260, duration: 0.07, type: "square", minInterval: 0.08 },
+  "clown-balloon": { category: "weapon", frequency: 340, endFrequency: 760, duration: 0.22, type: "sawtooth", minInterval: 0.18 },
+  "clown-pop": { category: "combat", frequency: 920, endFrequency: 180, duration: 0.11, noise: true, minInterval: 0.08 },
+  "clown-stage": { category: "heavy", frequency: 180, endFrequency: 980, duration: 0.44, noise: true, minInterval: 0.6 },
+  "clown-laugh": { category: "combat", frequency: 520, endFrequency: 260, duration: 0.18, type: "square", minInterval: 0.22 },
   "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
   "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
   "death-aura": { category: "combat", frequency: 96, endFrequency: 52, duration: 0.28, noise: true, minInterval: 0.32 },

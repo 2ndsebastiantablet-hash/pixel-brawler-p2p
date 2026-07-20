@@ -51,6 +51,7 @@ export const COMBAT_TUNING = {
     grabber: { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.01, slideMultiplier: 1.02 },
     trident: { label: "Balanced", moveSpeedMultiplier: 0.96, accelerationMultiplier: 0.95, airAccelerationMultiplier: 0.96, jumpMultiplier: 0.98, slideMultiplier: 0.96 },
     "super-bomb": { label: "Light", moveSpeedMultiplier: 1.03, accelerationMultiplier: 1.06, airAccelerationMultiplier: 1.04, jumpMultiplier: 1, slideMultiplier: 1.02 },
+    "clown-kit": { label: "Light", moveSpeedMultiplier: 1.05, accelerationMultiplier: 1.1, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.02, slideMultiplier: 1.04 },
     "virgin-blood": { label: "Light", moveSpeedMultiplier: 1.02, accelerationMultiplier: 1.08, airAccelerationMultiplier: 1.08, jumpMultiplier: 1.03, slideMultiplier: 1.02 },
     "death-aura": { label: "Balanced", moveSpeedMultiplier: 0.96, accelerationMultiplier: 0.96, airAccelerationMultiplier: 0.96, jumpMultiplier: 0.98, slideMultiplier: 0.96 },
     rocket: { label: "Heavy", moveSpeedMultiplier: 0.9, accelerationMultiplier: 0.88, airAccelerationMultiplier: 0.9, jumpMultiplier: 0.96, slideMultiplier: 0.9 },
