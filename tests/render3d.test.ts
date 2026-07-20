@@ -272,11 +272,11 @@ describe("hybrid 3D rendering foundation", () => {
             currentAttack: "rain",
             flood: { active: false, level: 0, alpha: 0, suck: 0 },
             tilt: { active: false, direction: 1, amount: 0, warningAlpha: 0 },
-            laser: { active: true, warningAlpha: 1, firing: false, fromX: 640, fromY: 160, toX: 740, toY: 420, width: 24 },
+            laser: { active: true, warningAlpha: 1, firing: false, fromX: 640, fromY: 160, leftFromX: 592, leftFromY: 160, rightFromX: 688, rightFromY: 160, toX: 740, toY: 420, width: 24 },
           },
         ],
         neptuneCreatures: [
-          { id: "urchin-a", kind: "urchin", x: 650, y: 540, vx: 120, vy: 0, width: 58, height: 58, age: 1.2, hp: 24, maxHp: 24 },
+          { id: "urchin-a", kind: "urchin", x: 650, y: 540, vx: 120, vy: 0, width: 58, height: 58, age: 1.2, hp: 24, maxHp: 24, spawnProgress: 1, spawnX: 650, spawnY: 598 },
         ],
       },
     });

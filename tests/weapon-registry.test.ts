@@ -17,6 +17,7 @@ const enabledWeapons = [
   "axe",
   "wings",
   "grabber",
+  "trident",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -54,6 +55,7 @@ describe("weapon registry", () => {
       "axe",
       "wings",
       "grabber",
+      "trident",
       "virgin-blood",
       "death-aura",
       "rocket",
@@ -107,6 +109,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.axe).toBeUndefined();
     expect(inventory.ammo.wings).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>).grabber).toBeUndefined();
+    expect((inventory.ammo as Record<string, unknown>).trident).toBeUndefined();
     expect(inventory.ammo["virgin-blood"]).toBeUndefined();
     expect(inventory.ammo["death-aura"]).toBeUndefined();
     expect(inventory.ammo.rocket).toBeUndefined();
@@ -131,6 +134,11 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("grabber" as never).name).toBe("Grabber");
     expect(weaponRegistry.get("grabber" as never).description).toContain("extra F-cycle attachment slot");
     expect(weaponRegistry.get("grabber" as never).weight.label).toBe("Light");
+    expect(weaponRegistry.get("trident" as never).name).toBe("Trident");
+    expect(weaponRegistry.get("trident" as never).description).toContain("right click throws and must be picked back up");
+    expect(weaponRegistry.get("trident" as never).description).toContain("transform players into puffer fish, octopus, or goldfish");
+    expect(weaponRegistry.get("trident" as never).primary.damage).toBeGreaterThanOrEqual(12);
+    expect(weaponRegistry.get("trident" as never).primary.damage).toBeLessThanOrEqual(22);
     expect(weaponRegistry.get("super-legs").weight.moveSpeedMultiplier).toBeGreaterThanOrEqual(1.4);
     expect(weaponRegistry.get("super-legs").weight.accelerationMultiplier).toBeGreaterThanOrEqual(1.5);
     expect(weaponRegistry.get("super-legs").weight.airAccelerationMultiplier).toBeGreaterThanOrEqual(1.35);

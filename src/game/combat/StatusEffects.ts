@@ -21,7 +21,10 @@ export type StatusEffectId =
   | "scrambled"
   | "handsMissing"
   | "superLegs"
-  | "neptuneStuck";
+  | "neptuneStuck"
+  | "pufferForm"
+  | "goldfishForm"
+  | "octopusForm";
 
 export interface StatusEffect {
   id: StatusEffectId;

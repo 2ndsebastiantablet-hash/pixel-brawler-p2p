@@ -100,6 +100,7 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-item="mars"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="neptune"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="grabber"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="trident"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-drop-slot="grabber"]')).toBeNull();
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();

@@ -76,6 +76,7 @@ const oneHandedWeapons = new Set<WeaponId>([
   "revolver",
   "slingshot",
   "teleport-ball",
+  "trident",
   "virgin-blood",
 ]);
 
@@ -426,7 +427,7 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   if (id === "sledgehammer" || id === "rocket" || id === "holy-bazooka") {
     return "heavy";
   }
-  if (id === "slingshot" || id === "teleport-ball") {
+  if (id === "slingshot" || id === "teleport-ball" || id === "trident") {
     return "throwables";
   }
   if (id === "grappling-hook") {

@@ -120,6 +120,10 @@ export interface Render3DNeptuneVisual {
     firing: boolean;
     fromX: number;
     fromY: number;
+    leftFromX: number;
+    leftFromY: number;
+    rightFromX: number;
+    rightFromY: number;
     toX: number;
     toY: number;
     width: number;
@@ -138,6 +142,9 @@ export interface Render3DNeptuneCreatureVisual {
   age: number;
   hp: number;
   maxHp: number;
+  spawnProgress: number;
+  spawnX: number;
+  spawnY: number;
 }
 
 export interface Render3DEventVisuals {

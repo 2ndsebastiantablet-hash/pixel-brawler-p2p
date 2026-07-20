@@ -27,6 +27,7 @@ import { spikes } from "./weapons/Spikes";
 import { spiritFighter } from "./weapons/SpiritFighter";
 import { superLegs } from "./weapons/SuperLegs";
 import { teleportBall } from "./weapons/TeleportBall";
+import { trident } from "./weapons/Trident";
 import { van } from "./weapons/Van";
 import { virginBlood } from "./weapons/VirginBlood";
 import { whip } from "./weapons/Whip";
@@ -49,6 +50,7 @@ export const WEAPON_IDS = [
   "axe",
   "wings",
   "grabber",
+  "trident",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -81,6 +83,7 @@ const ALL_WEAPON_IDS = [
   "axe",
   "wings",
   "grabber",
+  "trident",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -116,6 +119,7 @@ const weaponDefinitions: WeaponDefinition[] = [
   axe,
   wings,
   grabber,
+  trident,
   virginBlood,
   deathAura,
   rocket,

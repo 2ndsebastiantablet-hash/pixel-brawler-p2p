@@ -363,6 +363,10 @@ export interface NeptuneLaserState {
   firing: boolean;
   fromX: number;
   fromY: number;
+  leftFromX: number;
+  leftFromY: number;
+  rightFromX: number;
+  rightFromY: number;
   toX: number;
   toY: number;
   width: number;
@@ -419,6 +423,9 @@ export interface NeptuneCreatureState {
   attackCooldown: number;
   grabbedTargetIds: string[];
   stuckTargetIds: string[];
+  spawnProgress: number;
+  spawnX: number;
+  spawnY: number;
   visualOnly?: boolean;
 }
 
@@ -436,6 +443,31 @@ export interface NeptunePelletState {
   age: number;
   lifetime: number;
   color: string;
+  visualOnly?: boolean;
+}
+
+export type TridentTransformationForm = "puffer" | "goldfish" | "octopus";
+
+export interface TridentTransformationState {
+  ownerId: string;
+  sourceId: string;
+  form: TridentTransformationForm;
+  timer: number;
+  duration: number;
+  inflateTimer: number;
+  heldTargetIds: string[];
+}
+
+export interface TridentFloodState {
+  id: string;
+  ownerId: string;
+  timer: number;
+  duration: number;
+  age: number;
+  level: number;
+  alpha: number;
+  suck: number;
+  shark: JupiterSharkState;
   visualOnly?: boolean;
 }
 
@@ -572,6 +604,7 @@ export interface CombatSnapshot {
   neptuneEvents: NeptuneEventState[];
   neptuneCreatures: NeptuneCreatureState[];
   neptunePellets: NeptunePelletState[];
+  tridentFloods: TridentFloodState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -623,6 +656,9 @@ const grabberPunchDamage = 22;
 const grabberPunchKnockback = 720;
 const grabberPunchCooldown = 1.35;
 const grabberPickupRange = 150;
+const grabberPunchWindup = 0.12;
+const grabberPunchHitTime = 0.18;
+const grabberPunchTotal = 0.46;
 const superLegsArmorDamageScale = 0.38;
 const superLegsStatusRefresh = 0.35;
 const axeRushRange = 940;
@@ -765,7 +801,7 @@ const jupiterGasMaxAlpha = 0.5;
 const jupiterFootstepDelay = 1;
 const jupiterFootstepRadius = 96;
 const jupiterFootstepDamage = 14;
-const jupiterFootstepLaunch = 930;
+const jupiterFootstepLaunch = 1750;
 const jupiterFootstepWalkingInterval = 0.34;
 const jupiterFootstepMaxMarkers = 56;
 const jupiterTornadoRadius = 280;
@@ -801,14 +837,14 @@ const neptuneEndingDuration = 4.2;
 const neptuneBodyRadius = 272;
 const neptuneHandRadius = 128;
 const neptuneFloodDuration = 5.2;
-const neptuneSlamDuration = 3.3;
+const neptuneSlamDuration = 5.05;
 const neptuneLaserDuration = 3.8;
 const neptuneSummonDuration = 4.2;
 const neptuneRainDuration = 4.4;
 const neptuneRainSpawnInterval = 0.13;
 const neptuneFloodBuoyancy = 980;
 const neptuneFloodDrag = 0.72;
-const neptuneTiltSlideAcceleration = 680;
+const neptuneTiltSlideAcceleration = 1320;
 const neptuneLaserDamage = 999;
 const neptuneLaserWidth = 28;
 const neptuneCreaturePoisonDuration = 10;
@@ -829,6 +865,16 @@ const lightningDefaultEmpoweredDuration = 9;
 const lightningMaxHoldSeconds = 4.2;
 const empoweredDamageScale = 1.22;
 const empoweredKnockbackScale = 1.18;
+const tridentFloodDuration = 60;
+const tridentFloodCooldownDuration = 120;
+const tridentTransformDuration = 40;
+const tridentFloodBuoyancy = 1080;
+const tridentFloodDrag = 0.82;
+const tridentSharkWidth = 210;
+const tridentSharkHeight = 96;
+const tridentSharkHp = 120;
+const tridentSharkBiteDamage = 86;
+const tridentSharkBiteCooldown = 0.72;
 
 interface PendingTeleport {
   ownerId: string;
@@ -914,6 +960,18 @@ interface SpikeImpaleState {
   spikeId: string;
   x: number;
   y: number;
+}
+
+type GrabberPunchPhase = "windup" | "extend" | "hit" | "retract" | "cooldown";
+
+interface GrabberPunchState {
+  ownerId: string;
+  targetId: string;
+  targetX: number;
+  targetY: number;
+  elapsed: number;
+  phase: GrabberPunchPhase;
+  hitApplied: boolean;
 }
 
 export interface WeaponRuntimeState {
@@ -1007,6 +1065,17 @@ export interface WeaponRuntimeState {
   grabberHolding?: WeaponId;
   grabberCooldown: number;
   grabberReachActive: boolean;
+  grabberPunchPhase?: GrabberPunchPhase;
+  grabberPunchProgress?: number;
+  grabberPunchTargetX?: number;
+  grabberPunchTargetY?: number;
+  tridentThrown: boolean;
+  tridentFloodActive: boolean;
+  tridentFloodTimer: number;
+  tridentFloodCooldown: number;
+  tridentTransformationForm?: TridentTransformationForm;
+  tridentTransformationTimer: number;
+  tridentHeldCount: number;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -1061,6 +1130,10 @@ export class CombatSystem {
   private readonly neptuneCreatures = new Map<string, NeptuneCreatureState>();
   private readonly neptunePellets: NeptunePelletState[] = [];
   private readonly grabberCooldowns = new Map<string, number>();
+  private readonly grabberPunches = new Map<string, GrabberPunchState>();
+  private readonly tridentTransformations = new Map<string, TridentTransformationState>();
+  private readonly tridentFloods: TridentFloodState[] = [];
+  private readonly tridentFloodCooldowns = new Map<string, number>();
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -1118,6 +1191,10 @@ export class CombatSystem {
     this.neptuneCreatures.clear();
     this.neptunePellets.length = 0;
     this.grabberCooldowns.clear();
+    this.grabberPunches.clear();
+    this.tridentTransformations.clear();
+    this.tridentFloods.length = 0;
+    this.tridentFloodCooldowns.clear();
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1211,6 +1288,7 @@ export class CombatSystem {
       statuses: player.statuses ? player.statuses.map((status) => createStatus(status)) : existing?.statuses ?? [],
     };
     this.combatants.set(player.id, next);
+    this.syncTridentTransformationFromStatuses(next, player.statuses);
     return next;
   }
 
@@ -1255,6 +1333,13 @@ export class CombatSystem {
     this.removeMarsStateForOwner(id);
     this.removeNeptuneStateForOwner(id);
     this.grabberCooldowns.delete(id);
+    this.grabberPunches.delete(id);
+    this.tridentTransformations.delete(id);
+    for (const state of this.tridentTransformations.values()) {
+      removeWhere(state.heldTargetIds, (targetId) => targetId === id);
+    }
+    removeWhere(this.tridentFloods, (flood) => flood.ownerId === id);
+    this.tridentFloodCooldowns.delete(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1306,6 +1391,10 @@ export class CombatSystem {
   }
 
   usePrimary(context: WeaponUseContext): WeaponUseResult {
+    const transformed = this.tridentTransformations.get(context.ownerId);
+    if (transformed) {
+      return this.useTridentCreatureAbility(context, "primary", transformed);
+    }
     if (this.hasMissingHands(context.ownerId)) {
       return { kind: "blocked", weaponId: this.inventory.equippedWeapon, label: "No hands" };
     }
@@ -1377,6 +1466,10 @@ export class CombatSystem {
 
   useSecondary(context: WeaponUseContext): WeaponUseResult {
     const weapon = weaponRegistry.get(this.inventory.equippedWeapon);
+    const transformed = this.tridentTransformations.get(context.ownerId);
+    if (transformed) {
+      return this.useTridentCreatureAbility(context, "secondary", transformed);
+    }
     if (this.hasMissingHands(context.ownerId)) {
       return { kind: "blocked", weaponId: weapon.id, label: "No hands" };
     }
@@ -1442,6 +1535,9 @@ export class CombatSystem {
     }
     if (weapon.id === "knife") {
       return this.throwCurrentWeapon(context.ownerId, context.player, context.aim, context.now, false);
+    }
+    if (weapon.id === "trident") {
+      return this.throwTrident(context);
     }
     if (weapon.id === "axe") {
       return this.throwAxe(context);
@@ -1609,6 +1705,137 @@ export class CombatSystem {
     return hasGrabberStrap(loadout) && !loadout?.grabber ? grabberPickupRange : 54;
   }
 
+  getTridentTransformationState(id: string): TridentTransformationState | undefined {
+    const state = this.tridentTransformations.get(id);
+    return state ? { ...state, heldTargetIds: [...state.heldTargetIds] } : undefined;
+  }
+
+  transformWithTrident(targetId: string, sourceId: string, form?: TridentTransformationForm): boolean {
+    const target = this.combatants.get(targetId);
+    if (!target || target.respawnTimer > 0 || target.hp <= 0) {
+      return false;
+    }
+    const chosen = form ?? this.chooseTridentForm(sourceId, targetId, performanceNow());
+    target.statuses = target.statuses
+      .filter((status) => !isTridentFormStatus(status.id))
+      .concat(createStatus(statusForTridentForm(chosen)));
+    this.startTridentTransformation(targetId, sourceId, chosen);
+    return true;
+  }
+
+  useTridentFlood(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "trident";
+    if (!this.inventory.weaponInventory.includes(weaponId) || this.inventory.equippedWeapon !== weaponId) {
+      return { kind: "blocked", weaponId, label: "No Trident" };
+    }
+    const cooldown = this.tridentFloodCooldowns.get(context.ownerId) ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Flood cooldown" };
+    }
+    if (this.tridentFloods.some((flood) => flood.ownerId === context.ownerId && flood.timer > 0)) {
+      return { kind: "blocked", weaponId, label: "Flood active" };
+    }
+    const center = {
+      x: context.player.x + context.player.width / 2,
+      y: context.player.y + context.player.height / 2,
+    };
+    const seed = Math.floor(context.now || performanceNow());
+    this.startTridentFlood(context.ownerId, center, seed, false);
+    this.tridentFloodCooldowns.set(context.ownerId, tridentFloodCooldownDuration);
+    this.addEffect("shockwave", center.x, DEFAULT_PHYSICS.groundY, center.x, DEFAULT_PHYSICS.groundY - 760, colorForWeapon(weaponId), "TRIDENT FLOOD");
+    this.addEffect("aura", center.x, center.y, center.x, center.y - 160, "#bdefff", "FLOOD");
+    this.queueSound("trident-flood");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, { x: 0, y: -1 }, "Trident Flood", context.now, {
+      range: seed,
+    }));
+    return { kind: "utility", weaponId, label: "Trident Flood" };
+  }
+
+  private startTridentTransformation(targetId: string, sourceId: string, form: TridentTransformationForm): void {
+    const existing = this.tridentTransformations.get(targetId);
+    if (existing) {
+      this.releaseOctopusHeldTargets(existing);
+    }
+    this.tridentTransformations.set(targetId, {
+      ownerId: targetId,
+      sourceId,
+      form,
+      timer: tridentTransformDuration,
+      duration: tridentTransformDuration,
+      inflateTimer: 0,
+      heldTargetIds: [],
+    });
+    const target = this.combatants.get(targetId);
+    if (target) {
+      target.statuses = target.statuses.filter((status) => !isTridentFormStatus(status.id) || status.id === statusForTridentForm(form));
+      target.statuses = upsertStatusEffect(target.statuses, createStatus(statusForTridentForm(form)));
+      this.addEffect("aura", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y - 76, colorForWeapon("trident"), form.toUpperCase());
+      this.addEffect("shockwave", target.x + target.width / 2 - 42, target.y + target.height / 2, target.x + target.width / 2 + 42, target.y + target.height / 2, "#bdefff", "TRANSFORM");
+    }
+    this.queueSound("trident-transform");
+  }
+
+  private syncTridentTransformationFromStatuses(target: Combatant, statusIds: StatusEffectId[] | undefined): void {
+    if (!statusIds) {
+      return;
+    }
+    const form = tridentFormFromStatuses(statusIds);
+    if (!form) {
+      const existing = this.tridentTransformations.get(target.id);
+      if (existing) {
+        this.releaseOctopusHeldTargets(existing);
+        this.tridentTransformations.delete(target.id);
+      }
+      return;
+    }
+    const existing = this.tridentTransformations.get(target.id);
+    if (existing?.form === form) {
+      existing.timer = Math.max(existing.timer, tridentTransformDuration * 0.5);
+      return;
+    }
+    this.tridentTransformations.set(target.id, {
+      ownerId: target.id,
+      sourceId: "remote",
+      form,
+      timer: tridentTransformDuration,
+      duration: tridentTransformDuration,
+      inflateTimer: 0,
+      heldTargetIds: [],
+    });
+  }
+
+  private tridentFormForHit(request: DamageRequest, target: Combatant, finalStatus: string | undefined): TridentTransformationForm | undefined {
+    if (request.weaponId !== "trident" || request.sourceId === target.id || request.label === "Flood Shark" || request.label.includes("Goldfish")) {
+      return undefined;
+    }
+    if (!this.isTridentTransformableTarget(target.id)) {
+      return undefined;
+    }
+    return tridentFormFromStatus(finalStatus) ?? this.chooseTridentForm(request.sourceId, target.id, performanceNow());
+  }
+
+  private chooseTridentForm(sourceId: string, targetId: string, seed: number): TridentTransformationForm {
+    const roll = seededUnit(seed + sourceId.length * 17, targetId.length * 31, 887);
+    return roll < 1 / 3 ? "puffer" : roll < 2 / 3 ? "goldfish" : "octopus";
+  }
+
+  private isTridentTransformableTarget(id: string): boolean {
+    return !this.isNeptuneCreatureCombatant(id)
+      && !this.isJupiterSharkCombatant(id)
+      && !this.marsClones.has(id)
+      && !id.startsWith("zombie-")
+      && !id.startsWith("trident-shark");
+  }
+
+  private tridentValidTargets(ownerId: string, includeOwner = false): Combatant[] {
+    return [...this.combatants.values()].filter((combatant) =>
+      combatant.respawnTimer <= 0
+      && combatant.hp > 0
+      && (includeOwner || combatant.id !== ownerId)
+      && this.isTridentTransformableTarget(combatant.id)
+    );
+  }
+
   applyDamage(request: DamageRequest): DamageResult {
     const target = this.combatants.get(request.targetId);
     if (!target || target.respawnTimer > 0 || target.invulnerable > 0) {
@@ -1622,6 +1849,10 @@ export class CombatSystem {
     let finalStatus = statusForHit(request.weaponId, hitLocation, request.status);
     if (superLegsArmor && (finalStatus === "legShotSlow" || finalStatus === "legStagger")) {
       finalStatus = undefined;
+    }
+    const tridentForm = this.tridentFormForHit(request, target, finalStatus);
+    if (tridentForm) {
+      finalStatus = statusForTridentForm(tridentForm);
     }
     const finalLabel = hitLocation ? `${labelForHitLocation(hitLocation)} ${request.label}` : request.label;
     const source = this.combatants.get(request.sourceId);
@@ -1659,6 +1890,9 @@ export class CombatSystem {
     target.invulnerable = Math.max(0.24, effectiveStun * 1.2);
     if (finalStatus) {
       target.statuses = upsertStatusEffect(target.statuses, createStatus(finalStatus as StatusEffectId));
+    }
+    if (tridentForm && target.hp > 0) {
+      this.startTridentTransformation(target.id, request.sourceId, tridentForm);
     }
     this.queueSound("player-hit");
     this.queueSound("damage-pop");
@@ -1762,12 +1996,14 @@ export class CombatSystem {
     this.updateZombies(dt);
     this.updateSpikes(dt, players);
     this.updateVans(dt, players);
+    this.updateTridentTransformations(dt, players);
     this.updateCombatants(dt);
     this.updateMoonEvents(dt, players);
     this.updateJupiterEvents(dt, players);
     this.updateUranusEvents(dt, players);
     this.updateMarsEvents(dt);
     this.updateNeptuneEvents(dt, players);
+    this.updateTridentFloods(dt, players);
     this.updateProjectiles(dt, players);
     this.updateCross(dt, players);
     this.updateTeleports(dt, players);
@@ -1822,7 +2058,8 @@ export class CombatSystem {
     return this.axeRushes.has(ownerId)
       || this.spikeImpales.has(ownerId)
       || Boolean(this.getVanDrivenBy(ownerId))
-      || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"));
+      || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"))
+      || [...this.tridentTransformations.values()].some((state) => state.heldTargetIds.includes(ownerId));
   }
 
   getVirginBloodState(ownerId: string): { reviveAvailable: boolean; cooldown: number } {
@@ -1969,6 +2206,9 @@ export class CombatSystem {
     const neptune = this.getNeptuneEventForOwner(ownerId);
     const ownerLoadout = this.playerLoadouts.get(ownerId);
     const grabberEquipped = hasGrabberStrap(ownerLoadout);
+    const grabberPunch = this.grabberPunches.get(ownerId);
+    const tridentFlood = this.tridentFloods.find((flood) => flood.ownerId === ownerId && flood.timer > 0);
+    const tridentTransformation = this.tridentTransformations.get(ownerId);
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -2071,6 +2311,22 @@ export class CombatSystem {
       grabberHolding: ownerLoadout?.grabber,
       grabberCooldown: this.grabberCooldowns.get(ownerId) ?? 0,
       grabberReachActive: grabberEquipped && !ownerLoadout?.grabber,
+      grabberPunchPhase: grabberPunch?.phase,
+      grabberPunchProgress: grabberPunch ? clamp(grabberPunch.elapsed / grabberPunchTotal, 0, 1) : undefined,
+      grabberPunchTargetX: grabberPunch?.targetX,
+      grabberPunchTargetY: grabberPunch?.targetY,
+      tridentThrown: this.inventory.equippedWeapon === "trident"
+        ? false
+        : !this.inventory.weaponInventory.includes("trident") && (
+          this.projectiles.some((projectile) => projectile.weaponId === "trident" && projectile.ownerId === ownerId)
+          || this.droppedWeapons.some((weapon) => weapon.weaponId === "trident")
+        ),
+      tridentFloodActive: Boolean(tridentFlood),
+      tridentFloodTimer: tridentFlood?.timer ?? 0,
+      tridentFloodCooldown: this.tridentFloodCooldowns.get(ownerId) ?? 0,
+      tridentTransformationForm: tridentTransformation?.form,
+      tridentTransformationTimer: tridentTransformation?.timer ?? 0,
+      tridentHeldCount: tridentTransformation?.heldTargetIds.length ?? 0,
     };
   }
 
@@ -2469,6 +2725,10 @@ export class CombatSystem {
         firing: false,
         fromX: bodyX,
         fromY: DEFAULT_PHYSICS.groundY - 430,
+        leftFromX: bodyX - neptuneBodyRadius * 0.18,
+        leftFromY: DEFAULT_PHYSICS.groundY + neptuneBodyRadius * 0.78 - neptuneBodyRadius * 0.72,
+        rightFromX: bodyX + neptuneBodyRadius * 0.18,
+        rightFromY: DEFAULT_PHYSICS.groundY + neptuneBodyRadius * 0.78 - neptuneBodyRadius * 0.72,
         toX: bodyX,
         toY: DEFAULT_PHYSICS.groundY - 120,
         width: neptuneLaserWidth,
@@ -4160,8 +4420,7 @@ export class CombatSystem {
       const to = target
         ? neptuneLaserStartBehindTarget(event, target)
         : { x: event.body.x + (seededUnit(event.seed, event.attackIndex, 211) - 0.5) * 720, y: DEFAULT_PHYSICS.groundY - 120 };
-      event.laser.fromX = event.body.x;
-      event.laser.fromY = event.body.y - event.body.radius * 1.02;
+      setNeptuneLaserEyeOrigins(event);
       event.laser.toX = to.x;
       event.laser.toY = to.y;
     } else if (attack === "rain") {
@@ -4278,27 +4537,36 @@ export class CombatSystem {
 
   private updateNeptuneSlam(event: NeptuneEventState, dt: number, players: PlayerPhysicsState[]): void {
     const warn = clamp(1 - event.attackTimer / 1.05, 0, 1);
-    const slam = event.attackTimer >= 1.05 && event.attackTimer <= 1.55
-      ? Math.sin(clamp((event.attackTimer - 1.05) / 0.5, 0, 1) * Math.PI)
+    const slamStart = 1.05;
+    const ramp = clamp((event.attackTimer - slamStart) / 0.5, 0, 1);
+    const holdEnd = 4.05;
+    const recovery = event.attackTimer > holdEnd
+      ? clamp((neptuneSlamDuration - event.attackTimer) / Math.max(0.01, neptuneSlamDuration - holdEnd), 0, 1)
+      : 1;
+    const holdStrength = easeOutCubicNumber(ramp) * easeOutCubicNumber(recovery);
+    const slam = event.attackTimer >= slamStart && event.attackTimer <= 1.58
+      ? Math.sin(clamp((event.attackTimer - slamStart) / 0.53, 0, 1) * Math.PI)
       : 0;
     event.tilt.active = true;
     event.tilt.warningAlpha = warn;
-    event.tilt.amount = event.attackTimer < 1.05 ? 0 : event.tilt.direction * clamp((event.attackTimer - 1.05) / 0.65, 0, 1) * clamp((neptuneSlamDuration - event.attackTimer) / 1.2, 0, 1);
+    event.tilt.amount = event.tilt.direction * 1.9 * holdStrength;
     const hand = event.tilt.direction < 0 ? event.leftHand : event.rightHand;
     hand.slamAlpha = Math.max(hand.slamAlpha * 0.78, slam);
     hand.warningAlpha = Math.max(hand.warningAlpha, warn);
     if (!event.visualOnly && slam > 0.72) {
       this.applyNeptuneHandCrush(event);
+      this.queueSound("neptune-slam");
+    }
+    if (!event.visualOnly && holdStrength > 0.1) {
       for (const combatant of this.neptuneValidTargets()) {
         this.pushCombatantAndPlayer(combatant.id, {
-          x: event.tilt.direction * neptuneTiltSlideAcceleration * dt,
-          y: -120 * dt,
+          x: event.tilt.direction * neptuneTiltSlideAcceleration * holdStrength * dt,
+          y: -150 * holdStrength * dt,
         }, players);
       }
       for (const van of this.damageableVans()) {
-        van.velocityX += event.tilt.direction * neptuneTiltSlideAcceleration * 0.7 * dt;
+        van.velocityX += event.tilt.direction * neptuneTiltSlideAcceleration * 0.78 * holdStrength * dt;
       }
-      this.queueSound("neptune-slam");
     }
   }
 
@@ -4315,8 +4583,7 @@ export class CombatSystem {
       event.laser.toX += (delta.x / distance) * step;
       event.laser.toY += (delta.y / distance) * step;
     }
-    event.laser.fromX = event.body.x - 18;
-    event.laser.fromY = event.body.y - event.body.radius * 1.02;
+    setNeptuneLaserEyeOrigins(event);
     event.laser.warningAlpha = clamp(1 - event.attackTimer / 1.15, 0, 1);
     event.laser.firing = event.attackTimer >= 1.15 && event.attackTimer <= neptuneLaserDuration - 0.35;
     if (!event.laser.firing || event.visualOnly) {
@@ -4324,14 +4591,14 @@ export class CombatSystem {
     }
     for (const combatant of this.neptuneValidTargets()) {
       const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
-      const distance = Math.hypot(center.x - event.laser.toX, center.y - event.laser.toY);
+      const distance = neptuneLaserDistanceToTarget(event.laser, center);
       if (distance <= event.laser.width + Math.max(combatant.width, combatant.height) * 0.28) {
         this.applyNeptuneFatalHit(event, combatant, "NEPTUNE LASER", { x: Math.sign(center.x - event.body.x || 1) * 840, y: -560 });
       }
     }
     for (const van of this.damageableVans()) {
       const center = { x: van.x + van.width / 2, y: van.y + van.height / 2 };
-      const distance = Math.hypot(center.x - event.laser.toX, center.y - event.laser.toY);
+      const distance = neptuneLaserDistanceToTarget(event.laser, center);
       if (distance <= event.laser.width + van.height * 0.32) {
         this.damageVan(van.id, 999, event.ownerId, performanceNow(), { x: Math.sign(center.x - event.body.x || 1) * 900, y: -620 });
       }
@@ -4413,16 +4680,30 @@ export class CombatSystem {
       if ([...this.neptuneCreatures.values()].some((creature) => creature.eventId === event.id && creature.kind === kind)) {
         continue;
       }
-      const side = index % 2 === 0 ? -1 : 1;
       const profile = neptuneCreatureProfile(kind);
+      const side = seededUnit(event.seed, event.summonWave * 97 + index, 221) < 0.5 ? -1 : 1;
+      const minX = DEFAULT_PHYSICS.platformLeft + 92;
+      const maxX = DEFAULT_PHYSICS.platformRight - profile.width - 92;
+      const randomX = minX + seededUnit(event.seed, event.summonWave * 173 + index, 557) * Math.max(1, maxX - minX);
+      const avoidBodyRadius = 220 + index * 28;
+      const nudgedX = Math.abs(randomX - event.body.x) < avoidBodyRadius
+        ? randomX + Math.sign(randomX - event.body.x || side) * avoidBodyRadius
+        : randomX;
+      const finalX = kind === "giant-shark"
+        ? side < 0
+          ? clamp(minX + seededUnit(event.seed, event.summonWave * 211 + index, 811) * 260, minX, maxX)
+          : clamp(maxX - seededUnit(event.seed, event.summonWave * 211 + index, 811) * 260, minX, maxX)
+        : clamp(nudgedX, minX, maxX);
+      const finalY = DEFAULT_PHYSICS.groundY - profile.height - (kind === "giant-shark" ? 62 : kind === "octopus" ? 12 : 0);
+      const spawnY = DEFAULT_PHYSICS.groundY + profile.height * (kind === "giant-shark" ? 0.55 : 0.7);
       const creature: NeptuneCreatureState = {
         id: this.makeId(`neptune-${kind}`),
         eventId: event.id,
         ownerId: event.ownerId,
         kind,
-        x: clamp(event.body.x + side * (260 + index * 94), DEFAULT_PHYSICS.platformLeft + 80, DEFAULT_PHYSICS.platformRight - profile.width - 80),
-        y: DEFAULT_PHYSICS.groundY - profile.height - (kind === "giant-shark" ? 80 : kind === "octopus" ? 12 : 0),
-        vx: side * profile.speed,
+        x: finalX,
+        y: finalY,
+        vx: kind === "giant-shark" ? -side * (profile.speed + 90) : side * profile.speed,
         vy: kind === "clown-fish" ? -240 : 0,
         width: profile.width,
         height: profile.height,
@@ -4433,9 +4714,14 @@ export class CombatSystem {
         attackCooldown: 0.35 + index * 0.22,
         grabbedTargetIds: [],
         stuckTargetIds: [],
+        spawnProgress: 0,
+        spawnX: finalX,
+        spawnY,
         visualOnly: event.visualOnly,
       };
       this.neptuneCreatures.set(creature.id, creature);
+      this.addEffect("shockwave", finalX + profile.width / 2, DEFAULT_PHYSICS.groundY, finalX + profile.width / 2, finalY + profile.height / 2, colorForWeapon("neptune"), `${neptuneCreatureName(kind).toUpperCase()} POP`);
+      this.addEffect("spark", finalX + profile.width / 2, DEFAULT_PHYSICS.groundY, finalX + profile.width / 2 + side * 60, DEFAULT_PHYSICS.groundY - 44, colorForWeapon("neptune"), "SPLASH");
       if (!event.visualOnly) {
         this.combatants.set(creature.id, {
           id: creature.id,
@@ -4470,6 +4756,7 @@ export class CombatSystem {
       creature.age += dt;
       creature.lifetime = Math.max(0, creature.lifetime - dt);
       creature.attackCooldown = Math.max(0, creature.attackCooldown - dt);
+      creature.spawnProgress = clamp(creature.spawnProgress + dt / 0.52, 0, 1);
       const body = this.combatants.get(creature.id);
       if (body) {
         creature.hp = body.hp;
@@ -4573,7 +4860,7 @@ export class CombatSystem {
     creature.x += creature.vx * dt;
     creature.y += creature.vy * dt;
     creature.x = clamp(creature.x, DEFAULT_PHYSICS.platformLeft - 140, DEFAULT_PHYSICS.platformRight - creature.width + 140);
-    creature.y = clamp(creature.y, DEFAULT_PHYSICS.groundY - 420, DEFAULT_PHYSICS.groundY - creature.height + 22);
+    creature.y = clamp(creature.y, DEFAULT_PHYSICS.groundY - 420, DEFAULT_PHYSICS.groundY - creature.height - 16);
     if (creature.visualOnly || creature.attackCooldown > 0) {
       return;
     }
@@ -4916,6 +5203,10 @@ export class CombatSystem {
       this.spawnRemoteNeptuneVisual(event);
       return;
     }
+    if (event.weaponId === "trident" && event.label === "Trident Flood") {
+      this.startTridentFlood(event.ownerId, { x: event.x, y: event.y }, Math.floor(event.range ?? event.ts), true);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -5221,6 +5512,7 @@ export class CombatSystem {
       neptuneEvents: this.neptuneEvents,
       neptuneCreatures: [...this.neptuneCreatures.values()],
       neptunePellets: this.neptunePellets,
+      tridentFloods: this.tridentFloods,
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -5297,6 +5589,9 @@ export class CombatSystem {
     }
     if (weapon.id === "axe") {
       this.queueSound("axe-swing");
+    }
+    if (weapon.id === "trident") {
+      this.queueSound("trident-swing");
     }
 
     this.spawnMeleeHitbox(context, chargedProfile, meleeLabelFor(weapon.id, slot, weapon.name));
@@ -7236,6 +7531,7 @@ export class CombatSystem {
     const isKnife = weaponId === "knife";
     const isMachete = weaponId === "machete";
     const isAxe = weaponId === "axe";
+    const isTrident = weaponId === "trident";
     const isMacheteChop = isMachete && label === "Machete Chop";
     const isHammer = weaponId === "sledgehammer";
     const macheteState = isMachete ? this.getMacheteState(context.ownerId) : undefined;
@@ -7251,7 +7547,9 @@ export class CombatSystem {
           ? Math.max(40, (profile.radius ?? 20) * (isMacheteChop ? 2.6 : 2.1))
           : isAxe
             ? Math.max(42, (profile.radius ?? 22) * 2.2)
-            : Math.max(22, (profile.radius ?? 14) * 2);
+            : isTrident
+              ? Math.max(46, (profile.radius ?? 22) * 2.35)
+              : Math.max(22, (profile.radius ?? 14) * 2);
     const swing = aimedMeleeBox(context.player, aim, range, thickness, lowTrip);
     const x = swing.x;
     const y = swing.y;
@@ -7291,6 +7589,9 @@ export class CombatSystem {
     }
     if (isAxe) {
       this.addEffect("spark", x + swing.width * 0.72, y + swing.height * 0.5, x + swing.width * 0.72, y + swing.height * 0.5 + 18, attackColor, "Heavy");
+    }
+    if (isTrident) {
+      this.addEffect("spark", swing.end.x, swing.end.y, swing.end.x + aim.x * 28, swing.end.y + aim.y * 28, "#bdefff", "Splash");
     }
   }
 
@@ -7489,6 +7790,14 @@ export class CombatSystem {
   }
 
   private updateInventory(dt: number): void {
+    for (const [ownerId, cooldown] of [...this.tridentFloodCooldowns.entries()]) {
+      const next = cooldown - dt;
+      if (next <= 0) {
+        this.tridentFloodCooldowns.delete(ownerId);
+      } else {
+        this.tridentFloodCooldowns.set(ownerId, next);
+      }
+    }
     for (const id of WEAPON_IDS) {
       this.inventory.cooldowns[id] = Math.max(0, (this.inventory.cooldowns[id] ?? 0) - dt);
       const ammo = this.inventory.ammo[id];
@@ -8974,6 +9283,16 @@ export class CombatSystem {
   private startRespawn(target: Combatant, label: string): void {
     this.clearChainsawVictimRecords(target.id);
     this.releaseSpikeImpale(target.id);
+    const tridentForm = this.tridentTransformations.get(target.id);
+    if (tridentForm) {
+      this.releaseOctopusHeldTargets(tridentForm);
+      this.tridentTransformations.delete(target.id);
+    }
+    for (const state of this.tridentTransformations.values()) {
+      if (state.heldTargetIds.includes(target.id)) {
+        state.heldTargetIds = state.heldTargetIds.filter((id) => id !== target.id);
+      }
+    }
     if (this.spikeModes.has(target.id)) {
       this.endSpikeMode(target.id, false);
     }
@@ -9000,7 +9319,7 @@ export class CombatSystem {
     target.spawnY = respawnPoint.y;
     target.x = respawnPoint.x;
     target.y = respawnPoint.y;
-    target.statuses = target.statuses.filter((status) => status.id === "holyBuff" || status.id === "blessed");
+    target.statuses = target.statuses.filter((status) => (status.id === "holyBuff" || status.id === "blessed") && !isTridentFormStatus(status.id));
     this.addEffect("shockwave", respawnPoint.x + target.width / 2, respawnPoint.y + target.height / 2, respawnPoint.x + target.width / 2, respawnPoint.y - 72, "#72b7ff", label);
     this.queueSound("respawn");
   }
@@ -9047,6 +9366,433 @@ export class CombatSystem {
     this.queueSound("player-stunned");
   }
 
+  private startTridentFlood(ownerId: string, origin: Vec2, seed: number, visualOnly: boolean): TridentFloodState {
+    removeWhere(this.tridentFloods, (flood) => flood.ownerId === ownerId);
+    const side: -1 | 1 = seededUnit(seed, 1, 701) < 0.5 ? -1 : 1;
+    const shark: JupiterSharkState = {
+      id: this.makeId("trident-shark"),
+      eventId: `trident-flood-${ownerId}`,
+      ownerId,
+      targetId: undefined,
+      x: side < 0 ? DEFAULT_PHYSICS.platformLeft - tridentSharkWidth - 70 : DEFAULT_PHYSICS.platformRight + 70,
+      y: DEFAULT_PHYSICS.groundY - 360 - seededUnit(seed, 2, 709) * 180,
+      vx: -side * 520,
+      vy: 0,
+      width: tridentSharkWidth,
+      height: tridentSharkHeight,
+      hp: tridentSharkHp,
+      maxHp: tridentSharkHp,
+      age: 0,
+      lifetime: tridentFloodDuration,
+      biteCooldown: 0.35,
+      angle: 0,
+      visualOnly,
+    };
+    const flood: TridentFloodState = {
+      id: this.makeId("trident-flood"),
+      ownerId,
+      timer: tridentFloodDuration,
+      duration: tridentFloodDuration,
+      age: 0,
+      level: DEFAULT_PHYSICS.groundY + 80,
+      alpha: 0,
+      suck: 0,
+      shark,
+      visualOnly,
+    };
+    this.tridentFloods.push(flood);
+    this.addEffect("shockwave", origin.x, DEFAULT_PHYSICS.groundY, origin.x, DEFAULT_PHYSICS.groundY - 760, colorForWeapon("trident"), "FLOOD RISE");
+    return flood;
+  }
+
+  private updateTridentFloods(dt: number, players: PlayerPhysicsState[]): void {
+    for (const flood of [...this.tridentFloods]) {
+      flood.age += dt;
+      flood.timer = Math.max(0, flood.timer - dt);
+      const fill = clamp(flood.age / 1.45, 0, 1);
+      const drain = clamp(flood.timer / 1.6, 0, 1);
+      const visible = Math.min(fill, drain);
+      flood.level = lerp(DEFAULT_PHYSICS.groundY + 100, DEFAULT_PHYSICS.groundY - 840, easeOutCubicNumber(visible));
+      flood.alpha = 0.12 + visible * 0.62;
+      flood.suck = flood.timer < 2.2 ? clamp((2.2 - flood.timer) / 2.2, 0, 1) : 0;
+      this.updateTridentFloodShark(flood, dt);
+      if (!flood.visualOnly) {
+        this.applyTridentFloodForces(flood, dt, players);
+      }
+      if (flood.timer <= 0 || flood.shark.hp <= 0) {
+        this.addEffect("shockwave", flood.shark.x + flood.shark.width / 2, flood.shark.y + flood.shark.height / 2, flood.shark.x + flood.shark.width / 2, DEFAULT_PHYSICS.groundY, colorForWeapon("trident"), flood.shark.hp <= 0 ? "SHARK GONE" : "FLOOD DRAIN");
+      }
+    }
+    removeWhere(this.tridentFloods, (flood) => flood.timer <= 0 || flood.shark.hp <= 0);
+  }
+
+  private applyTridentFloodForces(flood: TridentFloodState, dt: number, players: PlayerPhysicsState[]): void {
+    const centerX = (DEFAULT_PHYSICS.platformLeft + DEFAULT_PHYSICS.platformRight) / 2;
+    for (const combatant of this.tridentValidTargets(flood.ownerId, true)) {
+      const center = { x: combatant.x + combatant.width / 2, y: combatant.y + combatant.height / 2 };
+      if (center.y < flood.level - 210) {
+        continue;
+      }
+      const buoyancy = (center.y - flood.level + 210) / 460;
+      const pull = normalize({ x: centerX - center.x, y: -0.22 });
+      this.pushCombatantAndPlayer(combatant.id, {
+        x: pull.x * 180 * flood.suck * dt - combatant.velocityX * tridentFloodDrag * dt,
+        y: -tridentFloodBuoyancy * clamp(buoyancy, 0.25, 1.2) * dt + pull.y * 260 * flood.suck * dt,
+      }, players);
+      combatant.hitstun = Math.max(combatant.hitstun, 0.03);
+    }
+    for (const van of this.damageableVans()) {
+      if (van.y + van.height > flood.level) {
+        van.velocityY -= tridentFloodBuoyancy * 0.4 * dt;
+        van.velocityX *= Math.max(0, 1 - dt * 0.85);
+      }
+    }
+  }
+
+  private updateTridentFloodShark(flood: TridentFloodState, dt: number): void {
+    const shark = flood.shark;
+    shark.age += dt;
+    shark.lifetime = flood.timer;
+    shark.biteCooldown = Math.max(0, shark.biteCooldown - dt);
+    const target = this.findTridentFloodTarget(flood);
+    if (target) {
+      shark.targetId = target.id;
+      const center = { x: shark.x + shark.width / 2, y: shark.y + shark.height / 2 };
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const desired = normalize({ x: targetCenter.x - center.x, y: targetCenter.y - center.y });
+      shark.vx = lerp(shark.vx, desired.x * 620, clamp(dt * 2.4, 0, 1));
+      shark.vy = lerp(shark.vy, desired.y * 440, clamp(dt * 2.2, 0, 1));
+      shark.angle = Math.atan2(shark.vy, shark.vx || 1);
+    }
+    shark.x += shark.vx * dt;
+    shark.y += shark.vy * dt;
+    shark.x = clamp(shark.x, DEFAULT_PHYSICS.platformLeft - shark.width - 120, DEFAULT_PHYSICS.platformRight + 120);
+    shark.y = clamp(shark.y, flood.level - 260, DEFAULT_PHYSICS.groundY - shark.height - 24);
+    if (flood.visualOnly || shark.biteCooldown > 0) {
+      return;
+    }
+    for (const target of this.tridentValidTargets(flood.ownerId, true)) {
+      if (!intersectsRect(shark, target)) {
+        continue;
+      }
+      this.applyDamage({
+        sourceId: flood.ownerId,
+        targetId: target.id,
+        weaponId: "trident",
+        damage: tridentSharkBiteDamage,
+        knockback: { x: Math.sign(target.x - shark.x || 1) * 820, y: -560 },
+        stun: 0.68,
+        label: "Flood Shark",
+        status: "daze",
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+      shark.biteCooldown = tridentSharkBiteCooldown;
+      this.queueSound("jupiter-shark");
+      break;
+    }
+  }
+
+  private findTridentFloodTarget(flood: TridentFloodState): Combatant | undefined {
+    let nearest: { target: Combatant; distance: number } | undefined;
+    const shark = flood.shark;
+    const center = { x: shark.x + shark.width / 2, y: shark.y + shark.height / 2 };
+    for (const target of this.tridentValidTargets(flood.ownerId, true)) {
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const distance = Math.hypot(targetCenter.x - center.x, targetCenter.y - center.y);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { target, distance };
+      }
+    }
+    return nearest?.target;
+  }
+
+  private updateTridentTransformations(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [id, state] of [...this.tridentTransformations.entries()]) {
+      const target = this.combatants.get(id);
+      if (!target || target.hp <= 0 || target.respawnTimer > 0) {
+        this.releaseOctopusHeldTargets(state);
+        this.tridentTransformations.delete(id);
+        continue;
+      }
+      state.timer = Math.max(0, state.timer - dt);
+      state.inflateTimer = Math.max(0, state.inflateTimer - dt);
+      const statusId = statusForTridentForm(state.form);
+      const status = target.statuses.find((item) => item.id === statusId);
+      if (state.timer <= 0 || !status) {
+        this.releaseOctopusHeldTargets(state);
+        target.statuses = target.statuses.filter((item) => !isTridentFormStatus(item.id));
+        this.tridentTransformations.delete(id);
+        this.addEffect("aura", target.x + target.width / 2, target.y + target.height / 2, target.x + target.width / 2, target.y - 44, colorForWeapon("trident"), "REVERT");
+        continue;
+      }
+      if (state.form === "puffer") {
+        target.velocityY -= 120 * dt;
+        target.velocityX *= Math.max(0, 1 - dt * 0.34);
+        if (state.inflateTimer > 0) {
+          this.applyPufferContactPoison(state, target);
+        }
+      } else if (state.form === "goldfish") {
+        target.velocityX *= Math.max(0, 1 - dt * 2.6);
+      } else if (state.form === "octopus") {
+        this.updateOctopusHeldTargets(state, target, players);
+      }
+    }
+  }
+
+  private useTridentCreatureAbility(context: WeaponUseContext, slot: "primary" | "secondary", state: TridentTransformationState): WeaponUseResult {
+    const weaponId: WeaponId = "trident";
+    const cooldown = this.inventory.cooldowns[weaponId] ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Creature cooldown" };
+    }
+    if (state.form === "puffer") {
+      return this.usePufferAbility(context, state);
+    }
+    if (state.form === "goldfish") {
+      return this.useGoldfishAbility(context, slot);
+    }
+    return slot === "primary" ? this.useOctopusGrab(context, state) : this.useOctopusThrow(context, state);
+  }
+
+  private usePufferAbility(context: WeaponUseContext, state: TridentTransformationState): WeaponUseResult {
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId: "trident", label: "No puffer" };
+    }
+    state.inflateTimer = 1;
+    this.inventory.cooldowns.trident = 0.5;
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    this.addEffect("aura", center.x, center.y, center.x, center.y - 120, "#7cff6b", "PUFFER GAS");
+    this.addEffect("shockwave", center.x - 100, center.y, center.x + 100, center.y, "#164f24", "TOXIC");
+    for (const target of this.tridentValidTargets(context.ownerId, false)) {
+      const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      const distance = Math.hypot(targetCenter.x - center.x, targetCenter.y - center.y);
+      if (distance > 132) {
+        continue;
+      }
+      const status = distance <= 46 ? "spikePoison" : "poison";
+      target.statuses = upsertStatusEffect(target.statuses, createStatus(status));
+      target.velocityX += Math.sign(targetCenter.x - center.x || 1) * (distance <= 46 ? 230 : 110);
+      target.hitstun = Math.max(target.hitstun, 0.12);
+    }
+    this.queueSound("trident-splash");
+    return { kind: "utility", weaponId: "trident", label: "Puffer Inflate" };
+  }
+
+  private useGoldfishAbility(context: WeaponUseContext, slot: "primary" | "secondary"): WeaponUseResult {
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId: "trident", label: "No goldfish" };
+    }
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: owner.velocityX || 1, y: -0.25 });
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height * 0.4 };
+    const count = slot === "secondary" ? 9 : 7;
+    for (let index = 0; index < count; index += 1) {
+      const seed = context.now + index * 31 + owner.x * 0.13;
+      const radius = 5 + Math.round(seededUnit(seed, index, 421) * 15);
+      const spread = (index - (count - 1) / 2) * 0.1 + (seededUnit(seed, index, 433) - 0.5) * 0.12;
+      const shot = rotate(aim, spread);
+      this.projectiles.push({
+        id: this.makeId("goldfish-drop"),
+        ownerId: context.ownerId,
+        weaponId: "trident",
+        x: center.x,
+        y: center.y,
+        vx: shot.x * (460 + (18 - radius) * 14),
+        vy: shot.y * (420 + (18 - radius) * 8) - 90,
+        radius,
+        damage: radius >= 17 ? 22 : radius >= 11 ? 12 : 5,
+        knockback: { x: shot.x * (160 + radius * 14), y: shot.y * 130 - 80 },
+        stun: radius >= 17 ? 0.28 : 0.14,
+        age: 0,
+        lifetime: 1.35,
+        gravity: 360,
+        bounces: 0,
+        pierce: 0,
+        label: "Goldfish Droplet",
+        color: radius >= 17 ? "#bdefff" : "#5ad7ff",
+        trailColor: "#5ad7ff",
+        status: radius >= 17 ? "daze" : undefined,
+        hits: [],
+      });
+    }
+    this.inventory.cooldowns.trident = slot === "secondary" ? 0.72 : 0.54;
+    owner.velocityY = Math.min(owner.velocityY, -300);
+    owner.velocityX += aim.x * 120;
+    this.addEffect("muzzle", center.x, center.y, center.x + aim.x * 80, center.y + aim.y * 60, colorForWeapon("trident"), "SQUIRT");
+    this.queueSound("trident-splash");
+    return { kind: "fired", weaponId: "trident", label: "Goldfish Droplets" };
+  }
+
+  private useOctopusGrab(context: WeaponUseContext, state: TridentTransformationState): WeaponUseResult {
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner) {
+      return { kind: "blocked", weaponId: "trident", label: "No octopus" };
+    }
+    if (state.heldTargetIds.length >= 8) {
+      return { kind: "blocked", weaponId: "trident", label: "Arms full" };
+    }
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const nearest = this.tridentValidTargets(context.ownerId, false)
+      .filter((target) => !state.heldTargetIds.includes(target.id))
+      .map((target) => ({
+        target,
+        distance: Math.hypot(target.x + target.width / 2 - ownerCenter.x, target.y + target.height / 2 - ownerCenter.y),
+      }))
+      .filter((item) => item.distance <= 460)
+      .sort((left, right) => left.distance - right.distance)[0]?.target;
+    if (!nearest) {
+      return { kind: "blocked", weaponId: "trident", label: "No grab target" };
+    }
+    state.heldTargetIds.push(nearest.id);
+    nearest.hitstun = Math.max(nearest.hitstun, 0.35);
+    nearest.statuses = upsertStatusEffect(nearest.statuses, createStatus("daze"));
+    this.inventory.cooldowns.trident = 0.24;
+    this.addEffect("whip-pull", ownerCenter.x, ownerCenter.y, nearest.x + nearest.width / 2, nearest.y + nearest.height / 2, colorForWeapon("trident"), "OCTO GRAB");
+    this.queueSound("whip-pull");
+    return { kind: "utility", weaponId: "trident", label: "Octopus Grab" };
+  }
+
+  private useOctopusThrow(context: WeaponUseContext, state: TridentTransformationState): WeaponUseResult {
+    if (state.heldTargetIds.length === 0) {
+      return { kind: "blocked", weaponId: "trident", label: "No held players" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    const center = owner
+      ? { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 }
+      : { x: context.player.x + context.player.width / 2, y: context.player.y + context.player.height / 2 };
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing || 1, y: -0.25 });
+    for (let index = 0; index < state.heldTargetIds.length; index += 1) {
+      const target = this.combatants.get(state.heldTargetIds[index]);
+      if (!target) {
+        continue;
+      }
+      const direction = rotate(aim, (index - (state.heldTargetIds.length - 1) / 2) * 0.22 + (index % 2 === 0 ? -0.12 : 0.12));
+      target.velocityX = direction.x * (920 + index * 55);
+      target.velocityY = direction.y * 720 - 520 - index * 24;
+      target.hitstun = Math.max(target.hitstun, 0.58);
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("daze"));
+      this.addEffect("whip", center.x, center.y, target.x + target.width / 2, target.y + target.height / 2, colorForWeapon("trident"), "OCTO THROW");
+    }
+    state.heldTargetIds = [];
+    this.inventory.cooldowns.trident = 0.48;
+    this.queueSound("trident-splash");
+    return { kind: "utility", weaponId: "trident", label: "Octopus Throw" };
+  }
+
+  private updateOctopusHeldTargets(state: TridentTransformationState, owner: Combatant, players: PlayerPhysicsState[]): void {
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    for (let index = state.heldTargetIds.length - 1; index >= 0; index -= 1) {
+      const target = this.combatants.get(state.heldTargetIds[index]);
+      if (!target || target.hp <= 0 || target.respawnTimer > 0) {
+        state.heldTargetIds.splice(index, 1);
+        continue;
+      }
+      const angle = -Math.PI * 0.88 + index * (Math.PI * 1.76 / Math.max(1, state.heldTargetIds.length - 1));
+      target.x = ownerCenter.x + Math.cos(angle) * 58 - target.width / 2;
+      target.y = ownerCenter.y + Math.sin(angle) * 42 - target.height / 2;
+      target.velocityX = 0;
+      target.velocityY = 0;
+      target.hitstun = Math.max(target.hitstun, 0.12);
+      const player = players.find((item) => item.id === target.id);
+      if (player) {
+        player.x = target.x;
+        player.y = target.y;
+        player.velocityX = 0;
+        player.velocityY = 0;
+      }
+    }
+  }
+
+  private releaseOctopusHeldTargets(state: TridentTransformationState): void {
+    for (const targetId of state.heldTargetIds) {
+      const target = this.combatants.get(targetId);
+      if (target) {
+        target.hitstun = Math.min(target.hitstun, 0.1);
+      }
+    }
+    state.heldTargetIds = [];
+  }
+
+  private applyPufferContactPoison(state: TridentTransformationState, owner: Combatant): void {
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    for (const target of this.tridentValidTargets(state.ownerId, false)) {
+      const distance = Math.hypot(target.x + target.width / 2 - center.x, target.y + target.height / 2 - center.y);
+      if (distance <= 46) {
+        target.statuses = upsertStatusEffect(target.statuses, createStatus("spikePoison"));
+      }
+    }
+  }
+
+  private throwTrident(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "trident";
+    const weapon = weaponRegistry.get(weaponId);
+    const cooldown = this.inventory.cooldowns[weaponId] ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Throw cooldown" };
+    }
+    if (!this.inventory.weaponInventory.includes(weaponId)) {
+      return { kind: "blocked", weaponId, label: "Trident missing" };
+    }
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing || 1, y: 0 });
+    const start = this.muzzle(context.player);
+    this.inventory.cooldowns[weaponId] = weapon.secondary.cooldown;
+    this.removeThrownWeaponFromInventory(weaponId);
+    this.projectiles.push({
+      id: this.makeId("trident-throw"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: start.x,
+      y: start.y,
+      vx: aim.x * weapon.throw.speed,
+      vy: aim.y * weapon.throw.speed - 70,
+      radius: weapon.secondary.radius ?? 10,
+      damage: weapon.throw.damage,
+      knockback: { x: aim.x * weapon.throw.knockback, y: aim.y * weapon.throw.knockback - 90 },
+      stun: weapon.throw.stun,
+      age: 0,
+      lifetime: 1.55,
+      gravity: 520,
+      bounces: 0,
+      pierce: 0,
+      label: "Trident throw",
+      color: colorForWeapon(weaponId),
+      trailColor: "#bdefff",
+      originX: start.x,
+      originY: start.y,
+      hits: [],
+    });
+    this.applySelfRecoil(context.player, aim, 92, 22);
+    this.addEffect("tracer", start.x, start.y, start.x + aim.x * 96, start.y + aim.y * 96, colorForWeapon(weaponId), "Throw");
+    this.queueSound("trident-throw");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "throw", start, aim, "Throw", context.now));
+    return { kind: "fired", weaponId, label: "Throw" };
+  }
+
+  private landThrownTrident(projectile: Projectile, label = "STICK"): void {
+    if (!projectile.id.startsWith("trident-throw")) {
+      return;
+    }
+    const x = clamp(projectile.x, DEFAULT_PHYSICS.platformLeft + 18, DEFAULT_PHYSICS.platformRight - 18);
+    const y = Math.min(projectile.y, DEFAULT_PHYSICS.groundY - 8);
+    if (!this.droppedWeapons.some((weapon) => weapon.weaponId === "trident" && Math.hypot(weapon.x - x, weapon.y - y) < 18)) {
+      this.droppedWeapons.push({
+        id: this.makeId("drop"),
+        weaponId: "trident",
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        age: 0,
+        pickupable: true,
+      });
+    }
+    this.addEffect("spark", x, y, x, y - 28, colorForWeapon("trident"), label);
+    this.queueSound("trident-splash");
+    projectile.age = projectile.lifetime + 1;
+  }
+
   private updateProjectiles(dt: number, players: PlayerPhysicsState[]): void {
     for (const projectile of this.projectiles) {
       if (projectile.weaponId === "rocket") {
@@ -9074,6 +9820,10 @@ export class CombatSystem {
       const ground = COMBAT_TUNING.projectiles.floorY - projectile.radius;
       if (projectile.y > ground) {
         projectile.y = ground;
+        if (projectile.weaponId === "trident" && projectile.id.startsWith("trident-throw")) {
+          this.landThrownTrident(projectile, "TRIDENT STICK");
+          continue;
+        }
         if (projectile.weaponId === "lightning-rod" && projectile.id.startsWith("throw")) {
           this.addEffect("lightning", projectile.x, projectile.y, projectile.x, projectile.y - 140, "#ffd84d", "Rod Strike");
           this.applyBurstDamage(projectile.ownerId, projectile.x, projectile.y, 105, 10, 230, 0.26, "Rod Strike", "lightning");
@@ -9182,6 +9932,10 @@ export class CombatSystem {
               this.addEffect("spark", projectile.x, projectile.y, projectile.x, projectile.y - 18, colorForWeapon("knife"), "Stick");
               this.queueSound("knife-hit");
             }
+            if (projectile.weaponId === "trident" && projectile.id.startsWith("trident-throw")) {
+              this.landThrownTrident(projectile, "TRIDENT HIT");
+              continue;
+            }
             if (projectile.weaponId === "axe" && projectile.id.startsWith("throw")) {
               this.addEffect(projectile.label === "RETURNING AXE" ? "lightning" : "spark", projectile.x, projectile.y, projectile.x + normalize(projectile.knockback).x * 30, projectile.y - 10, projectile.trailColor, projectile.label === "RETURNING AXE" ? "RETURNING AXE" : "Heavy Hit");
               this.queueSound("axe-hit");
@@ -9221,6 +9975,9 @@ export class CombatSystem {
       }
       if (returningAxe && projectile.age <= projectile.lifetime) {
         this.catchReturningAxe(projectile);
+      }
+      if (projectile.weaponId === "trident" && projectile.id.startsWith("trident-throw") && projectile.age > projectile.lifetime) {
+        this.landThrownTrident(projectile, "TRIDENT DROP");
       }
     }
     const xLimit = 2400 + COMBAT_TUNING.projectiles.cleanupPadding;
@@ -9643,6 +10400,7 @@ export class CombatSystem {
           const knifeHit = hitbox.weaponId === "knife";
           const macheteHit = hitbox.weaponId === "machete";
           const axeHit = hitbox.weaponId === "axe";
+          const tridentHit = hitbox.weaponId === "trident";
           const superLegsHit = hitbox.weaponId === "super-legs";
           const tipHit = whipHit && isWhipTipHit(hitbox, target);
           const macheteTipHit = macheteHit && isWhipTipHit(hitbox, target);
@@ -9712,6 +10470,10 @@ export class CombatSystem {
               this.queueSound("axe-hit");
               this.queueSound("axe-impact");
               this.addEffect("spark", target.x + target.width / 2, hitY, target.x + target.width / 2 + Math.sign(hitbox.knockback.x || 1) * 30, hitY, colorForWeapon(hitbox.weaponId), axeTipHit ? "Head" : "Chop");
+            }
+            if (tridentHit) {
+              this.queueSound("trident-splash");
+              this.addEffect("shockwave", target.x + target.width / 2 - 24, hitY, target.x + target.width / 2 + 36, hitY + 6, "#bdefff", "TRIDENT SPLASH");
             }
             if (superLegsHit) {
               this.queueSound(hitbox.heavy ? "ground-slam-impact" : "head-stomp");
@@ -10281,8 +11043,72 @@ export class CombatSystem {
       }
     }
 
+    for (const [ownerId, punch] of [...this.grabberPunches.entries()]) {
+      const owner = this.combatants.get(ownerId);
+      const target = this.combatants.get(punch.targetId);
+      punch.elapsed += dt;
+      if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+        this.grabberPunches.delete(ownerId);
+        continue;
+      }
+      const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+      if (target && target.respawnTimer <= 0 && target.hp > 0) {
+        punch.targetX = target.x + target.width / 2;
+        punch.targetY = target.y + target.height / 2;
+      }
+      if (punch.elapsed < grabberPunchWindup) {
+        punch.phase = "windup";
+      } else if (punch.elapsed < grabberPunchHitTime) {
+        punch.phase = "extend";
+      } else if (punch.elapsed < grabberPunchHitTime + 0.08) {
+        punch.phase = "hit";
+      } else if (punch.elapsed < grabberPunchTotal) {
+        punch.phase = "retract";
+      } else {
+        punch.phase = "cooldown";
+      }
+
+      if (!punch.hitApplied && punch.elapsed >= grabberPunchHitTime) {
+        punch.hitApplied = true;
+        this.grabberCooldowns.set(ownerId, grabberPunchCooldown);
+        if (target && target.respawnTimer <= 0 && target.hp > 0) {
+          const direction = normalize({ x: punch.targetX - ownerCenter.x || 1, y: punch.targetY - ownerCenter.y || -0.15 });
+          const hit = this.applyDamage({
+            sourceId: ownerId,
+            targetId: target.id,
+            weaponId: "grabber",
+            damage: grabberPunchDamage,
+            knockback: {
+              x: direction.x * grabberPunchKnockback,
+              y: -260 + direction.y * 120,
+            },
+            stun: 0.28,
+            label: "GRABBER PUNCH",
+            status: "daze",
+            skipHitLocationScaling: true,
+            skipSourceScaling: true,
+          });
+          if (hit.applied) {
+            this.pushCombatantAndPlayer(target.id, { x: direction.x * 120, y: -60 }, players);
+            this.addEffect("spark", punch.targetX, punch.targetY, punch.targetX + direction.x * 36, punch.targetY - 22, colorForWeapon("grabber"), "Glove");
+          }
+          this.addEffect("whip", ownerCenter.x, ownerCenter.y - 6, punch.targetX, punch.targetY, colorForWeapon("grabber"), "GRABBER PUNCH");
+          this.queueSound("grabber-punch");
+        }
+      }
+
+      if (punch.elapsed >= grabberPunchTotal) {
+        this.grabberPunches.delete(ownerId);
+      } else {
+        this.grabberPunches.set(ownerId, punch);
+      }
+    }
+
     for (const [ownerId, loadout] of this.playerLoadouts.entries()) {
       if (!hasGrabberStrap(loadout) || loadout.grabber) {
+        continue;
+      }
+      if (this.grabberPunches.has(ownerId)) {
         continue;
       }
       if ((this.grabberCooldowns.get(ownerId) ?? 0) > 0) {
@@ -10304,31 +11130,15 @@ export class CombatSystem {
       if (!target) {
         continue;
       }
-      const direction = normalize({ x: target.center.x - ownerCenter.x || 1, y: target.center.y - ownerCenter.y || -0.15 });
-      const hit = this.applyDamage({
-        sourceId: ownerId,
+      this.grabberPunches.set(ownerId, {
+        ownerId,
         targetId: target.candidate.id,
-        weaponId: "grabber",
-        damage: grabberPunchDamage,
-        knockback: {
-          x: direction.x * grabberPunchKnockback,
-          y: -260 + direction.y * 120,
-        },
-        stun: 0.28,
-        label: "GRABBER PUNCH",
-        status: "daze",
-        skipHitLocationScaling: true,
-        skipSourceScaling: true,
+        targetX: target.center.x,
+        targetY: target.center.y,
+        elapsed: Math.min(dt, grabberPunchWindup * 0.8),
+        phase: "windup",
+        hitApplied: false,
       });
-      if (!hit.applied) {
-        this.grabberCooldowns.set(ownerId, 0.2);
-        continue;
-      }
-      this.pushCombatantAndPlayer(target.candidate.id, { x: direction.x * 120, y: -60 }, players);
-      this.grabberCooldowns.set(ownerId, grabberPunchCooldown);
-      this.addEffect("whip", ownerCenter.x, ownerCenter.y - 6, target.center.x, target.center.y, colorForWeapon("grabber"), "GRABBER PUNCH");
-      this.addEffect("spark", target.center.x, target.center.y, target.center.x + direction.x * 36, target.center.y - 22, colorForWeapon("grabber"), "Glove");
-      this.queueSound("grabber-punch");
     }
   }
 
@@ -10623,6 +11433,38 @@ function statusForHit(weaponId: WeaponId | undefined, location: HitLocation | un
   return status ?? "legStagger";
 }
 
+function statusForTridentForm(form: TridentTransformationForm): StatusEffectId {
+  switch (form) {
+    case "puffer":
+      return "pufferForm";
+    case "goldfish":
+      return "goldfishForm";
+    case "octopus":
+      return "octopusForm";
+  }
+}
+
+function tridentFormFromStatus(status: string | undefined): TridentTransformationForm | undefined {
+  switch (status) {
+    case "pufferForm":
+      return "puffer";
+    case "goldfishForm":
+      return "goldfish";
+    case "octopusForm":
+      return "octopus";
+    default:
+      return undefined;
+  }
+}
+
+function tridentFormFromStatuses(statuses: readonly StatusEffectId[]): TridentTransformationForm | undefined {
+  return tridentFormFromStatus(statuses.find((status) => isTridentFormStatus(status)));
+}
+
+function isTridentFormStatus(status: string | undefined): status is Extract<StatusEffectId, "pufferForm" | "goldfishForm" | "octopusForm"> {
+  return status === "pufferForm" || status === "goldfishForm" || status === "octopusForm";
+}
+
 function clampSpikePoint(point: Vec2): Vec2 {
   return {
     x: clamp(point.x, DEFAULT_PHYSICS.platformLeft + spikeBoundsPadding, DEFAULT_PHYSICS.platformRight - spikeBoundsPadding),
@@ -10832,6 +11674,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff7045";
     case "neptune":
       return "#5ad7ff";
+    case "trident":
+      return "#5ad7ff";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -11019,6 +11863,12 @@ function createStatus(id: StatusEffectId): StatusEffect {
         tickEvery: Math.max(0.5, neptuneCreaturePoisonDuration / 10),
         tickTimer: 1,
       };
+    case "pufferForm":
+      return { id, label: "Puffer Fish", duration: tridentTransformDuration, stacks: 1 };
+    case "goldfishForm":
+      return { id, label: "Goldfish", duration: tridentTransformDuration, stacks: 1 };
+    case "octopusForm":
+      return { id, label: "Octopus", duration: tridentTransformDuration, stacks: 1 };
   }
 }
 
@@ -11176,13 +12026,35 @@ function neptuneLaserStartBehindTarget(event: NeptuneEventState, target: Combata
     x: target.x + target.width / 2,
     y: target.y + target.height / 2,
   };
-  const targetMovement = Math.sign(target.velocityX);
   const bodySide = Math.sign(center.x - event.body.x);
-  const chaseDirection = targetMovement || bodySide || 1;
+  const chaseDirection = bodySide <= 0 ? 1 : -1;
   return {
-    x: center.x - chaseDirection * 140,
+    x: center.x - chaseDirection * 420,
     y: center.y - 8,
   };
+}
+
+function setNeptuneLaserEyeOrigins(event: NeptuneEventState): void {
+  const y = event.body.y - event.body.radius * 0.72;
+  const spread = event.body.radius * 0.18;
+  event.laser.leftFromX = event.body.x - spread;
+  event.laser.leftFromY = y;
+  event.laser.rightFromX = event.body.x + spread;
+  event.laser.rightFromY = y;
+  event.laser.fromX = event.body.x;
+  event.laser.fromY = y;
+}
+
+function neptuneLaserDistanceToTarget(laser: NeptuneLaserState, point: Vec2): number {
+  const to = { x: laser.toX, y: laser.toY };
+  const left = closestPointOnSegment(point, { x: laser.leftFromX, y: laser.leftFromY }, to);
+  const right = closestPointOnSegment(point, { x: laser.rightFromX, y: laser.rightFromY }, to);
+  const mid = closestPointOnSegment(point, { x: laser.fromX, y: laser.fromY }, to);
+  return Math.min(
+    Math.hypot(point.x - left.x, point.y - left.y),
+    Math.hypot(point.x - right.x, point.y - right.y),
+    Math.hypot(point.x - mid.x, point.y - mid.y),
+  );
 }
 
 function hasGrabberStrap(loadout: Partial<LoadoutState> | undefined): boolean {

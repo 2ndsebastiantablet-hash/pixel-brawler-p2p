@@ -578,7 +578,10 @@ export class ThreeLayer {
       const actorId = `neptune-creature:${creature.id}`;
       liveIds.add(actorId);
       const actor = this.ensureActor(neptuneCreatureActorKind(creature.kind), actorId);
-      const center = { x: creature.x + creature.width / 2, y: creature.y + creature.height / 2 };
+      const pop = easeOutCubic(creature.spawnProgress);
+      const visualX = lerp(creature.spawnX, creature.x, pop);
+      const visualY = lerp(creature.spawnY, creature.y, pop);
+      const center = { x: visualX + creature.width / 2, y: visualY + creature.height / 2 };
       const position = worldToThreePosition(center, frame.camera, frame.viewport, {
         pixelsPerUnit: this.pixelsPerUnit,
         depth: creature.kind === "giant-shark" ? -3.1 : -2.7,

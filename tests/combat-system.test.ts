@@ -45,8 +45,9 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(32);
+    expect(fighter.weaponInventory).toHaveLength(33);
     expect(fighter.weaponInventory).toContain("grabber");
+    expect(fighter.weaponInventory).toContain("trident");
     expect(fighter.weaponInventory).toContain("mars");
   });
 
@@ -3021,7 +3022,7 @@ describe("combat system", () => {
     combat.update(0.8, [player]);
     const victim = combat.getCombatant("jupiter-footstep-victim")!;
     expect(victim.hp).toBeLessThan(100);
-    expect(victim.velocityY).toBeLessThan(-650);
+    expect(victim.velocityY).toBeLessThan(-1400);
     expect(combat.getCombatant("jupiter-user")!.hp).toBeLessThan(100);
     expect(combat.consumeSounds()).toContain("jupiter-burst");
   });
@@ -3370,9 +3371,22 @@ describe("combat system", () => {
         leftHand: { x: number; y: number; radius: number; warningAlpha: number };
         flood: { active: boolean; level: number; alpha: number; suck: number };
         tilt: { active: boolean; amount: number; direction: -1 | 1; warningAlpha: number };
-        laser: { active: boolean; warningAlpha: number; firing: boolean; fromX: number; fromY: number; toX: number; toY: number; width: number };
+        laser: {
+          active: boolean;
+          warningAlpha: number;
+          firing: boolean;
+          fromX: number;
+          fromY: number;
+          leftFromX: number;
+          leftFromY: number;
+          rightFromX: number;
+          rightFromY: number;
+          toX: number;
+          toY: number;
+          width: number;
+        };
       }>;
-      neptuneCreatures: Array<{ id: string; kind: "urchin" | "octopus" | "giant-shark" | "clown-fish"; hp: number; maxHp: number; x: number; y: number }>;
+      neptuneCreatures: Array<{ id: string; kind: "urchin" | "octopus" | "giant-shark" | "clown-fish"; hp: number; maxHp: number; x: number; y: number; spawnProgress: number }>;
       neptunePellets: Array<{ id: string; radius: number; damage: number; source?: string }>;
     };
     let snapshot = combat.getSnapshot() as unknown as NeptuneSnapshot;
@@ -3414,7 +3428,11 @@ describe("combat system", () => {
     expect(snapshot.neptuneEvents[0].attackHistory).toEqual(expect.arrayContaining(["flood", "slam", "laser", "summon", "rain"]));
     expect(snapshot.neptuneEvents[0].tilt.direction).toBeDefined();
     expect(snapshot.neptuneEvents[0].laser.width).toBeGreaterThanOrEqual(22);
+    expect(snapshot.neptuneEvents[0].laser.leftFromX).toBeLessThan(snapshot.neptuneEvents[0].body.x);
+    expect(snapshot.neptuneEvents[0].laser.rightFromX).toBeGreaterThan(snapshot.neptuneEvents[0].body.x);
+    expect(snapshot.neptuneEvents[0].laser.fromX).toBeCloseTo((snapshot.neptuneEvents[0].laser.leftFromX + snapshot.neptuneEvents[0].laser.rightFromX) / 2, 1);
     expect(snapshot.neptuneCreatures.map((creature) => creature.kind)).toEqual(expect.arrayContaining(["urchin", "octopus", "giant-shark", "clown-fish"]));
+    expect(snapshot.neptuneCreatures.every((creature) => creature.spawnProgress >= 0 && creature.spawnProgress <= 1)).toBe(true);
     expect(snapshot.neptunePellets.some((pellet) => pellet.radius >= 8 && pellet.damage > 0)).toBe(true);
     expect(snapshot.neptunePellets.some((pellet) => pellet.source === "rain" && pellet.radius >= 18 && pellet.damage >= 14)).toBe(true);
 
@@ -3447,6 +3465,40 @@ describe("combat system", () => {
     expect(new Set(histories.map((history) => history.slice(1).join(","))).size).toBeGreaterThan(1);
   });
 
+  it("summons Neptune sea creatures from seeded random playable positions with pop-up progress", () => {
+    const spawnPositionsFor = (now: number) => {
+      const combat = new CombatSystem({ mode: "network" });
+      combat.start(createDefaultInventory());
+      combat.equip("neptune" as never);
+      const owner = { ...playerState, id: `neptune-summon-${now}`, x: 0, velocityX: 0, velocityY: 0 };
+      combat.syncLocalPlayer(owner, "Neptune", "#5ad7ff");
+      combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now, heldMs: 0, isNewPress: true });
+      combat.update(4.05, [owner]);
+      let creatures: Array<{ kind: string; x: number; y: number; spawnProgress: number }> = [];
+      for (let tick = 0; tick < 180 && creatures.length < 4; tick += 1) {
+        combat.update(0.1, [owner]);
+        creatures = (combat.getSnapshot() as unknown as { neptuneCreatures: typeof creatures }).neptuneCreatures;
+      }
+      return creatures
+        .map((creature) => ({
+          kind: creature.kind,
+          x: Math.round(creature.x),
+          y: Math.round(creature.y),
+          spawnProgress: creature.spawnProgress,
+        }))
+        .sort((left, right) => left.kind.localeCompare(right.kind));
+    };
+
+    const first = spawnPositionsFor(501);
+    const second = spawnPositionsFor(902);
+
+    expect(first.map((creature) => creature.kind)).toEqual(["clown-fish", "giant-shark", "octopus", "urchin"]);
+    expect(first.map((creature) => creature.x)).not.toEqual(second.map((creature) => creature.x));
+    expect(new Set(first.map((creature) => Math.round(creature.x / 120))).size).toBeGreaterThanOrEqual(3);
+    expect(first.every((creature) => creature.x > DEFAULT_PHYSICS.platformLeft && creature.x < DEFAULT_PHYSICS.platformRight)).toBe(true);
+    expect(first.every((creature) => creature.spawnProgress >= 0 && creature.spawnProgress <= 1)).toBe(true);
+  });
+
   it("starts Neptune laser behind its target and chases forward before it becomes lethal", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
@@ -3456,7 +3508,24 @@ describe("combat system", () => {
     combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 444, heldMs: 0, isNewPress: true });
     combat.update(4.05, [owner]);
 
-    type LaserSnapshot = { neptuneEvents: Array<{ currentAttack: string; laser: { toX: number; toY: number; warningAlpha: number; firing: boolean } }> };
+    type LaserSnapshot = {
+      neptuneEvents: Array<{
+        currentAttack: string;
+        body: { x: number; y: number; radius: number };
+        laser: {
+          fromX: number;
+          fromY: number;
+          leftFromX: number;
+          leftFromY: number;
+          rightFromX: number;
+          rightFromY: number;
+          toX: number;
+          toY: number;
+          warningAlpha: number;
+          firing: boolean;
+        };
+      }>;
+    };
     let snapshot = combat.getSnapshot() as unknown as LaserSnapshot;
     for (let tick = 0; tick < 90 && snapshot.neptuneEvents[0]?.currentAttack !== "laser"; tick += 1) {
       combat.update(0.1, [owner]);
@@ -3469,12 +3538,53 @@ describe("combat system", () => {
     expect(snapshot.neptuneEvents[0].laser.warningAlpha).toBeGreaterThan(0);
     expect(snapshot.neptuneEvents[0].laser.firing).toBe(false);
     expect(firstX).toBeLessThan(targetCenterX - 80);
+    expect(snapshot.neptuneEvents[0].laser.leftFromX).toBeLessThan(snapshot.neptuneEvents[0].body.x);
+    expect(snapshot.neptuneEvents[0].laser.rightFromX).toBeGreaterThan(snapshot.neptuneEvents[0].body.x);
+    expect(snapshot.neptuneEvents[0].laser.leftFromY).toBeLessThan(snapshot.neptuneEvents[0].body.y);
+    expect(snapshot.neptuneEvents[0].laser.rightFromY).toBeLessThan(snapshot.neptuneEvents[0].body.y);
+    expect(snapshot.neptuneEvents[0].laser.fromX).toBeCloseTo((snapshot.neptuneEvents[0].laser.leftFromX + snapshot.neptuneEvents[0].laser.rightFromX) / 2, 1);
 
     combat.update(0.55, [owner]);
     snapshot = combat.getSnapshot() as unknown as LaserSnapshot;
     expect(snapshot.neptuneEvents[0].laser.toX).toBeGreaterThan(firstX);
     expect(Math.abs(snapshot.neptuneEvents[0].laser.toX - targetCenterX)).toBeLessThan(Math.abs(firstX - targetCenterX));
     expect(combat.getCombatant(owner.id)?.respawnTimer ?? 0).toBe(0);
+  });
+
+  it("holds Neptune hand-slam tilt dramatically and keeps applying slope force", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("neptune" as never);
+    const owner = { ...playerState, id: "slam-owner", x: -40, velocityX: 0, velocityY: 0 };
+    const victim = { ...playerState, id: "slam-victim", x: 180, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Slam", "#5ad7ff");
+    combat.syncRemotePlayer({
+      id: victim.id,
+      name: "Victim",
+      color: "#ff6f91",
+      x: victim.x,
+      y: victim.y,
+      width: victim.width,
+      height: victim.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 660, heldMs: 0, isNewPress: true });
+    combat.update(4.05, [owner, victim]);
+    let snapshot = combat.getSnapshot() as unknown as { neptuneEvents: Array<{ currentAttack: string; attackTimer: number; tilt: { active: boolean; amount: number; direction: -1 | 1 } }> };
+    for (let tick = 0; tick < 120 && snapshot.neptuneEvents[0]?.currentAttack !== "slam"; tick += 1) {
+      combat.update(0.1, [owner, victim]);
+      snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    }
+
+    expect(snapshot.neptuneEvents[0].currentAttack).toBe("slam");
+    combat.update(2.45, [owner, victim]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.neptuneEvents[0].currentAttack).toBe("slam");
+    expect(snapshot.neptuneEvents[0].tilt.active).toBe(true);
+    expect(Math.abs(snapshot.neptuneEvents[0].tilt.amount)).toBeGreaterThan(1.45);
+    expect(Math.sign(combat.getCombatant(victim.id)!.velocityX)).toBe(snapshot.neptuneEvents[0].tilt.direction);
+    expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(250);
   });
 
   it("lets an empty Grabber strap autonomously punch nearby valid targets without a new input", () => {
@@ -3496,24 +3606,159 @@ describe("combat system", () => {
     });
     combat.setPlayerLoadout(owner.id, { frontStrap: "grabber" as never });
 
-    combat.update(0.2, [owner, target]);
+    combat.update(0.05, [owner, target]);
 
-    const hitTarget = combat.getCombatant(target.id)!;
+    const windupTarget = combat.getCombatant(target.id)!;
     const runtime = combat.getWeaponRuntimeState("grabber" as never, owner.id) as unknown as {
       grabberEquipped: boolean;
       grabberHolding?: string;
       grabberCooldown: number;
       grabberReachActive: boolean;
+      grabberPunchPhase?: string;
+      grabberPunchProgress?: number;
+      grabberPunchTargetX?: number;
+      grabberPunchTargetY?: number;
     };
-    expect(hitTarget.hp).toBeLessThan(100);
-    expect(hitTarget.velocityX).toBeGreaterThan(400);
+    expect(windupTarget.hp).toBe(100);
     expect(runtime).toMatchObject({
       grabberEquipped: true,
       grabberHolding: undefined,
       grabberReachActive: true,
+      grabberPunchPhase: "windup",
     });
-    expect(runtime.grabberCooldown).toBeGreaterThan(0.5);
+    expect(runtime.grabberPunchProgress).toBeGreaterThan(0);
+    expect(runtime.grabberPunchTargetX).toBeGreaterThan(owner.x);
+
+    combat.update(0.18, [owner, target]);
+
+    const hitTarget = combat.getCombatant(target.id)!;
+    const hitRuntime = combat.getWeaponRuntimeState("grabber" as never, owner.id) as unknown as typeof runtime;
+    expect(hitTarget.hp).toBeLessThan(100);
+    expect(hitTarget.velocityX).toBeGreaterThan(400);
+    expect(hitRuntime.grabberCooldown).toBeGreaterThan(0.5);
+    expect(["hit", "retract", "cooldown"]).toContain(hitRuntime.grabberPunchPhase);
     expect(combat.getSnapshot().effects.some((effect) => effect.label === "GRABBER PUNCH")).toBe(true);
+  });
+
+  it("uses Trident as a mouse-aimed melee weapon that transforms targets for forty seconds", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("trident" as never);
+    const owner = { ...playerState, id: "trident-user", x: 0, velocityX: 0, velocityY: 0 };
+    const target = { ...playerState, id: "trident-target", x: 88, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Trident", "#5ad7ff");
+    combat.syncRemotePlayer({
+      id: target.id,
+      name: "Target",
+      color: "#ff6f91",
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    const result = combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 120, heldMs: 0, isNewPress: true });
+    expect(result).toMatchObject({ kind: "hitbox", weaponId: "trident" });
+    combat.update(0.08, [owner, target]);
+
+    const hitTarget = combat.getCombatant(target.id)!;
+    const formStatus = hitTarget.statuses.find((status) => ["pufferForm", "octopusForm", "goldfishForm"].includes(status.id));
+    expect(hitTarget.hp).toBeLessThan(100);
+    expect(formStatus?.duration).toBeCloseTo(40, 0);
+    expect((combat as unknown as { getTridentTransformationState(id: string): { form: string; timer: number } | undefined }).getTridentTransformationState(target.id)?.form).toBeDefined();
+
+    combat.update(40.2, [owner, target]);
+    expect((combat as unknown as { getTridentTransformationState(id: string): unknown | undefined }).getTridentTransformationState(target.id)).toBeUndefined();
+    expect(combat.getCombatant(target.id)?.statuses.some((status) => ["pufferForm", "octopusForm", "goldfishForm"].includes(status.id))).toBe(false);
+  });
+
+  it("throws Trident as one physical item that must be picked back up manually", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("trident" as never);
+    const owner = { ...playerState, id: "trident-thrower", x: -120, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Thrower", "#5ad7ff");
+
+    const thrown = combat.useSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: -0.08 }, now: 240, heldMs: 0, isNewPress: true });
+    expect(thrown).toMatchObject({ kind: "fired", weaponId: "trident", label: "Throw" });
+    expect(combat.getPlayerInventory().weaponInventory).not.toContain("trident");
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === ("trident" as never))).toHaveLength(1);
+    expect(combat.getSnapshot().droppedWeapons.filter((weapon) => weapon.weaponId === ("trident" as never))).toHaveLength(0);
+
+    for (let tick = 0; tick < 24; tick += 1) {
+      combat.update(0.1, [owner]);
+    }
+
+    const dropped = combat.getSnapshot().droppedWeapons.find((weapon) => weapon.weaponId === ("trident" as never));
+    expect(dropped).toMatchObject({ weaponId: "trident", pickupable: true });
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === ("trident" as never))).toHaveLength(0);
+
+    owner.x = dropped!.x - owner.width / 2;
+    owner.y = dropped!.y - owner.height / 2;
+    expect(combat.pickUpNearest(owner, 90)).toBe("trident");
+    expect(combat.getPlayerInventory().weaponInventory).toContain("trident");
+    expect(combat.getPlayerInventory().equippedWeapon).toBe("trident");
+  });
+
+  it("runs Trident flood super separately from normal attacks and supports transformed creature abilities", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    combat.equip("trident" as never);
+    const owner = { ...playerState, id: "trident-flood-user", x: 0, velocityX: 0, velocityY: 0 };
+    const victim = { ...playerState, id: "trident-flood-victim", x: 90, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Flood", "#5ad7ff");
+    combat.syncRemotePlayer({
+      id: victim.id,
+      name: "Victim",
+      color: "#ff6f91",
+      x: victim.x,
+      y: victim.y,
+      width: victim.width,
+      height: victim.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    const tridentApi = combat as unknown as {
+      useTridentFlood(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+      transformWithTrident(targetId: string, sourceId: string, form: "puffer" | "goldfish" | "octopus"): boolean;
+      getTridentTransformationState(id: string): { form: "puffer" | "goldfish" | "octopus"; timer: number; heldTargetIds?: string[] } | undefined;
+    };
+
+    const flood = tridentApi.useTridentFlood({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 300, heldMs: 0, isNewPress: true });
+    expect(flood).toMatchObject({ kind: "utility", weaponId: "trident", label: "Trident Flood" });
+    let snapshot = combat.getSnapshot() as unknown as { tridentFloods: Array<{ ownerId: string; timer: number; duration: number; level: number; alpha: number; shark: { x: number; y: number; hp: number } }> };
+    expect(snapshot.tridentFloods).toHaveLength(1);
+    expect(snapshot.tridentFloods[0]).toMatchObject({ ownerId: owner.id, duration: 60, timer: expect.closeTo(60, 1) });
+    combat.update(1.2, [owner, victim]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.tridentFloods[0].level).toBeLessThan(DEFAULT_PHYSICS.groundY - 500);
+    expect(snapshot.tridentFloods[0].shark.hp).toBeGreaterThan(0);
+    expect(Math.abs(combat.getCombatant(victim.id)!.velocityY)).toBeGreaterThan(0);
+    expect(tridentApi.useTridentFlood({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 302, heldMs: 0, isNewPress: true }).kind).toBe("blocked");
+
+    expect(tridentApi.transformWithTrident(owner.id, victim.id, "puffer")).toBe(true);
+    const puffer = combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 310, heldMs: 0, isNewPress: true });
+    expect(puffer.label).toBe("Puffer Inflate");
+    expect(combat.getCombatant(victim.id)!.statuses.some((status) => status.id === "poison" || status.id === "spikePoison")).toBe(true);
+
+    combat.getPlayerInventory().cooldowns.trident = 0;
+    expect(tridentApi.transformWithTrident(owner.id, victim.id, "goldfish")).toBe(true);
+    const spray = combat.useSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: -0.2 }, now: 320, heldMs: 0, isNewPress: true });
+    expect(spray.label).toBe("Goldfish Droplets");
+    expect(combat.getSnapshot().projectiles.filter((projectile) => projectile.weaponId === ("trident" as never) && projectile.label.includes("Droplet")).length).toBeGreaterThanOrEqual(5);
+
+    combat.getPlayerInventory().cooldowns.trident = 0;
+    expect(tridentApi.transformWithTrident(owner.id, victim.id, "octopus")).toBe(true);
+    const grab = combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 330, heldMs: 0, isNewPress: true });
+    expect(grab.label).toBe("Octopus Grab");
+    expect(tridentApi.getTridentTransformationState(owner.id)?.heldTargetIds).toContain(victim.id);
+    combat.getPlayerInventory().cooldowns.trident = 0;
+    const throwAll = combat.useSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: -0.5 }, now: 331, heldMs: 0, isNewPress: true });
+    expect(throwAll.label).toBe("Octopus Throw");
+    expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(700);
+    expect(tridentApi.getTridentTransformationState(owner.id)?.heldTargetIds).toHaveLength(0);
   });
 
   it("lets Neptune, Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {

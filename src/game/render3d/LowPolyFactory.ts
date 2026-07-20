@@ -420,11 +420,9 @@ export function createNeptuneOctopus(name: string, options: LowPolyMeshOptions =
 }
 
 export function createNeptuneGiantShark(name: string, options: LowPolyMeshOptions = {}): THREE.Group {
-  const group = createLowPolySharkPlaceholder(name, { color: options.color ?? 0x89aeb8, scale: options.scale ?? 1 });
-  group.scale.set(1.62, 1.28, 1.18);
-  const glow = new THREE.Mesh(new THREE.IcosahedronGeometry(1.45 * (options.scale ?? 1), 0), new THREE.MeshBasicMaterial({ color: 0x5ad7ff, transparent: true, opacity: 0.14, depthWrite: false }));
-  glow.name = "water-glow";
-  group.add(glow);
+  const group = createLowPolySharkPlaceholder(name, { color: options.color ?? 0x7f959c, scale: options.scale ?? 1 });
+  group.scale.set(1.72, 1.32, 1.18);
+  group.userData.neptuneCreature = "giant-shark";
   return group;
 }
 

@@ -84,6 +84,11 @@ export type SoundId =
   | "wing-burst"
   | "wing-gust"
   | "grabber-punch"
+  | "trident-swing"
+  | "trident-throw"
+  | "trident-flood"
+  | "trident-transform"
+  | "trident-splash"
   | "virgin-blood-activate"
   | "virgin-blood-revive"
   | "death-aura"
@@ -240,6 +245,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "wing-burst": { category: "movement", frequency: 420, endFrequency: 100, duration: 0.18, noise: true, minInterval: 0.32 },
   "wing-gust": { category: "combat", frequency: 360, endFrequency: 120, duration: 0.12, noise: true, minInterval: 0.12 },
   "grabber-punch": { category: "combat", frequency: 520, endFrequency: 90, duration: 0.16, noise: true, minInterval: 0.18 },
+  "trident-swing": { category: "weapon", frequency: 340, endFrequency: 120, duration: 0.13, noise: true, minInterval: 0.12 },
+  "trident-throw": { category: "weapon", frequency: 520, endFrequency: 150, duration: 0.16, noise: true, minInterval: 0.14 },
+  "trident-flood": { category: "heavy", frequency: 90, endFrequency: 520, duration: 0.62, noise: true, minInterval: 0.7 },
+  "trident-transform": { category: "combat", frequency: 680, endFrequency: 180, duration: 0.24, noise: true, minInterval: 0.18 },
+  "trident-splash": { category: "combat", frequency: 420, endFrequency: 130, duration: 0.12, noise: true, minInterval: 0.08 },
   "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
   "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
   "death-aura": { category: "combat", frequency: 96, endFrequency: 52, duration: 0.28, noise: true, minInterval: 0.32 },

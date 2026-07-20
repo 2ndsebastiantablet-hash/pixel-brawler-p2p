@@ -194,6 +194,13 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("neptune" as never, "rightHand")).toBe(false);
     expect(isSlotCompatible("neptune" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("neptune" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("trident" as never, "frontStrap")).toBe(false);
+    expect(isSlotCompatible("trident" as never, "backStrap")).toBe(false);
+    expect(isSlotCompatible("trident" as never, "leftHand")).toBe(true);
+    expect(isSlotCompatible("trident" as never, "rightHand")).toBe(true);
+    expect(isSlotCompatible("trident" as never, "attachment")).toBe(true);
+    expect(isSlotCompatible("trident" as never, "grabber" as never)).toBe(true);
+    expect(isSlotCompatible("trident" as never, "legs")).toBe(false);
     expect(isSlotCompatible("grabber" as never, "frontStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "backStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "leftHand")).toBe(false);
@@ -276,6 +283,17 @@ describe("loadout equipment slots", () => {
       category: "space",
       handedness: "strap",
       compatibleSlots: ["frontStrap", "backStrap"],
+    });
+    const withTrident = assignLoadoutItem(DEFAULT_LOADOUT, "rightHand", "trident" as never);
+    expect(withTrident.rightHand).toBe("trident");
+    const withTridentAttachment = assignLoadoutItem(withTrident, "attachment", "trident" as never);
+    expect(withTridentAttachment.attachment).toBe("trident");
+    expect(assignLoadoutItem(withTridentAttachment, "frontStrap", "trident" as never).frontStrap).toBeUndefined();
+    expect(assignLoadoutItem(withTridentAttachment, "legs", "trident" as never).legs).toBeUndefined();
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("trident" as never))).toMatchObject({
+      category: "throwables",
+      handedness: "one-handed",
+      compatibleSlots: ["leftHand", "rightHand", "attachment", "grabber"],
     });
     const withGrabber = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "grabber" as never);
     expect(withGrabber.frontStrap).toBe("grabber");
