@@ -48,6 +48,14 @@ describe("loadout equipment slots", () => {
       frontStrap: "spikes",
     });
     expect(normalizeLoadout({
+      frontStrap: "super-bomb" as never,
+      rightHand: "super-bomb" as never,
+      attachment: "super-bomb" as never,
+      legs: "super-bomb" as never,
+    })).toEqual({
+      frontStrap: "super-bomb",
+    });
+    expect(normalizeLoadout({
       backStrap: "van",
       rightHand: "van",
       attachment: "van",
@@ -201,6 +209,13 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("trident" as never, "attachment")).toBe(true);
     expect(isSlotCompatible("trident" as never, "grabber" as never)).toBe(true);
     expect(isSlotCompatible("trident" as never, "legs")).toBe(false);
+    expect(isSlotCompatible("super-bomb" as never, "frontStrap")).toBe(true);
+    expect(isSlotCompatible("super-bomb" as never, "backStrap")).toBe(true);
+    expect(isSlotCompatible("super-bomb" as never, "leftHand")).toBe(false);
+    expect(isSlotCompatible("super-bomb" as never, "rightHand")).toBe(false);
+    expect(isSlotCompatible("super-bomb" as never, "attachment")).toBe(false);
+    expect(isSlotCompatible("super-bomb" as never, "grabber" as never)).toBe(false);
+    expect(isSlotCompatible("super-bomb" as never, "legs")).toBe(false);
     expect(isSlotCompatible("grabber" as never, "frontStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "backStrap")).toBe(true);
     expect(isSlotCompatible("grabber" as never, "leftHand")).toBe(false);
@@ -294,6 +309,17 @@ describe("loadout equipment slots", () => {
       category: "throwables",
       handedness: "one-handed",
       compatibleSlots: ["leftHand", "rightHand", "attachment", "grabber"],
+    });
+    const withSuperBomb = assignLoadoutItem(DEFAULT_LOADOUT, "backStrap", "super-bomb" as never);
+    expect(withSuperBomb.backStrap).toBe("super-bomb");
+    expect(loadoutHasWeapon(withSuperBomb, "super-bomb" as never)).toBe(true);
+    expect(assignLoadoutItem(withSuperBomb, "rightHand", "super-bomb" as never).rightHand).toBeUndefined();
+    expect(assignLoadoutItem(withSuperBomb, "attachment", "super-bomb" as never).attachment).toBeUndefined();
+    expect(assignLoadoutItem(withSuperBomb, "legs", "super-bomb" as never).legs).toBeUndefined();
+    expect(LOADOUT_ITEMS.find((item) => item.id === ("super-bomb" as never))).toMatchObject({
+      category: "body",
+      handedness: "strap",
+      compatibleSlots: ["frontStrap", "backStrap"],
     });
     const withGrabber = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "grabber" as never);
     expect(withGrabber.frontStrap).toBe("grabber");

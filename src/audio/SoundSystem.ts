@@ -89,6 +89,10 @@ export type SoundId =
   | "trident-flood"
   | "trident-transform"
   | "trident-splash"
+  | "super-bomb-pop"
+  | "super-bomb-limb"
+  | "super-bomb-super"
+  | "super-bomb-reform"
   | "virgin-blood-activate"
   | "virgin-blood-revive"
   | "death-aura"
@@ -250,6 +254,10 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "trident-flood": { category: "heavy", frequency: 90, endFrequency: 520, duration: 0.62, noise: true, minInterval: 0.7 },
   "trident-transform": { category: "combat", frequency: 680, endFrequency: 180, duration: 0.24, noise: true, minInterval: 0.18 },
   "trident-splash": { category: "combat", frequency: 420, endFrequency: 130, duration: 0.12, noise: true, minInterval: 0.08 },
+  "super-bomb-pop": { category: "heavy", frequency: 84, endFrequency: 28, duration: 0.42, noise: true, minInterval: 0.22 },
+  "super-bomb-limb": { category: "weapon", frequency: 260, endFrequency: 90, duration: 0.18, noise: true, minInterval: 0.18 },
+  "super-bomb-super": { category: "heavy", frequency: 54, endFrequency: 960, duration: 0.84, noise: true, minInterval: 0.9 },
+  "super-bomb-reform": { category: "combat", frequency: 220, endFrequency: 680, duration: 0.24, type: "triangle", minInterval: 0.18 },
   "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
   "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
   "death-aura": { category: "combat", frequency: 96, endFrequency: 52, duration: 0.28, noise: true, minInterval: 0.32 },

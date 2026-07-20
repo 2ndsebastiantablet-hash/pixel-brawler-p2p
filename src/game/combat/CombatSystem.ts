@@ -471,6 +471,44 @@ export interface TridentFloodState {
   visualOnly?: boolean;
 }
 
+export type SuperBombLimb = "rightArm" | "leftLeg" | "rightLeg";
+
+export interface SuperBombLimbLossState {
+  ownerId: string;
+  limb: SuperBombLimb;
+  timer: number;
+  duration: number;
+  progress: number;
+}
+
+export interface SuperBombSplatterState {
+  id: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  lifetime: number;
+  returnAt: number;
+  radius: number;
+  returning: boolean;
+  targetX: number;
+  targetY: number;
+  poisonCooldowns: Record<string, number>;
+  visualOnly?: boolean;
+}
+
+export interface SuperBombReformationState {
+  ownerId: string;
+  x: number;
+  y: number;
+  timer: number;
+  duration: number;
+  progress: number;
+  visualOnly?: boolean;
+}
+
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
 
 export interface VanState {
@@ -604,7 +642,11 @@ export interface CombatSnapshot {
   neptuneEvents: NeptuneEventState[];
   neptuneCreatures: NeptuneCreatureState[];
   neptunePellets: NeptunePelletState[];
+  tridentTransformations: TridentTransformationState[];
   tridentFloods: TridentFloodState[];
+  superBombLimbLosses: SuperBombLimbLossState[];
+  superBombSplatters: SuperBombSplatterState[];
+  superBombReformations: SuperBombReformationState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -875,6 +917,17 @@ const tridentSharkHeight = 96;
 const tridentSharkHp = 120;
 const tridentSharkBiteDamage = 86;
 const tridentSharkBiteCooldown = 0.72;
+const superBombPrimaryRadius = 165;
+const superBombPrimaryCooldown = 0.38;
+const superBombLimbBombRadius = 270;
+const superBombLimbBombCooldown = 1.15;
+const superBombLimbBombFuse = 6;
+const superBombLimbRegrowDuration = 12;
+const superBombSuperCooldownDuration = 90;
+const superBombReformDuration = 10;
+const superBombSplatterCount = 26;
+const superBombWeaknessPerStack = 0.1;
+const superBombWeaknessCap = 6;
 
 interface PendingTeleport {
   ownerId: string;
@@ -1076,6 +1129,17 @@ export interface WeaponRuntimeState {
   tridentTransformationForm?: TridentTransformationForm;
   tridentTransformationTimer: number;
   tridentHeldCount: number;
+  superBombEquipped: boolean;
+  superBombUsable: boolean;
+  superBombDisabledReason?: string;
+  superBombPrimaryCooldown: number;
+  superBombLimbBombCooldown: number;
+  superBombSuperCooldown: number;
+  superBombWeaknessStacks: number;
+  superBombWeaknessScale: number;
+  superBombReforming: boolean;
+  superBombReformTimer: number;
+  superBombMissingLimbs: SuperBombLimbLossState[];
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -1134,6 +1198,13 @@ export class CombatSystem {
   private readonly tridentTransformations = new Map<string, TridentTransformationState>();
   private readonly tridentFloods: TridentFloodState[] = [];
   private readonly tridentFloodCooldowns = new Map<string, number>();
+  private readonly superBombPrimaryCooldowns = new Map<string, number>();
+  private readonly superBombLimbCooldowns = new Map<string, number>();
+  private readonly superBombSuperCooldowns = new Map<string, number>();
+  private readonly superBombWeaknessStacks = new Map<string, number>();
+  private readonly superBombLimbLosses = new Map<string, SuperBombLimbLossState[]>();
+  private readonly superBombSplatters: SuperBombSplatterState[] = [];
+  private readonly superBombReformations = new Map<string, SuperBombReformationState>();
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -1195,6 +1266,13 @@ export class CombatSystem {
     this.tridentTransformations.clear();
     this.tridentFloods.length = 0;
     this.tridentFloodCooldowns.clear();
+    this.superBombPrimaryCooldowns.clear();
+    this.superBombLimbCooldowns.clear();
+    this.superBombSuperCooldowns.clear();
+    this.superBombWeaknessStacks.clear();
+    this.superBombLimbLosses.clear();
+    this.superBombSplatters.length = 0;
+    this.superBombReformations.clear();
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1340,6 +1418,11 @@ export class CombatSystem {
     }
     removeWhere(this.tridentFloods, (flood) => flood.ownerId === id);
     this.tridentFloodCooldowns.delete(id);
+    this.clearSuperBombPlayerState(id, true);
+    this.superBombPrimaryCooldowns.delete(id);
+    this.superBombLimbCooldowns.delete(id);
+    this.superBombSuperCooldowns.delete(id);
+    this.superBombWeaknessStacks.delete(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1403,6 +1486,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "grabber") {
       return { kind: "blocked", weaponId: "grabber", label: "Grabber passive" };
+    }
+    if (this.inventory.equippedWeapon === "super-bomb") {
+      return { kind: "blocked", weaponId: "super-bomb", label: "Empty hand mouse" };
     }
     if (this.inventory.equippedWeapon === "moon") {
       return this.activateMoonEvent(context);
@@ -1478,6 +1564,9 @@ export class CombatSystem {
     }
     if (weapon.id === "grabber") {
       return { kind: "blocked", weaponId: weapon.id, label: "Grabber passive" };
+    }
+    if (weapon.id === "super-bomb") {
+      return { kind: "blocked", weaponId: weapon.id, label: "Empty hand mouse" };
     }
     if (weapon.id === "moon") {
       return { kind: "blocked", weaponId: weapon.id, label: "Moon uses Q/E" };
@@ -1710,6 +1799,192 @@ export class CombatSystem {
     return state ? { ...state, heldTargetIds: [...state.heldTargetIds] } : undefined;
   }
 
+  getSuperBombRuntime(ownerId: string): {
+    equipped: boolean;
+    usable: boolean;
+    disabledReason?: string;
+    primaryCooldown: number;
+    limbBombCooldown: number;
+    superCooldown: number;
+    weaknessStacks: number;
+    weaknessScale: number;
+    reforming: boolean;
+    reformTimer: number;
+    missingLimbs: SuperBombLimbLossState[];
+  } {
+    const equipped = this.hasSuperBombStrap(ownerId);
+    const disabledReason = this.superBombDisabledReason(ownerId);
+    const weaknessStacks = this.superBombWeaknessStacks.get(ownerId) ?? 0;
+    const reformation = this.superBombReformations.get(ownerId);
+    return {
+      equipped,
+      usable: equipped && !disabledReason,
+      disabledReason,
+      primaryCooldown: this.superBombPrimaryCooldowns.get(ownerId) ?? 0,
+      limbBombCooldown: this.superBombLimbCooldowns.get(ownerId) ?? 0,
+      superCooldown: this.superBombSuperCooldowns.get(ownerId) ?? 0,
+      weaknessStacks,
+      weaknessScale: superBombWeaknessScale(weaknessStacks),
+      reforming: Boolean(reformation),
+      reformTimer: reformation?.timer ?? 0,
+      missingLimbs: this.getSuperBombMissingLimbs(ownerId),
+    };
+  }
+
+  useSuperBombPrimary(context: WeaponUseContext, target: Vec2): WeaponUseResult {
+    const weaponId: WeaponId = "super-bomb";
+    const blocked = this.validateSuperBombUse(context.ownerId);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    const cooldown = this.superBombPrimaryCooldowns.get(context.ownerId) ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Bomb cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No body" };
+    }
+    this.superBombPrimaryCooldowns.set(context.ownerId, superBombPrimaryCooldown);
+    this.applyExplosionDamage({
+      sourceId: context.ownerId,
+      weaponId,
+      x: target.x,
+      y: target.y,
+      radius: superBombPrimaryRadius,
+      centerDamage: 48,
+      edgeDamage: 15,
+      centerKnockback: 1180,
+      edgeKnockback: 420,
+      centerStun: 0.52,
+      edgeStun: 0.18,
+      label: "SUPER BOMB",
+      visualLabel: "SUPER BOMB",
+      includeSource: false,
+    });
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const recoil = normalize({ x: center.x - target.x || -context.aim.x || -1, y: center.y - target.y || 0.35 });
+    context.player.velocityX += recoil.x * 360;
+    context.player.velocityY += recoil.y * 220 - 150;
+    owner.velocityX = context.player.velocityX;
+    owner.velocityY = context.player.velocityY;
+    this.spawnSuperBombFireworks(target.x, target.y, superBombPrimaryRadius, "SUPER BOMB", 16);
+    this.queueSound("super-bomb-pop");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", target, normalize(context.aim), "SUPER BOMB", context.now, {
+      range: superBombPrimaryRadius,
+    }));
+    return { kind: "utility", weaponId, label: "SUPER BOMB" };
+  }
+
+  useSuperBombSecondary(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "super-bomb";
+    const blocked = this.validateSuperBombUse(context.ownerId);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    const cooldown = this.superBombLimbCooldowns.get(context.ownerId) ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Limb cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No body" };
+    }
+    const limb = this.chooseAvailableSuperBombLimb(context.ownerId, context.now);
+    if (!limb) {
+      return { kind: "blocked", weaponId, label: "No limbs" };
+    }
+    const aim = normalize(context.aim.x || context.aim.y ? context.aim : { x: context.player.facing || 1, y: -0.12 });
+    const start = this.superBombLimbAnchor(owner, limb);
+    this.addSuperBombLimbLoss(context.ownerId, limb);
+    this.superBombLimbCooldowns.set(context.ownerId, superBombLimbBombCooldown);
+    this.projectiles.push({
+      id: this.makeId("super-bomb-limb"),
+      ownerId: context.ownerId,
+      weaponId,
+      x: start.x,
+      y: start.y,
+      vx: aim.x * 760,
+      vy: aim.y * 760 - 120,
+      radius: 18,
+      damage: 0,
+      knockback: { x: 0, y: 0 },
+      stun: 0,
+      age: 0,
+      lifetime: superBombLimbBombFuse,
+      gravity: 820,
+      bounces: 1,
+      pierce: 0,
+      label: "Limb Bomb",
+      color: colorForWeapon(weaponId),
+      trailColor: "#ff6f91",
+      originX: start.x,
+      originY: start.y,
+      ownerFacing: aim.x >= 0 ? 1 : -1,
+      hits: [],
+    });
+    context.player.velocityX -= aim.x * 160;
+    context.player.velocityY -= 80;
+    owner.velocityX = context.player.velocityX;
+    owner.velocityY = context.player.velocityY;
+    this.addEffect("tracer", start.x, start.y, start.x + aim.x * 82, start.y + aim.y * 82, colorForWeapon(weaponId), "LIMB THROW");
+    this.queueSound("super-bomb-limb");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "secondary", start, aim, "Limb Bomb", context.now, {
+      range: superBombLimbBombRadius,
+    }));
+    return { kind: "fired", weaponId, label: "Limb Bomb" };
+  }
+
+  useSuperBombSuper(context: WeaponUseContext): WeaponUseResult {
+    const weaponId: WeaponId = "super-bomb";
+    const blocked = this.validateSuperBombUse(context.ownerId);
+    if (blocked) {
+      return { kind: "blocked", weaponId, label: blocked };
+    }
+    const cooldown = this.superBombSuperCooldowns.get(context.ownerId) ?? 0;
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: "Super cooldown" };
+    }
+    const owner = this.combatants.get(context.ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return { kind: "blocked", weaponId, label: "No body" };
+    }
+    const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    this.superBombSuperCooldowns.set(context.ownerId, superBombSuperCooldownDuration);
+    const stacks = Math.min(superBombWeaknessCap, (this.superBombWeaknessStacks.get(context.ownerId) ?? 0) + 1);
+    this.superBombWeaknessStacks.set(context.ownerId, stacks);
+    this.superBombLimbLosses.delete(context.ownerId);
+    this.applyExplosionDamage({
+      sourceId: context.ownerId,
+      weaponId,
+      x: center.x,
+      y: center.y,
+      radius: holyBazookaExplosionRadius * 2,
+      centerDamage: 98,
+      edgeDamage: 38,
+      centerKnockback: holyBazookaExplosionCenterKnockback * 2,
+      edgeKnockback: holyBazookaExplosionEdgeKnockback + 420,
+      centerStun: 1.25,
+      edgeStun: 0.58,
+      label: "FULL BODY EXPLOSION",
+      visualLabel: "FULL BODY EXPLOSION",
+      includeSource: false,
+    });
+    this.startSuperBombReformation(context.ownerId, center, false);
+    this.spawnSuperBombSplatters(context.ownerId, center, false);
+    this.spawnSuperBombFireworks(center.x, center.y, holyBazookaExplosionRadius * 2, "FULL BODY EXPLOSION", 34);
+    owner.statuses = upsertStatusEffect(owner.statuses.filter((status) => status.id !== "superBombReforming"), createStatus("superBombReforming"));
+    owner.hitstun = Math.max(owner.hitstun, superBombReformDuration);
+    owner.invulnerable = Math.max(owner.invulnerable, superBombReformDuration);
+    context.player.velocityX = 0;
+    context.player.velocityY = 0;
+    this.queueSound("super-bomb-super");
+    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, normalize(context.aim), "FULL BODY EXPLOSION", context.now, {
+      range: holyBazookaExplosionRadius * 2,
+    }));
+    return { kind: "utility", weaponId, label: "FULL BODY EXPLOSION" };
+  }
+
   transformWithTrident(targetId: string, sourceId: string, form?: TridentTransformationForm): boolean {
     const target = this.combatants.get(targetId);
     if (!target || target.respawnTimer > 0 || target.hp <= 0) {
@@ -1865,12 +2140,18 @@ export class CombatSystem {
       && request.sourceId !== target.id
       && request.sourceId !== "status"
       && Boolean(source?.statuses.some((status) => status.id === "holyBuff"));
+    const superBombWeakAttack = !request.skipSourceScaling
+      && request.sourceId !== target.id
+      && request.sourceId !== "status"
+      ? superBombWeaknessScale(this.superBombWeaknessStacks.get(request.sourceId) ?? 0)
+      : 1;
     const holyResist = target.statuses.some((status) => status.id === "holyBuff") && request.sourceId !== target.id;
     const damageScale = (steadyResist ? COMBAT_TUNING.sniper.steadyDamageResistance : 1)
       * (holyResist ? 0.72 : 1)
       * (empoweredAttack ? empoweredDamageScale : 1)
       * (holyAttack ? 1.2 : 1)
-      * (superLegsArmor ? superLegsArmorDamageScale : 1);
+      * (superLegsArmor ? superLegsArmorDamageScale : 1)
+      * superBombWeakAttack;
     const knockbackScale = request.label === "DOT" ? 1 : COMBAT_TUNING.enemyKnockbackMultiplier
       * (steadyResist ? 0.25 : 1)
       * locationModifier.knockbackScale
@@ -1997,6 +2278,7 @@ export class CombatSystem {
     this.updateSpikes(dt, players);
     this.updateVans(dt, players);
     this.updateTridentTransformations(dt, players);
+    this.updateSuperBombs(dt, players);
     this.updateCombatants(dt);
     this.updateMoonEvents(dt, players);
     this.updateJupiterEvents(dt, players);
@@ -2057,6 +2339,7 @@ export class CombatSystem {
   isMovementLocked(ownerId: string): boolean {
     return this.axeRushes.has(ownerId)
       || this.spikeImpales.has(ownerId)
+      || this.superBombReformations.has(ownerId)
       || Boolean(this.getVanDrivenBy(ownerId))
       || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"))
       || [...this.tridentTransformations.values()].some((state) => state.heldTargetIds.includes(ownerId));
@@ -2327,6 +2610,17 @@ export class CombatSystem {
       tridentTransformationForm: tridentTransformation?.form,
       tridentTransformationTimer: tridentTransformation?.timer ?? 0,
       tridentHeldCount: tridentTransformation?.heldTargetIds.length ?? 0,
+      superBombEquipped: this.getSuperBombRuntime(ownerId).equipped,
+      superBombUsable: this.getSuperBombRuntime(ownerId).usable,
+      superBombDisabledReason: this.getSuperBombRuntime(ownerId).disabledReason,
+      superBombPrimaryCooldown: this.getSuperBombRuntime(ownerId).primaryCooldown,
+      superBombLimbBombCooldown: this.getSuperBombRuntime(ownerId).limbBombCooldown,
+      superBombSuperCooldown: this.getSuperBombRuntime(ownerId).superCooldown,
+      superBombWeaknessStacks: this.getSuperBombRuntime(ownerId).weaknessStacks,
+      superBombWeaknessScale: this.getSuperBombRuntime(ownerId).weaknessScale,
+      superBombReforming: this.getSuperBombRuntime(ownerId).reforming,
+      superBombReformTimer: this.getSuperBombRuntime(ownerId).reformTimer,
+      superBombMissingLimbs: this.getSuperBombRuntime(ownerId).missingLimbs,
     };
   }
 
@@ -5207,6 +5501,10 @@ export class CombatSystem {
       this.startTridentFlood(event.ownerId, { x: event.x, y: event.y }, Math.floor(event.range ?? event.ts), true);
       return;
     }
+    if (event.weaponId === "super-bomb") {
+      this.spawnRemoteSuperBombVisual(event, aim);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -5280,6 +5578,57 @@ export class CombatSystem {
     if (event.label === "Neptune") {
       this.startNeptuneEvent(event.ownerId, { x: event.x, y: event.y }, true, Math.floor(event.range ?? 1));
     }
+  }
+
+  private spawnRemoteSuperBombVisual(event: CombatEventPacket, aim: Vec2): void {
+    const radius = event.range ?? (event.label === "FULL BODY EXPLOSION" ? holyBazookaExplosionRadius * 2 : event.label === "Limb Bomb" ? superBombLimbBombRadius : superBombPrimaryRadius);
+    if (event.label === "FULL BODY EXPLOSION") {
+      this.spawnSuperBombFireworks(event.x, event.y, radius, "FULL BODY EXPLOSION", 34);
+      this.startSuperBombReformation(event.ownerId, { x: event.x, y: event.y }, true);
+      this.spawnSuperBombSplatters(event.ownerId, { x: event.x, y: event.y }, true);
+      const owner = this.combatants.get(event.ownerId);
+      if (owner) {
+        owner.statuses = upsertStatusEffect(owner.statuses.filter((status) => status.id !== "superBombReforming"), createStatus("superBombReforming"));
+      }
+      return;
+    }
+    if (event.label === "Limb Bomb") {
+      const owner = this.combatants.get(event.ownerId);
+      if (owner) {
+        const limb = this.chooseAvailableSuperBombLimb(event.ownerId, event.ts);
+        if (limb) {
+          this.addSuperBombLimbLoss(event.ownerId, limb, true);
+        }
+      }
+      this.projectiles.push({
+        id: `remote-super-bomb-${event.id}`,
+        ownerId: event.ownerId,
+        weaponId: "super-bomb",
+        x: event.x,
+        y: event.y,
+        vx: aim.x * 760,
+        vy: aim.y * 760 - 120,
+        radius: 18,
+        damage: 0,
+        knockback: { x: 0, y: 0 },
+        stun: 0,
+        age: 0,
+        lifetime: superBombLimbBombFuse,
+        gravity: 820,
+        bounces: 0,
+        pierce: 0,
+        label: "Limb Bomb",
+        color: colorForWeapon("super-bomb"),
+        trailColor: "#ff6f91",
+        originX: event.x,
+        originY: event.y,
+        ownerFacing: aim.x >= 0 ? 1 : -1,
+        visualOnly: true,
+        hits: [],
+      });
+      return;
+    }
+    this.spawnSuperBombFireworks(event.x, event.y, radius, "SUPER BOMB", 16);
   }
 
   private createRemoteVisualProjectile(
@@ -5512,7 +5861,17 @@ export class CombatSystem {
       neptuneEvents: this.neptuneEvents,
       neptuneCreatures: [...this.neptuneCreatures.values()],
       neptunePellets: this.neptunePellets,
+      tridentTransformations: [...this.tridentTransformations.values()].map((state) => ({
+        ...state,
+        heldTargetIds: [...state.heldTargetIds],
+      })),
       tridentFloods: this.tridentFloods,
+      superBombLimbLosses: [...this.superBombLimbLosses.values()].flatMap((states) => states.map((state) => ({ ...state }))),
+      superBombSplatters: this.superBombSplatters.map((state) => ({
+        ...state,
+        poisonCooldowns: { ...state.poisonCooldowns },
+      })),
+      superBombReformations: [...this.superBombReformations.values()].map((state) => ({ ...state })),
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -7259,9 +7618,13 @@ export class CombatSystem {
     centerStun: number;
     edgeStun: number;
     label: string;
+    status?: StatusEffectId;
+    includeSource?: boolean;
+    visualLabel?: string;
+    visualColor?: string;
   }): void {
     for (const target of this.combatants.values()) {
-      if (target.respawnTimer > 0) {
+      if (target.respawnTimer > 0 || (options.includeSource === false && target.id === options.sourceId)) {
         continue;
       }
       const tx = target.x + target.width / 2;
@@ -7291,7 +7654,7 @@ export class CombatSystem {
         },
         stun,
         label: options.label,
-        status: "daze",
+        status: options.status ?? "daze",
         skipHitLocationScaling: true,
       });
       if (!hit.applied) {
@@ -7318,14 +7681,20 @@ export class CombatSystem {
       });
     }
     const holy = options.weaponId === "holy-bazooka";
-    this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, holy ? "#fff4a8" : "#ff8f3d", holy ? "HOLY EXPLOSION" : "EXPLOSION");
-    this.addEffect("explosion", options.x, options.y, options.x + options.radius * 0.7, options.y, holy ? "#ffffff" : "#fff4a8", holy ? "HOLY FIREBALL" : "FIREBALL");
-    this.addEffect("aura", options.x, options.y, options.x + options.radius * 0.9, options.y, holy ? "#d9f7ff" : "#2b2b32", holy ? "HOLY SMOKE" : "SMOKE CLOUD");
-    this.addEffect("shockwave", options.x, options.y, options.x + options.radius, options.y, holy ? "#ffffff" : "#ffcf5a", holy ? "HOLY BOOM" : "BOOM");
-    for (let index = 0; index < (holy ? 18 : 12); index += 1) {
-      const angle = (Math.PI * 2 * index) / (holy ? 18 : 12);
+    const superBomb = options.weaponId === "super-bomb";
+    const visualLabel = options.visualLabel;
+    const baseColor = options.visualColor ?? (superBomb ? "#ff6f91" : holy ? "#fff4a8" : "#ff8f3d");
+    const brightColor = superBomb ? "#ffcf5a" : holy ? "#ffffff" : "#fff4a8";
+    const smokeColor = superBomb ? "#3b1822" : holy ? "#d9f7ff" : "#2b2b32";
+    const debrisCount = superBomb ? 24 : holy ? 18 : 12;
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius, options.y, baseColor, visualLabel ?? (holy ? "HOLY EXPLOSION" : "EXPLOSION"));
+    this.addEffect("explosion", options.x, options.y, options.x + options.radius * 0.7, options.y, brightColor, visualLabel ? `${visualLabel} FIREBALL` : holy ? "HOLY FIREBALL" : "FIREBALL");
+    this.addEffect("aura", options.x, options.y, options.x + options.radius * 0.9, options.y, smokeColor, visualLabel ? `${visualLabel} SMOKE` : holy ? "HOLY SMOKE" : "SMOKE CLOUD");
+    this.addEffect("shockwave", options.x, options.y, options.x + options.radius, options.y, brightColor, visualLabel ? `${visualLabel} BOOM` : holy ? "HOLY BOOM" : "BOOM");
+    for (let index = 0; index < debrisCount; index += 1) {
+      const angle = (Math.PI * 2 * index) / debrisCount;
       const reach = options.radius * (0.24 + (index % 4) * 0.12);
-      this.addEffect("spark", options.x, options.y, options.x + Math.cos(angle) * reach, options.y + Math.sin(angle) * reach, holy ? (index % 2 === 0 ? "#ffffff" : "#fff4a8") : index % 2 === 0 ? "#ffcf5a" : "#ff8f3d", holy ? "HOLY DEBRIS" : "DEBRIS");
+      this.addEffect("spark", options.x, options.y, options.x + Math.cos(angle) * reach, options.y + Math.sin(angle) * reach, superBomb ? (index % 3 === 0 ? "#ff2f5f" : index % 3 === 1 ? "#ffcf5a" : "#ffffff") : holy ? (index % 2 === 0 ? "#ffffff" : "#fff4a8") : index % 2 === 0 ? "#ffcf5a" : "#ff8f3d", visualLabel ? `${visualLabel} DEBRIS` : holy ? "HOLY DEBRIS" : "DEBRIS");
     }
   }
 
@@ -7697,7 +8066,8 @@ export class CombatSystem {
   }
 
   private hasMissingHands(ownerId: string): boolean {
-    return this.combatants.get(ownerId)?.statuses.some((status) => status.id === "handsMissing") ?? false;
+    return (this.combatants.get(ownerId)?.statuses.some((status) => status.id === "handsMissing") ?? false)
+      || (this.superBombLimbLosses.get(ownerId)?.some((state) => state.limb === "rightArm") ?? false);
   }
 
   private recallAxe(context: WeaponUseContext, projectile: Projectile): WeaponUseResult {
@@ -9296,6 +9666,7 @@ export class CombatSystem {
     if (this.spikeModes.has(target.id)) {
       this.endSpikeMode(target.id, false);
     }
+    this.clearSuperBombPlayerState(target.id, true);
     if (target.id.startsWith("zombie-")) {
       this.removeZombiePermanently(target.id, "ZOMBIE DOWN");
       return;
@@ -9537,6 +9908,310 @@ export class CombatSystem {
       } else if (state.form === "octopus") {
         this.updateOctopusHeldTargets(state, target, players);
       }
+    }
+  }
+
+  private updateSuperBombs(dt: number, players: PlayerPhysicsState[]): void {
+    this.tickSuperBombCooldowns(dt);
+    this.updateSuperBombLimbLosses(dt);
+    this.updateSuperBombSplatters(dt);
+    this.updateSuperBombReformations(dt, players);
+  }
+
+  private tickSuperBombCooldowns(dt: number): void {
+    const tick = (map: Map<string, number>): void => {
+      for (const [ownerId, cooldown] of [...map.entries()]) {
+        const next = Math.max(0, cooldown - dt);
+        if (next > 0) {
+          map.set(ownerId, next);
+        } else {
+          map.delete(ownerId);
+        }
+      }
+    };
+    tick(this.superBombPrimaryCooldowns);
+    tick(this.superBombLimbCooldowns);
+    tick(this.superBombSuperCooldowns);
+  }
+
+  private updateSuperBombLimbLosses(dt: number): void {
+    for (const [ownerId, states] of [...this.superBombLimbLosses.entries()]) {
+      const nextStates: SuperBombLimbLossState[] = [];
+      for (const state of states) {
+        state.timer = Math.max(0, state.timer - dt);
+        state.progress = clamp(1 - state.timer / Math.max(0.01, state.duration), 0, 1);
+        if (state.timer > 0) {
+          nextStates.push(state);
+          continue;
+        }
+        const owner = this.combatants.get(ownerId);
+        if (owner) {
+          const anchor = this.superBombLimbAnchor(owner, state.limb);
+          this.addEffect("aura", anchor.x, anchor.y, owner.x + owner.width / 2, owner.y + owner.height / 2, "#ff6f91", "LIMB REGROW");
+          this.addEffect("spark", anchor.x, anchor.y, anchor.x, anchor.y - 26, "#fff4a8", "REGROWN");
+        }
+        this.queueSound("super-bomb-reform");
+      }
+      if (nextStates.length > 0) {
+        this.superBombLimbLosses.set(ownerId, nextStates);
+      } else {
+        this.superBombLimbLosses.delete(ownerId);
+      }
+    }
+  }
+
+  private updateSuperBombSplatters(dt: number): void {
+    for (const splatter of this.superBombSplatters) {
+      splatter.age += dt;
+      for (const [targetId, cooldown] of Object.entries(splatter.poisonCooldowns)) {
+        const next = Math.max(0, cooldown - dt);
+        if (next > 0) {
+          splatter.poisonCooldowns[targetId] = next;
+        } else {
+          delete splatter.poisonCooldowns[targetId];
+        }
+      }
+
+      if (splatter.age >= splatter.returnAt) {
+        splatter.returning = true;
+      }
+      if (!splatter.visualOnly) {
+        this.applySuperBombSplatterPoison(splatter);
+      }
+      const owner = this.combatants.get(splatter.ownerId);
+      if (owner) {
+        splatter.targetX = owner.x + owner.width / 2;
+        splatter.targetY = owner.y + owner.height / 2;
+      }
+      if (splatter.returning) {
+        const toward = normalize({ x: splatter.targetX - splatter.x, y: splatter.targetY - splatter.y });
+        const speed = 420 + splatter.age * 42;
+        splatter.vx = toward.x * speed;
+        splatter.vy = toward.y * speed;
+      } else {
+        splatter.vy += 160 * dt;
+      }
+      splatter.x += splatter.vx * dt;
+      splatter.y += splatter.vy * dt;
+      const floor = DEFAULT_PHYSICS.groundY - 5;
+      if (!splatter.returning && splatter.y > floor) {
+        splatter.y = floor;
+        splatter.vy *= -0.14;
+        splatter.vx *= 0.74;
+      }
+
+      if (!splatter.visualOnly) {
+        this.applySuperBombSplatterPoison(splatter);
+      }
+    }
+    removeWhere(this.superBombSplatters, (splatter) => splatter.age >= splatter.lifetime);
+  }
+
+  private updateSuperBombReformations(dt: number, players: PlayerPhysicsState[]): void {
+    for (const [ownerId, state] of [...this.superBombReformations.entries()]) {
+      state.timer = Math.max(0, state.timer - dt);
+      state.progress = clamp(1 - state.timer / Math.max(0.01, state.duration), 0, 1);
+      const owner = this.combatants.get(ownerId);
+      const player = players.find((item) => item.id === ownerId);
+      if (owner) {
+        owner.velocityX = 0;
+        owner.velocityY = 0;
+        owner.x = state.x - owner.width / 2;
+        owner.y = Math.min(DEFAULT_PHYSICS.groundY - owner.height, state.y - owner.height / 2);
+        owner.hp = Math.max(1, owner.hp);
+        owner.hitstun = Math.max(owner.hitstun, state.timer);
+        owner.invulnerable = Math.max(owner.invulnerable, state.timer);
+        owner.statuses = [
+          ...owner.statuses.filter((status) => status.id !== "superBombReforming"),
+          { ...createStatus("superBombReforming"), duration: state.timer },
+        ];
+      }
+      if (player) {
+        player.velocityX = 0;
+        player.velocityY = 0;
+        player.x = state.x - player.width / 2;
+        player.y = Math.min(DEFAULT_PHYSICS.groundY - player.height, state.y - player.height / 2);
+        player.grounded = true;
+      }
+      if (state.timer > 0) {
+        continue;
+      }
+      this.superBombReformations.delete(ownerId);
+      this.superBombLimbLosses.delete(ownerId);
+      if (owner) {
+        owner.statuses = owner.statuses.filter((status) => status.id !== "superBombReforming");
+        owner.invulnerable = Math.max(owner.invulnerable, 0.85);
+        const center = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+        this.addEffect("aura", center.x, center.y, center.x, center.y - 84, "#ff6f91", "REFORMED");
+        this.addEffect("shockwave", center.x - 62, center.y, center.x + 62, center.y, "#fff4a8", "REFORM");
+      }
+      this.queueSound("super-bomb-reform");
+    }
+  }
+
+  private applySuperBombSplatterPoison(splatter: SuperBombSplatterState): void {
+    if (splatter.returning) {
+      return;
+    }
+    for (const target of this.combatants.values()) {
+      if (target.id === splatter.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+      if (Math.hypot(center.x - splatter.x, center.y - splatter.y) > splatter.radius + Math.max(target.width, target.height) * 0.35) {
+        continue;
+      }
+      if ((splatter.poisonCooldowns[target.id] ?? 0) > 0) {
+        continue;
+      }
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("poison"));
+      target.hitstun = Math.max(target.hitstun, 0.04);
+      splatter.poisonCooldowns[target.id] = 0.75;
+      this.addEffect("aura", center.x, center.y, center.x, center.y - 36, "#7cff6b", "SPLATTER POISON");
+    }
+  }
+
+  private hasSuperBombStrap(ownerId: string): boolean {
+    return hasSuperBombStrap(this.playerLoadouts.get(ownerId));
+  }
+
+  private superBombDisabledReason(ownerId: string): string | undefined {
+    if (!this.hasSuperBombStrap(ownerId)) {
+      return "No SUPER BOMB";
+    }
+    const owner = this.combatants.get(ownerId);
+    if (!owner || owner.respawnTimer > 0 || owner.hp <= 0) {
+      return "No body";
+    }
+    if (this.superBombReformations.has(ownerId)) {
+      return "Reforming";
+    }
+    const loadout = this.playerLoadouts.get(ownerId);
+    if (loadout?.leftHand || loadout?.rightHand) {
+      return "hand occupied";
+    }
+    return undefined;
+  }
+
+  private validateSuperBombUse(ownerId: string): string | undefined {
+    const disabled = this.superBombDisabledReason(ownerId);
+    if (disabled === "hand occupied") {
+      return "Empty hand required";
+    }
+    return disabled;
+  }
+
+  private getSuperBombMissingLimbs(ownerId: string): SuperBombLimbLossState[] {
+    return (this.superBombLimbLosses.get(ownerId) ?? []).map((state) => ({ ...state }));
+  }
+
+  private addSuperBombLimbLoss(ownerId: string, limb: SuperBombLimb, visualOnly = false): void {
+    const existing = this.superBombLimbLosses.get(ownerId) ?? [];
+    const next = existing.filter((state) => state.limb !== limb);
+    const state: SuperBombLimbLossState = {
+      ownerId,
+      limb,
+      timer: superBombLimbRegrowDuration,
+      duration: superBombLimbRegrowDuration,
+      progress: 0,
+    };
+    next.push(state);
+    this.superBombLimbLosses.set(ownerId, next);
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      const anchor = this.superBombLimbAnchor(owner, limb);
+      this.addEffect("blood", anchor.x, anchor.y, anchor.x + Math.sign(anchor.x - (owner.x + owner.width / 2) || 1) * 34, anchor.y - 16, "#c71943", visualOnly ? "LIMB" : "LIMB BOMB");
+    }
+  }
+
+  private chooseAvailableSuperBombLimb(ownerId: string, seed: number): SuperBombLimb | undefined {
+    const missing = new Set((this.superBombLimbLosses.get(ownerId) ?? []).map((state) => state.limb));
+    const available: SuperBombLimb[] = (["rightArm", "leftLeg", "rightLeg"] as const).filter((limb) => !missing.has(limb));
+    if (available.length === 0) {
+      return undefined;
+    }
+    const index = Math.min(available.length - 1, Math.floor(seededUnit(seed || performanceNow(), ownerId.length, 991) * available.length));
+    return available[index];
+  }
+
+  private superBombLimbAnchor(owner: Combatant, limb: SuperBombLimb): Vec2 {
+    const facing = Math.sign(owner.velocityX) || 1;
+    if (limb === "rightArm") {
+      return { x: owner.x + owner.width / 2 + facing * 23, y: owner.y + 28 };
+    }
+    const legOffset = limb === "leftLeg" ? -8 : 9;
+    return { x: owner.x + owner.width / 2 + legOffset, y: owner.y + owner.height - 6 };
+  }
+
+  private startSuperBombReformation(ownerId: string, center: Vec2, visualOnly: boolean): void {
+    this.superBombReformations.set(ownerId, {
+      ownerId,
+      x: center.x,
+      y: center.y,
+      timer: superBombReformDuration,
+      duration: superBombReformDuration,
+      progress: 0,
+      visualOnly,
+    });
+  }
+
+  private spawnSuperBombSplatters(ownerId: string, center: Vec2, visualOnly: boolean): void {
+    removeWhere(this.superBombSplatters, (splatter) => splatter.ownerId === ownerId);
+    const seed = Math.floor(performanceNow() + ownerId.length * 811);
+    for (let index = 0; index < superBombSplatterCount; index += 1) {
+      const angle = Math.PI * 2 * (index / superBombSplatterCount) + (seededUnit(seed, index, 17) - 0.5) * 0.5;
+      const speed = 80 + seededUnit(seed, index, 29) * 420;
+      const radius = 18 + seededUnit(seed, index, 43) * 24;
+      this.superBombSplatters.push({
+        id: this.makeId("super-bomb-splatter"),
+        ownerId,
+        x: center.x + Math.cos(angle) * 10,
+        y: center.y + Math.sin(angle) * 8,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 160 - seededUnit(seed, index, 71) * 220,
+        age: 0,
+        lifetime: superBombReformDuration,
+        returnAt: superBombReformDuration - 2.2,
+        radius,
+        returning: false,
+        targetX: center.x,
+        targetY: center.y,
+        poisonCooldowns: {},
+        visualOnly,
+      });
+    }
+  }
+
+  private spawnSuperBombFireworks(x: number, y: number, radius: number, label: string, count: number): void {
+    this.addEffect("explosion", x, y, x + radius, y, "#ff6f91", label);
+    this.addEffect("shockwave", x, y, x + radius * 1.08, y, "#fff4a8", `${label} RING`);
+    this.addEffect("aura", x, y, x, y - radius * 0.56, "#3b1822", `${label} SMOKE`);
+    for (let index = 0; index < count; index += 1) {
+      const angle = (Math.PI * 2 * index) / Math.max(1, count);
+      const wobble = 0.75 + (index % 5) * 0.08;
+      const reach = radius * wobble;
+      this.addEffect(
+        index % 4 === 0 ? "blood" : "spark",
+        x,
+        y,
+        x + Math.cos(angle) * reach,
+        y + Math.sin(angle) * reach,
+        index % 3 === 0 ? "#ff2f5f" : index % 3 === 1 ? "#ffcf5a" : "#ffffff",
+        `${label} BURST`,
+      );
+    }
+  }
+
+  private clearSuperBombPlayerState(ownerId: string, clearSplatters: boolean): void {
+    this.superBombLimbLosses.delete(ownerId);
+    this.superBombReformations.delete(ownerId);
+    removeWhere(this.projectiles, (projectile) => projectile.ownerId === ownerId && projectile.weaponId === "super-bomb");
+    if (clearSplatters) {
+      removeWhere(this.superBombSplatters, (splatter) => splatter.ownerId === ownerId);
+    }
+    const owner = this.combatants.get(ownerId);
+    if (owner) {
+      owner.statuses = owner.statuses.filter((status) => status.id !== "superBombReforming");
     }
   }
 
@@ -9807,6 +10482,10 @@ export class CombatSystem {
         this.updateHandProjectile(projectile, dt);
         continue;
       }
+      if (projectile.weaponId === "super-bomb") {
+        this.updateSuperBombLimbProjectile(projectile, dt);
+        continue;
+      }
       projectile.age += dt;
       const returningAxe = projectile.weaponId === "axe" && projectile.label === "RETURNING AXE";
       if (returningAxe) {
@@ -10000,6 +10679,83 @@ export class CombatSystem {
         this.rockets.delete(ownerId);
       }
     }
+  }
+
+  private updateSuperBombLimbProjectile(projectile: Projectile, dt: number): void {
+    projectile.age += dt;
+    const previousX = projectile.x;
+    const previousY = projectile.y;
+    projectile.vy += projectile.gravity * dt;
+    projectile.x += projectile.vx * dt;
+    projectile.y += projectile.vy * dt;
+    const direction = normalize({ x: projectile.vx || projectile.ownerFacing || 1, y: projectile.vy || -0.1 });
+    this.addEffect("tracer", projectile.x, projectile.y, projectile.x - direction.x * 46, projectile.y - direction.y * 30, "#ff6f91", "LIMB FUSE");
+
+    if (projectile.visualOnly) {
+      if (projectile.age >= projectile.lifetime || projectile.y >= COMBAT_TUNING.projectiles.floorY - projectile.radius) {
+        this.spawnSuperBombFireworks(projectile.x, projectile.y, Math.min(superBombLimbBombRadius, projectile.radius * 14), "LIMB BOMB", 14);
+        projectile.age = projectile.lifetime + 1;
+      }
+      return;
+    }
+
+    const swept = sweptProjectileBounds(projectile, previousX, previousY);
+    for (const target of this.combatants.values()) {
+      if (target.id === projectile.ownerId || target.respawnTimer > 0 || target.hp <= 0) {
+        continue;
+      }
+      if (intersectsRect(swept, target)) {
+        projectile.x = target.x + target.width / 2;
+        projectile.y = target.y + target.height / 2;
+        this.explodeSuperBombLimb(projectile);
+        return;
+      }
+    }
+    for (const van of this.vans) {
+      if (van.state === "stored" || van.state === "destroyed" || van.health <= 0) {
+        continue;
+      }
+      if (intersectsRect(swept, van)) {
+        projectile.x = van.x + van.width / 2;
+        projectile.y = van.y + van.height / 2;
+        this.explodeSuperBombLimb(projectile);
+        return;
+      }
+    }
+    if (projectile.y >= COMBAT_TUNING.projectiles.floorY - projectile.radius && projectile.age > 0.1) {
+      projectile.y = COMBAT_TUNING.projectiles.floorY - projectile.radius;
+      this.explodeSuperBombLimb(projectile);
+      return;
+    }
+    if (projectile.age >= projectile.lifetime) {
+      this.explodeSuperBombLimb(projectile);
+    }
+  }
+
+  private explodeSuperBombLimb(projectile: Projectile): void {
+    if (projectile.age > projectile.lifetime + 0.5) {
+      return;
+    }
+    this.applyExplosionDamage({
+      sourceId: projectile.ownerId,
+      weaponId: "super-bomb",
+      x: projectile.x,
+      y: projectile.y,
+      radius: superBombLimbBombRadius,
+      centerDamage: 88,
+      edgeDamage: 28,
+      centerKnockback: 1900,
+      edgeKnockback: 740,
+      centerStun: 0.82,
+      edgeStun: 0.32,
+      label: "LIMB BOMB",
+      visualLabel: "LIMB BOMB",
+      visualColor: "#ff2f5f",
+      includeSource: true,
+    });
+    this.spawnSuperBombFireworks(projectile.x, projectile.y, superBombLimbBombRadius, "LIMB BOMB", 24);
+    this.queueSound("super-bomb-pop");
+    projectile.age = projectile.lifetime + 1;
   }
 
   private updateHolyBazookaProjectile(projectile: Projectile, dt: number): void {
@@ -11267,7 +12023,10 @@ export class CombatSystem {
       || label === "HOLY FIREBALL"
       || label === "HOLY SMOKE"
       || label === "HOLY BOOM"
-      || label === "HOLY DEBRIS";
+      || label === "HOLY DEBRIS"
+      || Boolean(label?.includes("SUPER BOMB"))
+      || Boolean(label?.includes("LIMB BOMB"))
+      || Boolean(label?.includes("FULL BODY EXPLOSION"));
     const lingeringAura = label === "DEATH AURA" || label === "FROZEN" || label === "BUFFED";
     this.effects.push({
       id: this.makeId("fx"),
@@ -11676,6 +12435,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#5ad7ff";
     case "trident":
       return "#5ad7ff";
+    case "super-bomb":
+      return "#ff6f91";
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -11853,6 +12614,8 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "No Hands", duration: handsMissingDuration, stacks: 1 };
     case "superLegs":
       return { id, label: "Super Legs", duration: superLegsStatusRefresh, stacks: 1 };
+    case "superBombReforming":
+      return { id, label: "Reforming", duration: superBombReformDuration, stacks: 1 };
     case "neptuneStuck":
       return {
         id,
@@ -12059,6 +12822,14 @@ function neptuneLaserDistanceToTarget(laser: NeptuneLaserState, point: Vec2): nu
 
 function hasGrabberStrap(loadout: Partial<LoadoutState> | undefined): boolean {
   return loadout?.frontStrap === "grabber" || loadout?.backStrap === "grabber";
+}
+
+function hasSuperBombStrap(loadout: Partial<LoadoutState> | undefined): boolean {
+  return loadout?.frontStrap === "super-bomb" || loadout?.backStrap === "super-bomb";
+}
+
+function superBombWeaknessScale(stacks: number): number {
+  return clamp(1 - Math.min(superBombWeaknessCap, stacks) * superBombWeaknessPerStack, 0.42, 1);
 }
 
 function clamp(value: number, min: number, max: number): number {

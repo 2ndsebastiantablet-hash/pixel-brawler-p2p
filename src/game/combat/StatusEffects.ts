@@ -21,6 +21,7 @@ export type StatusEffectId =
   | "scrambled"
   | "handsMissing"
   | "superLegs"
+  | "superBombReforming"
   | "neptuneStuck"
   | "pufferForm"
   | "goldfishForm"

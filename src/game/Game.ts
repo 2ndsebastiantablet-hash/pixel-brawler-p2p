@@ -3,7 +3,7 @@ import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
 import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, TridentFloodState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
+import type { AmmoPickup, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, SuperBombLimbLossState, SuperBombReformationState, SuperBombSplatterState, TridentFloodState, TridentTransformationState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -162,6 +162,7 @@ export class Game {
   private readonly previousSpiritBeatInput = { left: false, right: false, jumpHeld: false };
   private moonChordHeld = false;
   private tridentChordHeld = false;
+  private superBombChordHeld = false;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -325,6 +326,7 @@ export class Game {
     this.secondaryHeldMs = 0;
     this.moonChordHeld = false;
     this.tridentChordHeld = false;
+    this.superBombChordHeld = false;
     this.footstepTimer = 0;
     this.attackVisual = null;
     this.running = true;
@@ -395,8 +397,10 @@ export class Game {
         movementInput = { ...movementInput, jumpPressed: false, jumpHeld: false };
       }
     }
+    const preMoveSuperBomb = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
     const lockedOut = (localCombatant?.respawnTimer ?? 0) > 0
       || (localCombatant?.statuses.some((status) => status.id === "deathFrozen") ?? false)
+      || preMoveSuperBomb.reforming
       || this.combat.isMovementLocked(this.localPlayer.state.id);
     const activeMovementInput = lockedOut ? neutralInput() : movementInput;
     const previousState = { ...this.localPlayer.state };
@@ -406,7 +410,9 @@ export class Game {
     this.updateAttachmentVisual(dt);
     this.combat.syncLocalPlayer(this.localPlayer.state, this.localPlayer.name, this.localPlayer.color);
     this.combat.setPlayerLoadout(this.localPlayer.state.id, this.loadout);
-    this.combat.setEquipmentStatus(this.localPlayer.state.id, "superLegs", loadoutHasWeapon(this.loadout, "super-legs"));
+    const superBombRuntime = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
+    const superBombMissingLeg = superBombRuntime.missingLimbs.some((limb) => limb.limb === "leftLeg" || limb.limb === "rightLeg");
+    this.combat.setEquipmentStatus(this.localPlayer.state.id, "superLegs", loadoutHasWeapon(this.loadout, "super-legs") && !superBombMissingLeg && !superBombRuntime.reforming);
     this.handleSuperLegsKick(movementInput, lockedOut, time);
     const spiritRuntime = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     if (!lockedOut && spiritRuntime.spiritActive && movementInput.dashPressed) {
@@ -683,32 +689,45 @@ export class Game {
     this.drawUranusHazards(ctx);
     this.drawBursts(ctx);
     this.drawCombatEntities(ctx);
+    const combatSnapshot = this.combat.getSnapshot();
+    const tridentTransformById = new Map(combatSnapshot.tridentTransformations.map((state) => [state.ownerId, state]));
+    const superBombReformById = new Map(combatSnapshot.superBombReformations.map((state) => [state.ownerId, state]));
     for (const remote of this.remotes.values()) {
       if (remote.current.statuses?.includes("steady")) {
         continue;
       }
       this.drawRemoteStatusVisuals(ctx, remote);
-      this.drawInvulnerabilityGlow(ctx, remote.player.state, remote.current.invulnerable ?? this.combat.getCombatant(remote.player.state.id)?.invulnerable ?? 0);
-      remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      this.drawPlayerStatusOverlay(ctx, remote.player.state, remote.current.statuses ?? []);
-      if (remote.current.statuses?.includes("spikeMode")) {
-        this.drawSpikeModeHands(ctx, remote.player.state);
-      }
       const remoteLoadout = normalizeLoadout(remote.current.loadout ?? {});
-      this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
-      this.drawGrabberArm(ctx, remote.player.state, remoteLoadout);
-      if (remoteLoadout.attachment) {
-        this.drawRemoteAttachmentString(ctx, remote.player.state, remoteLoadout.attachment);
+      const remoteCombatant = this.combat.getCombatant(remote.player.state.id);
+      const remoteReform = superBombReformById.get(remote.player.state.id);
+      const remoteTransform = tridentTransformById.get(remote.player.state.id);
+      if (remoteReform) {
+        this.drawSuperBombReformation(ctx, remoteReform, remote.player.state, remote.player.color, remote.player.name, remoteCombatant);
+      } else if (remoteTransform) {
+        this.drawTridentCreatureForm(ctx, remote.player.state, remoteTransform, remote.player.color, remote.player.name, remoteCombatant);
+      } else {
+        this.drawInvulnerabilityGlow(ctx, remote.player.state, remote.current.invulnerable ?? remoteCombatant?.invulnerable ?? 0);
+        remote.player.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+        this.drawSuperBombLimbOverlay(ctx, remote.player.state, this.combat.getSuperBombRuntime(remote.player.state.id).missingLimbs, this.combat.getSuperBombRuntime(remote.player.state.id).weaknessStacks);
+        this.drawPlayerStatusOverlay(ctx, remote.player.state, remote.current.statuses ?? []);
+        if (remote.current.statuses?.includes("spikeMode")) {
+          this.drawSpikeModeHands(ctx, remote.player.state);
+        }
+        this.drawLoadoutHarness(ctx, remote.player.state, remote.player.color, remoteLoadout);
+        this.drawGrabberArm(ctx, remote.player.state, remoteLoadout);
+        if (remoteLoadout.attachment) {
+          this.drawRemoteAttachmentString(ctx, remote.player.state, remoteLoadout.attachment);
+        }
+        if (loadoutHasWeapon(remoteLoadout, "wings") || remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
+          const mode = remote.current.weaponId === "wings" && !remote.player.state.grounded && remote.player.state.velocityY < -120 ? "flap" : remote.player.state.grounded ? "idle" : "glide";
+          this.drawWings(ctx, remote.player.state, remote.player.color, mode);
+        }
+        if (loadoutHasWeapon(remoteLoadout, "super-legs") || remote.current.statuses?.includes("superLegs")) {
+          this.drawSuperLegs(ctx, remote.player.state);
+        }
+        this.drawRemoteWeapon(ctx, remote);
+        this.drawRemoteHealth(ctx, remote);
       }
-      if (loadoutHasWeapon(remoteLoadout, "wings") || remote.current.weaponId === "wings" || remote.current.statuses?.includes("angelWings")) {
-        const mode = remote.current.weaponId === "wings" && !remote.player.state.grounded && remote.player.state.velocityY < -120 ? "flap" : remote.player.state.grounded ? "idle" : "glide";
-        this.drawWings(ctx, remote.player.state, remote.player.color, mode);
-      }
-      if (loadoutHasWeapon(remoteLoadout, "super-legs") || remote.current.statuses?.includes("superLegs")) {
-        this.drawSuperLegs(ctx, remote.player.state);
-      }
-      this.drawRemoteWeapon(ctx, remote);
-      this.drawRemoteHealth(ctx, remote);
     }
     const localCombatant = this.combat.getCombatant(this.localPlayer.state.id);
     const localStatuses = localCombatant?.statuses.map((status) => status.id) ?? [];
@@ -720,27 +739,40 @@ export class Game {
     }
     const steady = localCombatant?.statuses.some((status) => status.id === "steady") ?? false;
     if (!steady) {
-      this.drawInvulnerabilityGlow(ctx, this.localPlayer.state, localCombatant?.invulnerable ?? 0);
-      this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
-      this.drawPlayerStatusOverlay(ctx, this.localPlayer.state, localStatuses);
-      if (localStatuses.includes("spikeMode")) {
-        this.drawSpikeModeHands(ctx, this.localPlayer.state);
+      const localReform = superBombReformById.get(this.localPlayer.state.id);
+      const localTransform = tridentTransformById.get(this.localPlayer.state.id);
+      if (localReform) {
+        this.drawSuperBombReformation(ctx, localReform, this.localPlayer.state, this.localPlayer.color, this.localPlayer.name, localCombatant);
+      } else if (localTransform) {
+        this.drawTridentCreatureForm(ctx, this.localPlayer.state, localTransform, this.localPlayer.color, this.localPlayer.name, localCombatant);
+      } else {
+        this.drawInvulnerabilityGlow(ctx, this.localPlayer.state, localCombatant?.invulnerable ?? 0);
+        this.localPlayer.draw(ctx, this.camera.x, this.camera.y, this.showNames);
+        this.drawSuperBombLimbOverlay(ctx, this.localPlayer.state, this.combat.getSuperBombRuntime(this.localPlayer.state.id).missingLimbs, this.combat.getSuperBombRuntime(this.localPlayer.state.id).weaknessStacks);
+        this.drawPlayerStatusOverlay(ctx, this.localPlayer.state, localStatuses);
+        if (localStatuses.includes("spikeMode")) {
+          this.drawSpikeModeHands(ctx, this.localPlayer.state);
+        }
+        this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
+        this.drawGrabberArm(ctx, this.localPlayer.state, this.loadout, this.combat.getWeaponRuntimeState("grabber", this.localPlayer.state.id));
+        if (this.loadout.attachment) {
+          this.drawAttachmentString(ctx, this.localPlayer.state, this.loadout.attachment);
+        }
+        if (loadoutHasWeapon(this.loadout, "wings") || localCombatant?.statuses.some((status) => status.id === "angelWings")) {
+          const mode = this.localPlayer.state.wingFlapping ? "flap" : this.localPlayer.state.wingDiving ? "dive" : this.localPlayer.state.grounded ? "idle" : "glide";
+          this.drawWings(ctx, this.localPlayer.state, this.localPlayer.color, mode);
+        }
+        if (loadoutHasWeapon(this.loadout, "super-legs") || localCombatant?.statuses.some((status) => status.id === "superLegs")) {
+          this.drawSuperLegs(ctx, this.localPlayer.state);
+        }
+        this.drawLocalWeapon(ctx);
       }
-      this.drawLoadoutHarness(ctx, this.localPlayer.state, this.localPlayer.color, this.loadout);
-      this.drawGrabberArm(ctx, this.localPlayer.state, this.loadout, this.combat.getWeaponRuntimeState("grabber", this.localPlayer.state.id));
-      if (this.loadout.attachment) {
-        this.drawAttachmentString(ctx, this.localPlayer.state, this.loadout.attachment);
-      }
-      if (loadoutHasWeapon(this.loadout, "wings") || localCombatant?.statuses.some((status) => status.id === "angelWings")) {
-        const mode = this.localPlayer.state.wingFlapping ? "flap" : this.localPlayer.state.wingDiving ? "dive" : this.localPlayer.state.grounded ? "idle" : "glide";
-        this.drawWings(ctx, this.localPlayer.state, this.localPlayer.color, mode);
-      }
-      if (loadoutHasWeapon(this.loadout, "super-legs") || localCombatant?.statuses.some((status) => status.id === "superLegs")) {
-        this.drawSuperLegs(ctx, this.localPlayer.state);
-      }
-      this.drawLocalWeapon(ctx);
     }
-    this.drawLocalHealth(ctx);
+    if (!superBombReformById.has(this.localPlayer.state.id) && !tridentTransformById.has(this.localPlayer.state.id)) {
+      this.drawLocalHealth(ctx);
+    } else if (localCombatant) {
+      this.drawPoisonHeartUi(ctx, localCombatant);
+    }
     this.drawJupiterGasOverlay(ctx);
     this.drawUranusFlashOverlay(ctx);
     this.drawNeptuneEventEffects(ctx);
@@ -851,7 +883,65 @@ export class Game {
       this.tridentChordHeld = false;
     }
 
-    const primaryAction = moonChordActive || spikeModeActive || spiritActive || tridentChordSuppress ? null : resolveMouseWeaponAction("primary", this.loadout);
+    const superBombRuntime = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
+    const superBombOwnsMouse = superBombRuntime.equipped && !this.loadout.leftHand && !this.loadout.rightHand;
+    const superBombChordActive = superBombOwnsMouse && input.primaryHeld && input.secondaryHeld;
+    const superBombChordWithinWindow = Math.abs(this.primaryHeldMs - this.secondaryHeldMs) <= 180 || (input.primaryPressed && input.secondaryPressed);
+    const superBombChordStarted = !moonChordActive
+      && !spikeModeActive
+      && !spiritActive
+      && !tridentChordSuppress
+      && superBombChordActive
+      && !this.superBombChordHeld
+      && superBombChordWithinWindow
+      && (input.primaryPressed || input.secondaryPressed);
+    if (superBombChordStarted) {
+      this.recordAttack(this.combat.useSuperBombSuper({
+        ownerId: this.localPlayer.state.id,
+        player: this.localPlayer.state,
+        aim,
+        now: time,
+        heldMs: Math.max(this.primaryHeldMs, this.secondaryHeldMs),
+        isNewPress: true,
+      }), "primary");
+    }
+    const superBombChordSuppress = superBombChordStarted || (superBombChordActive && this.superBombChordHeld);
+    if (superBombChordStarted) {
+      this.superBombChordHeld = true;
+    } else if (!superBombChordActive) {
+      this.superBombChordHeld = false;
+    }
+
+    let superBombMouseConsumed = false;
+    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentChordSuppress && !superBombChordSuppress && superBombOwnsMouse) {
+      if (input.primaryPressed) {
+        this.recordAttack(this.combat.useSuperBombPrimary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.primaryHeldMs,
+          isNewPress: true,
+        }, {
+          x: this.lastMouse.x + this.camera.x,
+          y: this.lastMouse.y + this.camera.y,
+        }), "primary");
+        superBombMouseConsumed = true;
+      } else if (input.secondaryPressed) {
+        this.recordAttack(this.combat.useSuperBombSecondary({
+          ownerId: this.localPlayer.state.id,
+          player: this.localPlayer.state,
+          aim,
+          now: time,
+          heldMs: this.secondaryHeldMs,
+          isNewPress: true,
+        }), "secondary");
+        superBombMouseConsumed = true;
+      }
+    }
+
+    const mouseSuppressed = moonChordActive || spikeModeActive || spiritActive || tridentChordSuppress || superBombChordSuppress || superBombMouseConsumed;
+    const primaryAction = mouseSuppressed ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
         pressed: input.primaryPressed,
@@ -866,7 +956,7 @@ export class Game {
     }
 
     const grappleRuntime = this.combat.getWeaponRuntimeState("grappling-hook", this.localPlayer.state.id);
-    const secondaryAction = moonChordActive || spikeModeActive || spiritActive || tridentChordSuppress ? null : resolveMouseWeaponAction("secondary", this.loadout, {
+    const secondaryAction = mouseSuppressed ? null : resolveMouseWeaponAction("secondary", this.loadout, {
       preferGrapplePull: grappleRuntime.grappleActive,
     });
     if (secondaryAction && (input.secondaryPressed || input.secondaryHeld || input.secondaryReleased)) {
@@ -895,6 +985,10 @@ export class Game {
       return;
     }
     const state = this.localPlayer.state;
+    const superBomb = this.combat.getSuperBombRuntime(state.id);
+    if (superBomb.reforming || superBomb.missingLimbs.some((limb) => limb.limb === "leftLeg" || limb.limb === "rightLeg")) {
+      return;
+    }
     const horizontal = Number(input.right) - Number(input.left);
     let kind: SuperLegsKickKind = "neutral";
     if (input.down && !state.grounded) {
@@ -1364,10 +1458,13 @@ export class Game {
     const winded = local?.statuses.some((status) => status.id === "winded") ? 0.55 : 1;
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
-    const superLegs = loadoutHasWeapon(this.loadout, "super-legs");
+    const superBomb = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
+    const superBombMissingLeg = superBomb.missingLimbs.some((limb) => limb.limb === "leftLeg" || limb.limb === "rightLeg");
+    const superLegs = loadoutHasWeapon(this.loadout, "super-legs") && !superBombMissingLeg && !superBomb.reforming;
     const superLegsMoveScale = superLegs ? 1.18 : 1;
-    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * spiritFocus * winded * superLegsMoveScale;
-    const jumpStatusScale = (empowered > 1 ? 1.06 : 1) * (spiritFocus > 1 ? 1.03 : 1) * (winded < 1 ? 0.72 : 1);
+    const superBombMoveScale = superBomb.reforming ? 0 : superBomb.weaknessScale * (superBombMissingLeg ? 0.24 : 1);
+    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * spiritFocus * winded * superLegsMoveScale * superBombMoveScale;
+    const jumpStatusScale = (empowered > 1 ? 1.06 : 1) * (spiritFocus > 1 ? 1.03 : 1) * (winded < 1 ? 0.72 : 1) * (superBombMissingLeg ? 0.72 : 1);
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
@@ -1376,7 +1473,7 @@ export class Game {
       jumpVelocity: DEFAULT_PHYSICS.jumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 1.08 : 1),
       doubleJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 1.1 : 1),
       thirdJumpVelocity: DEFAULT_PHYSICS.doubleJumpVelocity * weight.jumpMultiplier * jumpStatusScale * (superLegs ? 0.96 : 1),
-      maxAirJumps: superLegs ? 3 : 2,
+      maxAirJumps: superBombMissingLeg || superBomb.reforming ? 0 : superLegs ? 3 : 2,
       slideSpeed: DEFAULT_PHYSICS.slideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.16 : 1),
       lowSlideSpeed: DEFAULT_PHYSICS.lowSlideSpeed * weight.slideMultiplier * movementScale * (superLegs ? 1.2 : 1),
       slideDuration: DEFAULT_PHYSICS.slideDuration * (superLegs ? 1.24 : 1),
@@ -1708,6 +1805,15 @@ export class Game {
       this.pixelRect(ctx, Math.round(x + size / 2 - 2), Math.round(y - size / 2), 2, size);
       this.pixelRect(ctx, Math.round(x + size / 2 + 1), Math.round(y - size / 2 + 1), 2, Math.max(2, size - 2));
       this.pixelRect(ctx, Math.round(x + size / 2 - 5), Math.round(y - size / 2 + 1), 2, Math.max(2, size - 2));
+      return;
+    }
+    if (weaponId === "super-bomb") {
+      ctx.fillStyle = "#c71943";
+      this.pixelRect(ctx, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+      ctx.fillStyle = "#ff6f91";
+      this.pixelRect(ctx, Math.round(x - size / 3), Math.round(y - size / 3), Math.max(3, Math.round(size * 0.65)), Math.max(3, Math.round(size * 0.65)));
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, Math.round(x + size / 4), Math.round(y - size / 2 - 1), Math.max(3, Math.round(size * 0.38)), 3);
       return;
     }
     ctx.fillStyle = colorForWeapon(weaponId);
@@ -2119,19 +2225,21 @@ export class Game {
     } else if (weaponId === "trident") {
       const thrust = active > 0 ? 14 : Math.round(Math.sin(pulse) * 2);
       ctx.fillStyle = "#2b3542";
-      this.pixelRect(ctx, -4 + thrust, -3, 66, 6);
+      this.pixelRect(ctx, -18 + thrust, -3, 92, 6);
+      ctx.fillStyle = "#1b5f7d";
+      this.pixelRect(ctx, -14 + thrust, -1, 84, 2);
       ctx.fillStyle = "#5ad7ff";
-      this.pixelRect(ctx, 50 + thrust, -13, 8, 26);
-      this.pixelRect(ctx, 61 + thrust, -18, 7, 16);
-      this.pixelRect(ctx, 61 + thrust, 2, 7, 16);
-      this.pixelRect(ctx, 66 + thrust, -4, 15, 8);
+      this.pixelRect(ctx, 62 + thrust, -16, 8, 32);
+      this.pixelRect(ctx, 75 + thrust, -22, 7, 20);
+      this.pixelRect(ctx, 75 + thrust, 2, 7, 20);
+      this.pixelRect(ctx, 80 + thrust, -4, 18, 8);
       ctx.fillStyle = "#d6f2ff";
-      this.pixelRect(ctx, 77 + thrust, -2, 8, 4);
+      this.pixelRect(ctx, 94 + thrust, -2, 10, 4);
       if (active > 0) {
         ctx.fillStyle = "rgba(90, 215, 255, 0.42)";
-        this.pixelRect(ctx, 46, -24, 58, 48);
+        this.pixelRect(ctx, 56, -27, 72, 54);
         ctx.fillStyle = "rgba(214, 242, 255, 0.76)";
-        this.pixelRect(ctx, 88, -3, 24, 6);
+        this.pixelRect(ctx, 105, -3, 28, 6);
       }
     } else if (weaponId === "grappling-hook") {
       const runtime = remote ? undefined : this.combat.getWeaponRuntimeState(weaponId, state.id);
@@ -2603,6 +2711,9 @@ export class Game {
     for (const flood of snapshot.tridentFloods) {
       this.drawTridentFlood(ctx, flood);
     }
+    for (const splatter of snapshot.superBombSplatters) {
+      this.drawSuperBombSplatter(ctx, splatter);
+    }
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
     }
@@ -2621,7 +2732,13 @@ export class Game {
         const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
         const marsClone = marsCloneById.get(combatant.id);
         const neptuneCreature = neptuneCreatureById.get(combatant.id);
-        if (zombie) {
+        const reformation = snapshot.superBombReformations.find((item) => item.ownerId === combatant.id);
+        const tridentForm = snapshot.tridentTransformations.find((item) => item.ownerId === combatant.id);
+        if (reformation) {
+          this.drawSuperBombReformation(ctx, reformation, undefined, combatant.color, combatant.name, combatant);
+        } else if (tridentForm) {
+          this.drawTridentCreatureForm(ctx, combatant, tridentForm, combatant.color, combatant.name, combatant);
+        } else if (zombie) {
           this.drawZombieCombatant(ctx, combatant, zombie);
         } else if (marsClone) {
           this.drawMarsCloneCombatant(ctx, combatant, marsClone);
@@ -2660,6 +2777,11 @@ export class Game {
     }
     for (const projectile of snapshot.projectiles) {
       this.drawProjectile(ctx, projectile);
+    }
+    for (const reformation of snapshot.superBombReformations) {
+      if (reformation.ownerId !== this.localPlayer.state.id && !this.remotes.has(reformation.ownerId) && !snapshot.combatants.some((combatant) => combatant.id === reformation.ownerId)) {
+        this.drawSuperBombReformation(ctx, reformation);
+      }
     }
     for (const hitbox of snapshot.hitboxes) {
       ctx.globalAlpha = Math.max(0.16, 1 - hitbox.age / hitbox.duration) * 0.35;
@@ -3077,6 +3199,232 @@ export class Game {
     ctx.restore();
   }
 
+  private drawTridentCreatureForm(
+    ctx: CanvasRenderingContext2D,
+    state: Pick<PlayerPhysicsState, "x" | "y" | "width" | "height">,
+    transform: TridentTransformationState,
+    color: string,
+    name: string,
+    combatant?: Combatant,
+  ): void {
+    const cx = Math.round(state.x + state.width / 2 - this.camera.x);
+    const feetY = Math.round(state.y + state.height - this.camera.y);
+    const phase = performance.now() * 0.006;
+    const flash = combatant && combatant.invulnerable > 0 && Math.floor(performance.now() / 80) % 2 === 0;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = combatant?.respawnTimer && combatant.respawnTimer > 0 ? 0.25 : 1;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
+    ctx.beginPath();
+    ctx.ellipse(cx, feetY + 4, 31, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (transform.form === "puffer") {
+      const inflated = transform.inflateTimer > 0 ? 1 + transform.inflateTimer * 0.34 : 1;
+      const radius = Math.round(24 * inflated + Math.sin(phase * 4) * 2);
+      ctx.fillStyle = "rgba(124, 255, 107, 0.22)";
+      ctx.beginPath();
+      ctx.ellipse(cx, feetY - 28, radius + 8, radius + 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : "#7cff6b";
+      ctx.beginPath();
+      ctx.ellipse(cx, feetY - 28, radius, radius - 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#164f24";
+      for (let index = 0; index < 10; index += 1) {
+        const angle = (Math.PI * 2 * index) / 10;
+        this.pixelRect(ctx, cx + Math.cos(angle) * (radius + 2) - 3, feetY - 28 + Math.sin(angle) * (radius - 1) - 3, 6, 6);
+      }
+      ctx.fillStyle = "#05060a";
+      this.pixelRect(ctx, cx - 9, feetY - 36, 5, 5);
+      this.pixelRect(ctx, cx + 9, feetY - 36, 5, 5);
+      ctx.fillStyle = "#d6f2ff";
+      this.pixelRect(ctx, cx - 17, feetY - 24, 11, 7);
+      this.pixelRect(ctx, cx + 7, feetY - 24, 11, 7);
+    } else if (transform.form === "goldfish") {
+      const wiggle = Math.sin(phase * 5) * 5;
+      ctx.fillStyle = "rgba(255, 207, 90, 0.22)";
+      ctx.beginPath();
+      ctx.ellipse(cx, feetY - 29, 38, 19, wiggle * 0.01, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : "#ff9f3d";
+      ctx.beginPath();
+      ctx.ellipse(cx + 2, feetY - 30, 29, 15, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffd84d";
+      ctx.beginPath();
+      ctx.moveTo(cx - 28, feetY - 30);
+      ctx.lineTo(cx - 53, feetY - 45 + wiggle);
+      ctx.lineTo(cx - 47, feetY - 30);
+      ctx.lineTo(cx - 53, feetY - 14 - wiggle);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#fff4a8";
+      ctx.beginPath();
+      ctx.moveTo(cx + 2, feetY - 43);
+      ctx.lineTo(cx - 8, feetY - 60);
+      ctx.lineTo(cx + 13, feetY - 43);
+      ctx.fill();
+      ctx.fillStyle = "#05060a";
+      this.pixelRect(ctx, cx + 18, feetY - 35, 5, 5);
+      ctx.strokeStyle = "#fff4a8";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cx - 3, feetY - 18);
+      ctx.lineTo(cx - 18, feetY - 4);
+      ctx.stroke();
+    } else {
+      const wobble = Math.sin(phase * 4) * 4;
+      ctx.fillStyle = "rgba(176, 150, 255, 0.22)";
+      ctx.beginPath();
+      ctx.ellipse(cx, feetY - 35, 38, 30, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = flash ? "#ffffff" : "#b096ff";
+      ctx.beginPath();
+      ctx.ellipse(cx, feetY - 38, 26, 24, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#8c7bff";
+      ctx.lineWidth = 6;
+      for (let index = 0; index < 8; index += 1) {
+        const t = index / 7;
+        const startX = cx - 24 + t * 48;
+        const endX = cx - 38 + t * 76 + Math.sin(phase * 6 + index) * 8;
+        ctx.beginPath();
+        ctx.moveTo(startX, feetY - 20);
+        ctx.quadraticCurveTo(startX + (endX - startX) * 0.45, feetY - 6 + Math.sin(index + phase) * 10, endX, feetY + 3 + wobble);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#05060a";
+      this.pixelRect(ctx, cx - 11, feetY - 44, 5, 5);
+      this.pixelRect(ctx, cx + 9, feetY - 44, 5, 5);
+      ctx.fillStyle = "#d6f2ff";
+      this.pixelRect(ctx, cx - 4, feetY - 31, 8, 4);
+      for (const targetId of transform.heldTargetIds) {
+        const target = this.combat.getCombatant(targetId);
+        if (!target) {
+          continue;
+        }
+        ctx.strokeStyle = "rgba(176, 150, 255, 0.58)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(cx, feetY - 21);
+        ctx.lineTo(Math.round(target.x + target.width / 2 - this.camera.x), Math.round(target.y + target.height / 2 - this.camera.y));
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = color;
+    this.pixelRect(ctx, cx - 5, feetY - 5, 10, 4);
+    this.drawCreatureNameAndHealth(ctx, cx, feetY - 64, name, combatant);
+    ctx.restore();
+  }
+
+  private drawSuperBombReformation(
+    ctx: CanvasRenderingContext2D,
+    reformation: SuperBombReformationState,
+    state?: Pick<PlayerPhysicsState, "x" | "y" | "width" | "height">,
+    color = "#ff6f91",
+    name = "SUPER BOMB",
+    combatant?: Combatant,
+  ): void {
+    const cx = Math.round((state ? state.x + state.width / 2 : reformation.x) - this.camera.x);
+    const cy = Math.round((state ? state.y + state.height / 2 : reformation.y) - this.camera.y);
+    const progress = reformation.progress;
+    const pulse = 1 + Math.sin(performance.now() * 0.018) * 0.12;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "rgba(255, 47, 95, 0.18)";
+    ctx.fillRect(cx - 48, cy - 48, 96, 96);
+    ctx.strokeStyle = "#ff6f91";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cx - Math.round(42 * pulse), cy - Math.round(42 * pulse), Math.round(84 * pulse), Math.round(84 * pulse));
+    const chunks = 12;
+    for (let index = 0; index < chunks; index += 1) {
+      const angle = (Math.PI * 2 * index) / chunks + performance.now() * 0.0015;
+      const distance = (1 - progress) * (70 + (index % 4) * 18);
+      const x = cx + Math.cos(angle) * distance;
+      const y = cy + Math.sin(angle) * distance;
+      ctx.fillStyle = index % 3 === 0 ? "#c71943" : index % 3 === 1 ? "#ff6f91" : "#ffcf5a";
+      this.pixelRect(ctx, x - 5, y - 5, 10, 10);
+    }
+    ctx.fillStyle = color;
+    const bodyH = Math.round(38 * progress);
+    this.pixelRect(ctx, cx - 8, cy + 20 - bodyH, 16, Math.max(4, bodyH));
+    ctx.fillStyle = "#ffffff";
+    this.pixelRect(ctx, cx - 4, cy + 17 - bodyH, 8, 4);
+    this.drawCreatureNameAndHealth(ctx, cx, cy - 58, `${name} reform ${Math.ceil(reformation.timer)}s`, combatant);
+    ctx.restore();
+  }
+
+  private drawSuperBombLimbOverlay(ctx: CanvasRenderingContext2D, state: PlayerPhysicsState, limbs: SuperBombLimbLossState[], weaknessStacks: number): void {
+    if (weaknessStacks <= 0 && limbs.length === 0) {
+      return;
+    }
+    const x = Math.round(state.x - this.camera.x);
+    const y = Math.round(state.y - this.camera.y);
+    const cx = x + state.width / 2;
+    const facing = state.facing || 1;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (weaknessStacks > 0) {
+      ctx.globalAlpha = Math.min(0.52, 0.11 * weaknessStacks);
+      ctx.fillStyle = "#d6d6e2";
+      ctx.fillRect(x - 3, y - 5, state.width + 6, state.height + 10);
+      ctx.globalAlpha = 1;
+    }
+    for (const limb of limbs) {
+      const grow = clampNumber(limb.progress, 0, 1);
+      ctx.fillStyle = "#1a1116";
+      if (limb.limb === "rightArm") {
+        const armX = cx + facing * 17;
+        this.pixelRect(ctx, armX - 3, y + 24, 7 * facing, 16);
+        ctx.fillStyle = "#ff6f91";
+        this.pixelRect(ctx, armX - 3, y + 36 - grow * 14, Math.max(3, 7 * grow) * facing, Math.max(4, 14 * grow));
+      } else {
+        const legX = cx + (limb.limb === "leftLeg" ? -6 : 5);
+        this.pixelRect(ctx, legX - 3, y + state.height - 15, 7, 15);
+        ctx.fillStyle = "#ff6f91";
+        this.pixelRect(ctx, legX - 3, y + state.height - Math.round(15 * grow), 7, Math.max(3, Math.round(15 * grow)));
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawSuperBombSplatter(ctx: CanvasRenderingContext2D, splatter: SuperBombSplatterState): void {
+    const x = Math.round(splatter.x - this.camera.x);
+    const y = Math.round(splatter.y - this.camera.y);
+    const radius = Math.round(splatter.radius * (splatter.returning ? 0.75 : 1));
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = splatter.visualOnly ? 0.58 : splatter.returning ? 0.72 : 0.9;
+    ctx.fillStyle = splatter.returning ? "rgba(255, 207, 90, 0.34)" : "rgba(199, 25, 67, 0.58)";
+    ctx.fillRect(x - radius, y - Math.round(radius * 0.45), radius * 2, Math.round(radius * 0.9));
+    ctx.fillStyle = "#ff2f5f";
+    this.pixelRect(ctx, x - Math.round(radius * 0.34), y - Math.round(radius * 0.22), Math.round(radius * 0.68), Math.round(radius * 0.44));
+    ctx.fillStyle = "#7cff6b";
+    this.pixelRect(ctx, x + Math.round(radius * 0.12), y - Math.round(radius * 0.45), 5, 5);
+    if (splatter.returning) {
+      ctx.strokeStyle = "rgba(255, 207, 90, 0.42)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(Math.round(splatter.targetX - this.camera.x), Math.round(splatter.targetY - this.camera.y));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  private drawCreatureNameAndHealth(ctx: CanvasRenderingContext2D, cx: number, y: number, name: string, combatant?: Combatant): void {
+    if (combatant) {
+      this.drawHealthBar(ctx, cx - 25, y - 12, 50, combatant.hp, combatant.maxHp);
+    }
+    if (!this.showNames) {
+      return;
+    }
+    ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(name, cx, y - 16);
+  }
+
   private drawProjectile(ctx: CanvasRenderingContext2D, projectile: Projectile): void {
     const x = Math.round(projectile.x - this.camera.x);
     const y = Math.round(projectile.y - this.camera.y);
@@ -3140,14 +3488,33 @@ export class Game {
       ctx.translate(x, y);
       ctx.rotate(angle);
       ctx.fillStyle = "#2b3542";
-      ctx.fillRect(-24, -3, 58, 6);
+      ctx.fillRect(-38, -3, 82, 6);
       ctx.fillStyle = "#5ad7ff";
-      ctx.fillRect(28, -13, 7, 26);
-      ctx.fillRect(39, -18, 6, 16);
-      ctx.fillRect(39, 2, 6, 16);
-      ctx.fillRect(43, -4, 15, 8);
+      ctx.fillRect(38, -15, 7, 30);
+      ctx.fillRect(51, -21, 6, 19);
+      ctx.fillRect(51, 2, 6, 19);
+      ctx.fillRect(54, -4, 18, 8);
       ctx.fillStyle = "rgba(90, 215, 255, 0.36)";
-      ctx.fillRect(-44, -5, 26, 10);
+      ctx.fillRect(-62, -5, 32, 10);
+      ctx.restore();
+      return;
+    }
+    if (projectile.weaponId === "super-bomb") {
+      const angle = Math.atan2(projectile.vy, projectile.vx || 1) + projectile.age * 3.8;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(255, 47, 95, 0.36)";
+      ctx.fillRect(-22, -18, 44, 36);
+      ctx.fillStyle = "#c71943";
+      ctx.fillRect(-14, -8, 28, 18);
+      ctx.fillStyle = "#ff6f91";
+      ctx.fillRect(-18, -13, 12, 9);
+      ctx.fillRect(4, 3, 15, 9);
+      ctx.fillStyle = "#fff4a8";
+      ctx.fillRect(10, -17, 11, 5);
+      ctx.fillStyle = "rgba(255, 207, 90, 0.58)";
+      ctx.fillRect(-34, -4, 16, 8);
       ctx.restore();
       return;
     }
@@ -3463,21 +3830,23 @@ export class Game {
     const ty = Math.round(effect.ty - this.camera.y);
     if (effect.kind === "shockwave") {
       const targetRadius = Math.max(46, Math.hypot(tx - x, ty - y));
-      const bigBoom = effect.label === "BOOM" || effect.label === "HOLY BOOM";
-      const radius = bigBoom ? Math.round((effect.label === "HOLY BOOM" ? 28 : 18) + progress * targetRadius) : Math.round(14 + progress * 46);
+      const bombBoom = Boolean(effect.label?.includes("BOMB") || effect.label?.includes("FULL BODY EXPLOSION"));
+      const bigBoom = effect.label === "BOOM" || effect.label === "HOLY BOOM" || bombBoom;
+      const radius = bigBoom ? Math.round((effect.label === "HOLY BOOM" ? 28 : bombBoom ? 34 : 18) + progress * targetRadius) : Math.round(14 + progress * 46);
       ctx.strokeRect(x - radius, y - (bigBoom ? Math.round(radius * 0.22) : 5), radius * 2, bigBoom ? Math.round(radius * 0.44) : 10);
     } else if (effect.kind === "explosion") {
       const holy = effect.label?.startsWith("HOLY") ?? false;
+      const superBomb = Boolean(effect.label?.includes("SUPER BOMB") || effect.label?.includes("LIMB BOMB") || effect.label?.includes("FULL BODY EXPLOSION"));
       const targetRadius = Math.max(42, Math.hypot(tx - x, ty - y));
-      const radius = Math.round((effect.label === "FIREBALL" || effect.label === "HOLY FIREBALL" ? 22 : holy ? 46 : 34) + progress * targetRadius);
+      const radius = Math.round((effect.label === "FIREBALL" || effect.label === "HOLY FIREBALL" || effect.label?.includes("FIREBALL") ? 22 : superBomb ? 54 : holy ? 46 : 34) + progress * targetRadius);
       const core = Math.max(10, Math.round(radius * (1 - progress * 0.55)));
-      ctx.fillStyle = holy ? "#ffffff" : effect.label === "FIREBALL" ? "#fff4a8" : "#ff8f3d";
+      ctx.fillStyle = holy ? "#ffffff" : superBomb ? "#ff2f5f" : effect.label === "FIREBALL" ? "#fff4a8" : "#ff8f3d";
       ctx.fillRect(x - core, y - core, core * 2, core * 2);
-      ctx.fillStyle = holy ? "rgba(255, 244, 168, 0.58)" : "rgba(255, 111, 80, 0.58)";
+      ctx.fillStyle = holy ? "rgba(255, 244, 168, 0.58)" : superBomb ? "rgba(255, 47, 95, 0.56)" : "rgba(255, 111, 80, 0.58)";
       ctx.fillRect(x - radius, y - Math.round(radius * 0.62), radius * 2, Math.round(radius * 1.24));
-      ctx.fillStyle = holy ? "rgba(255, 255, 255, 0.72)" : "rgba(255, 207, 90, 0.72)";
+      ctx.fillStyle = holy ? "rgba(255, 255, 255, 0.72)" : superBomb ? "rgba(255, 207, 90, 0.68)" : "rgba(255, 207, 90, 0.72)";
       ctx.fillRect(x - Math.round(radius * 0.62), y - Math.round(radius * 0.42), Math.round(radius * 1.24), Math.round(radius * 0.84));
-      ctx.fillStyle = holy ? "rgba(90, 215, 255, 0.28)" : "rgba(43, 43, 50, 0.42)";
+      ctx.fillStyle = holy ? "rgba(90, 215, 255, 0.28)" : superBomb ? "rgba(59, 24, 34, 0.5)" : "rgba(43, 43, 50, 0.42)";
       ctx.fillRect(x - Math.round(radius * 0.82), y - Math.round(radius * 0.78), Math.round(radius * 1.64), Math.round(radius * 0.38));
     } else if (effect.kind === "slam") {
       const radius = Math.round(18 + progress * 72);
@@ -3504,7 +3873,7 @@ export class Game {
     } else if (effect.kind === "aura") {
       const targetRadius = Math.max(18, Math.hypot(tx - x, ty - y));
       const deathAura = effect.label === "DEATH AURA" || effect.label === "DEATH RELEASE" || effect.label === "DEATH RECALL";
-      const smokeCloud = effect.label === "SMOKE CLOUD" || effect.label === "HOLY SMOKE";
+      const smokeCloud = effect.label === "SMOKE CLOUD" || effect.label === "HOLY SMOKE" || Boolean(effect.label?.includes("BOMB") && effect.label?.includes("SMOKE")) || Boolean(effect.label?.includes("FULL BODY EXPLOSION") && effect.label?.includes("SMOKE"));
       const radius = deathAura
         ? Math.round(effect.label === "DEATH RECALL"
           ? 12 + targetRadius * (1 - progress)
@@ -3783,6 +4152,7 @@ export class Game {
     const van = this.combat.getWeaponRuntimeState("van", this.localPlayer.state.id);
     const spirit = this.combat.getWeaponRuntimeState("spirit-fighter", this.localPlayer.state.id);
     const cross = this.combat.getWeaponRuntimeState("cross", this.localPlayer.state.id);
+    const superBomb = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
     const judgment = this.combat.getJudgmentDayState();
     const jupiter = this.combat.getJupiterEventState();
     const uranus = this.combat.getUranusEventState();
@@ -3821,6 +4191,14 @@ export class Game {
       runtime.tridentFloodActive ? `Trident flood ${runtime.tridentFloodTimer.toFixed(1)}s` : "",
       runtime.tridentThrown ? "Trident thrown - pick it up" : "",
       !runtime.tridentFloodActive && runtime.tridentFloodCooldown > 0 ? `Trident flood cooldown ${runtime.tridentFloodCooldown.toFixed(1)}s` : "",
+      superBomb.equipped
+        ? `SUPER BOMB ${superBomb.usable ? "empty hand armed" : superBomb.disabledReason}${superBomb.primaryCooldown > 0 ? ` - pop ${superBomb.primaryCooldown.toFixed(1)}s` : ""}${superBomb.limbBombCooldown > 0 ? ` - limb ${superBomb.limbBombCooldown.toFixed(1)}s` : ""}${superBomb.superCooldown > 0 ? ` - full body ${superBomb.superCooldown.toFixed(1)}s` : ""}`
+        : "",
+      superBomb.missingLimbs.length > 0
+        ? `Missing ${superBomb.missingLimbs.map((limb) => `${superBombLimbLabel(limb.limb)} ${Math.round(limb.progress * 100)}%`).join(", ")}`
+        : "",
+      superBomb.reforming ? `Reforming ${superBomb.reformTimer.toFixed(1)}s` : "",
+      superBomb.weaknessStacks > 0 ? `Bomb weakness x${superBomb.weaknessStacks} - power ${Math.round(superBomb.weaknessScale * 100)}%` : "",
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -5026,6 +5404,8 @@ function colorForWeapon(id: WeaponId): string {
       return "#5ad7ff";
     case "trident":
       return "#5ad7ff";
+    case "super-bomb":
+      return "#ff6f91";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -5094,6 +5474,17 @@ function deathAuraColor(power: number): string {
   return power > 0.72 ? "#08080c" : power > 0.38 ? "#17101d" : "#23182b";
 }
 
+function superBombLimbLabel(limb: SuperBombLimbLossState["limb"]): string {
+  switch (limb) {
+    case "rightArm":
+      return "right arm";
+    case "leftLeg":
+      return "left leg";
+    case "rightLeg":
+      return "right leg";
+  }
+}
+
 function weaponHudDetail(
   id: WeaponId,
   runtime: ReturnType<CombatSystem["getWeaponRuntimeState"]>,
@@ -5145,6 +5536,14 @@ function weaponHudDetail(
         : runtime.tridentFloodCooldown > 0
           ? `Left strike - Right throw - Flood cooldown ${runtime.tridentFloodCooldown.toFixed(1)}s`
           : "Left strike - Right throw - both mouse buttons flood";
+    case "super-bomb":
+      if (runtime.superBombReforming) {
+        return `Reforming ${runtime.superBombReformTimer.toFixed(1)}s - body returning`;
+      }
+      if (!runtime.superBombUsable) {
+        return `SUPER BOMB disabled - ${runtime.superBombDisabledReason ?? "empty hand required"}`;
+      }
+      return `Empty-hand pop ${runtime.superBombPrimaryCooldown.toFixed(1)}s - limb ${runtime.superBombLimbBombCooldown.toFixed(1)}s - full body ${runtime.superBombSuperCooldown.toFixed(1)}s`;
     case "super-legs":
       return "Run/jump boost - Space kicks - leg armor";
     case "virgin-blood":
@@ -5248,6 +5647,8 @@ function weaponHelper(id: WeaponId): string {
       return "Strap arm - F cycles third slot - empty glove punches and reaches pickups";
     case "trident":
       return "Left strikes - Right throws/pick up - both mouse buttons flood - hits transform";
+    case "super-bomb":
+      return "Strap only - empty hands: left pop, right limb bomb, both full body";
     case "super-legs":
       return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":

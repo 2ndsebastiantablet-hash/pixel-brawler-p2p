@@ -18,6 +18,7 @@ const enabledWeapons = [
   "wings",
   "grabber",
   "trident",
+  "super-bomb",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -56,6 +57,7 @@ describe("weapon registry", () => {
       "wings",
       "grabber",
       "trident",
+      "super-bomb",
       "virgin-blood",
       "death-aura",
       "rocket",
@@ -110,6 +112,7 @@ describe("weapon registry", () => {
     expect(inventory.ammo.wings).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>).grabber).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>).trident).toBeUndefined();
+    expect((inventory.ammo as Record<string, unknown>)["super-bomb"]).toBeUndefined();
     expect(inventory.ammo["virgin-blood"]).toBeUndefined();
     expect(inventory.ammo["death-aura"]).toBeUndefined();
     expect(inventory.ammo.rocket).toBeUndefined();
@@ -139,6 +142,10 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("trident" as never).description).toContain("transform players into puffer fish, octopus, or goldfish");
     expect(weaponRegistry.get("trident" as never).primary.damage).toBeGreaterThanOrEqual(12);
     expect(weaponRegistry.get("trident" as never).primary.damage).toBeLessThanOrEqual(22);
+    expect(weaponRegistry.get("super-bomb" as never).name).toBe("SUPER BOMB");
+    expect(weaponRegistry.get("super-bomb" as never).description).toContain("Empty hand turns you into a walking bomb");
+    expect(weaponRegistry.get("super-bomb" as never).description).toContain("full body");
+    expect(weaponRegistry.get("super-bomb" as never).weight.label).toBe("Light");
     expect(weaponRegistry.get("super-legs").weight.moveSpeedMultiplier).toBeGreaterThanOrEqual(1.4);
     expect(weaponRegistry.get("super-legs").weight.accelerationMultiplier).toBeGreaterThanOrEqual(1.5);
     expect(weaponRegistry.get("super-legs").weight.airAccelerationMultiplier).toBeGreaterThanOrEqual(1.35);

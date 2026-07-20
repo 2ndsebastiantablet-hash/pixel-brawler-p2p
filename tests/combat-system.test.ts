@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(33);
+    expect(fighter.weaponInventory).toHaveLength(34);
     expect(fighter.weaponInventory).toContain("grabber");
     expect(fighter.weaponInventory).toContain("trident");
     expect(fighter.weaponInventory).toContain("mars");
@@ -3759,6 +3759,195 @@ describe("combat system", () => {
     expect(throwAll.label).toBe("Octopus Throw");
     expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(700);
     expect(tridentApi.getTridentTransformationState(owner.id)?.heldTargetIds).toHaveLength(0);
+  });
+
+  it("exposes Trident creature form state for real transformed player rendering", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "trident-visual-owner", x: 0, velocityX: 0, velocityY: 0 };
+    const target = { ...playerState, id: "trident-visual-target", x: 82, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Owner", "#5ad7ff");
+    combat.syncRemotePlayer({
+      id: target.id,
+      name: "Target",
+      color: "#ff6f91",
+      x: target.x,
+      y: target.y,
+      width: target.width,
+      height: target.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+
+    expect(combat.transformWithTrident(target.id, owner.id, "puffer")).toBe(true);
+
+    let snapshot = combat.getSnapshot() as unknown as {
+      tridentTransformations: Array<{
+        ownerId: string;
+        sourceId: string;
+        form: "puffer" | "goldfish" | "octopus";
+        timer: number;
+        duration: number;
+        inflateTimer: number;
+        heldTargetIds: string[];
+      }>;
+    };
+    expect(snapshot.tridentTransformations).toEqual([
+      expect.objectContaining({
+        ownerId: target.id,
+        sourceId: owner.id,
+        form: "puffer",
+        duration: 40,
+      }),
+    ]);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "TRANSFORM")).toBe(true);
+
+    combat.usePrimary({ ownerId: target.id, player: target, aim: { x: 1, y: 0 }, now: 420, heldMs: 0, isNewPress: true });
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.tridentTransformations[0].inflateTimer).toBeGreaterThan(0);
+
+    combat.update(40.2, [owner, target]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.tridentTransformations).toHaveLength(0);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "REVERT")).toBe(true);
+  });
+
+  it("makes SUPER BOMB a strap ability that only works with an empty hand and detonates the mouse point", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "bomb-user", x: 0, velocityX: 0, velocityY: 0 };
+    combat.syncLocalPlayer(owner, "Bomb", "#18dff5");
+    combat.setPlayerLoadout(owner.id, { frontStrap: "super-bomb" as never });
+    const near = combat.spawnTrainingDummy({ x: 120, y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height });
+    const far = combat.syncRemotePlayer({
+      id: "far-bomb-target",
+      name: "Far",
+      color: "#ff6f91",
+      x: 400,
+      y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height,
+      width: DEFAULT_PHYSICS.width,
+      height: DEFAULT_PHYSICS.height,
+      velocityX: 0,
+      velocityY: 0,
+    });
+    const api = combat as unknown as {
+      useSuperBombPrimary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }, target: { x: number; y: number }): { kind: string; weaponId: string; label: string };
+      getSuperBombRuntime(ownerId: string): { usable: boolean; disabledReason?: string; superCooldown: number; weaknessStacks: number; missingLimbs: unknown[] };
+    };
+
+    expect(api.getSuperBombRuntime(owner.id)).toMatchObject({ usable: true, superCooldown: 0, weaknessStacks: 0 });
+    const result = api.useSuperBombPrimary({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 1, y: -0.15 },
+      now: 500,
+      heldMs: 0,
+      isNewPress: true,
+    }, { x: near.x + near.width / 2, y: near.y + near.height / 2 });
+
+    expect(result).toMatchObject({ kind: "utility", weaponId: "super-bomb", label: "SUPER BOMB" });
+    expect(combat.getCombatant(near.id)!.hp).toBeLessThan(combat.getCombatant(far.id)!.hp);
+    expect(combat.getCombatant(near.id)!.velocityY).toBeLessThan(-200);
+    expect(Math.abs(owner.velocityX) + Math.abs(owner.velocityY)).toBeGreaterThan(100);
+    expect(combat.getSnapshot().effects.some((effect) => effect.kind === "explosion" && effect.label === "SUPER BOMB")).toBe(true);
+
+    combat.setPlayerLoadout(owner.id, { frontStrap: "super-bomb" as never, rightHand: "pistol" });
+    expect(api.getSuperBombRuntime(owner.id)).toMatchObject({ usable: false, disabledReason: "hand occupied" });
+    const blocked = api.useSuperBombPrimary({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 1, y: 0 },
+      now: 600,
+      heldMs: 0,
+      isNewPress: true,
+    }, { x: near.x, y: near.y });
+    expect(blocked).toMatchObject({ kind: "blocked", label: "Empty hand required" });
+  });
+
+  it("throws SUPER BOMB limb bombs and regrows missing limbs procedurally", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "limb-bomb-user", x: 0, velocityX: 0, velocityY: 0 };
+    const target = combat.spawnTrainingDummy({ x: 260, y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height });
+    combat.syncLocalPlayer(owner, "Bomb", "#18dff5");
+    combat.setPlayerLoadout(owner.id, { backStrap: "super-bomb" as never });
+    const api = combat as unknown as {
+      useSuperBombSecondary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+      getSuperBombRuntime(ownerId: string): { missingLimbs: Array<{ limb: "rightArm" | "leftLeg" | "rightLeg"; timer: number; duration: number; progress: number }>; limbBombCooldown: number };
+    };
+
+    const result = api.useSuperBombSecondary({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 1, y: -0.05 },
+      now: 700,
+      heldMs: 0,
+      isNewPress: true,
+    });
+
+    expect(result).toMatchObject({ kind: "fired", weaponId: "super-bomb", label: "Limb Bomb" });
+    const runtime = api.getSuperBombRuntime(owner.id);
+    expect(runtime.missingLimbs).toHaveLength(1);
+    expect(["rightArm", "leftLeg", "rightLeg"]).toContain(runtime.missingLimbs[0].limb);
+    expect(runtime.missingLimbs[0].progress).toBe(0);
+    expect(combat.getSnapshot().projectiles.some((projectile) => projectile.weaponId === ("super-bomb" as never) && projectile.label === "Limb Bomb")).toBe(true);
+
+    for (let tick = 0; tick < 10; tick += 1) {
+      combat.update(0.12, [owner]);
+    }
+    expect(combat.getCombatant(target.id)!.hp).toBeLessThan(100);
+    expect(combat.getSnapshot().effects.some((effect) => effect.label === "LIMB BOMB")).toBe(true);
+
+    combat.update(6, [owner]);
+    expect(api.getSuperBombRuntime(owner.id).missingLimbs[0]?.progress ?? 1).toBeGreaterThan(0.4);
+    combat.update(10, [owner]);
+    expect(api.getSuperBombRuntime(owner.id).missingLimbs).toHaveLength(0);
+  });
+
+  it("runs SUPER BOMB full-body explosion, poison splatters, reformation, cooldown, and weakening", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "super-bomb-user", x: 0, velocityX: 0, velocityY: 0 };
+    const victim = combat.spawnTrainingDummy({ x: 190, y: DEFAULT_PHYSICS.groundY - DEFAULT_PHYSICS.height });
+    combat.syncLocalPlayer(owner, "Bomb", "#18dff5");
+    combat.setPlayerLoadout(owner.id, { frontStrap: "super-bomb" as never });
+    const api = combat as unknown as {
+      useSuperBombSuper(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+      getSuperBombRuntime(ownerId: string): { superCooldown: number; weaknessStacks: number; reforming: boolean; reformTimer: number };
+    };
+
+    const result = api.useSuperBombSuper({
+      ownerId: owner.id,
+      player: owner,
+      aim: { x: 0, y: -1 },
+      now: 900,
+      heldMs: 0,
+      isNewPress: true,
+    });
+
+    expect(result).toMatchObject({ kind: "utility", weaponId: "super-bomb", label: "FULL BODY EXPLOSION" });
+    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(50);
+    let snapshot = combat.getSnapshot() as unknown as {
+      superBombSplatters: Array<{ ownerId: string; x: number; y: number; returning: boolean; age: number }>;
+      superBombReformations: Array<{ ownerId: string; timer: number; duration: number; progress: number }>;
+    };
+    expect(snapshot.superBombSplatters.length).toBeGreaterThanOrEqual(18);
+    expect(snapshot.superBombReformations).toHaveLength(1);
+    expect(api.getSuperBombRuntime(owner.id)).toMatchObject({ superCooldown: 90, weaknessStacks: 1, reforming: true });
+    expect(combat.getCombatant(owner.id)?.statuses.some((status) => status.id === ("superBombReforming" as never))).toBe(true);
+
+    victim.x = snapshot.superBombSplatters[0].x - victim.width / 2;
+    victim.y = snapshot.superBombSplatters[0].y - victim.height / 2;
+    combat.update(0.25, [owner]);
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === "poison")).toBe(true);
+
+    combat.update(10.2, [owner]);
+    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
+    expect(snapshot.superBombSplatters).toHaveLength(0);
+    expect(snapshot.superBombReformations).toHaveLength(0);
+    expect(api.getSuperBombRuntime(owner.id).reforming).toBe(false);
+    expect(api.getSuperBombRuntime(owner.id).superCooldown).toBeLessThan(90);
+    expect(api.getSuperBombRuntime(owner.id).weaknessStacks).toBe(1);
   });
 
   it("lets Neptune, Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {
