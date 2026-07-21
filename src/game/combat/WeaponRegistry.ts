@@ -18,6 +18,7 @@ import { moon } from "./weapons/Moon";
 import { neptune } from "./weapons/Neptune";
 import { jupiter } from "./weapons/Jupiter";
 import { uranus } from "./weapons/Uranus";
+import { petBear, petCat, petChipmunk, petDeer, petDog, petParrot } from "./weapons/Pets";
 import { pistol } from "./weapons/Pistol";
 import { revolver } from "./weapons/Revolver";
 import { rocket } from "./weapons/Rocket";
@@ -55,6 +56,12 @@ export const WEAPON_IDS = [
   "trident",
   "super-bomb",
   "clown-kit",
+  "pet-bear",
+  "pet-cat",
+  "pet-dog",
+  "pet-deer",
+  "pet-parrot",
+  "pet-chipmunk",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -90,6 +97,12 @@ const ALL_WEAPON_IDS = [
   "trident",
   "super-bomb",
   "clown-kit",
+  "pet-bear",
+  "pet-cat",
+  "pet-dog",
+  "pet-deer",
+  "pet-parrot",
+  "pet-chipmunk",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -128,6 +141,12 @@ const weaponDefinitions: WeaponDefinition[] = [
   trident,
   superBomb,
   clownKit,
+  petBear,
+  petCat,
+  petDog,
+  petDeer,
+  petParrot,
+  petChipmunk,
   virginBlood,
   deathAura,
   rocket,

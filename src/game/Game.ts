@@ -2,8 +2,8 @@ import { Camera } from "./Camera";
 import { InputController } from "./Input";
 import { Player } from "./Player";
 import { DEFAULT_PHYSICS, PLATFORM_LEFT, PLATFORM_RIGHT, type InputFrame, type PhysicsConfig, type PlayerPhysicsState } from "./Physics";
-import { CombatSystem, type CombatEventPacket, type SuperLegsKickKind } from "./combat/CombatSystem";
-import type { AmmoPickup, ClownBalloonState, ClownMonkeyState, ClownStageState, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, SpikeParticleState, SpikeState, SuperBombLimbLossState, SuperBombReformationState, SuperBombSplatterState, TridentFloodState, TridentTransformationState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
+import { CombatSystem, isPetWeaponId, type CombatEventPacket, type PetSlot, type SuperLegsKickKind } from "./combat/CombatSystem";
+import type { AmmoPickup, ClownBalloonState, ClownMonkeyState, Combatant, CombatEffect, CrossShieldState, DroppedWeapon, GrappleState, JudgmentBeamState, JupiterEventState, JupiterFootstepMarkerState, JupiterSharkState, MarsCloneState, MarsEventState, NeptuneCreatureState, NeptuneEventState, NeptunePelletState, PetState, SpikeParticleState, SpikeState, SuperBombLimbLossState, SuperBombReformationState, SuperBombSplatterState, TridentFloodState, TridentTransformationState, UranusEventState, VanState, ZombieState } from "./combat/CombatSystem";
 import type { Projectile } from "./combat/Projectile";
 import type { WeaponId, WeaponInventoryState, WeaponUseResult } from "./combat/Weapon";
 import { COMBAT_TUNING } from "./combat/CombatTuning";
@@ -163,7 +163,6 @@ export class Game {
   private moonChordHeld = false;
   private tridentChordHeld = false;
   private superBombChordHeld = false;
-  private clownChordHeld = false;
   private readonly remoteCombatEvents: CombatEventPacket[] = [];
 
   constructor(parent: HTMLElement, private readonly options: GameOptions) {
@@ -328,7 +327,6 @@ export class Game {
     this.moonChordHeld = false;
     this.tridentChordHeld = false;
     this.superBombChordHeld = false;
-    this.clownChordHeld = false;
     this.footstepTimer = 0;
     this.attackVisual = null;
     this.running = true;
@@ -976,38 +974,9 @@ export class Game {
     const clownPrimaryHandOpen = !this.loadout.leftHand;
     const clownSecondaryHandOpen = !this.loadout.rightHand;
     const clownHasOpenHand = clownRuntime.clownKitEquipped && (clownPrimaryHandOpen || clownSecondaryHandOpen);
-    const clownChordActive = clownHasOpenHand && input.primaryHeld && input.secondaryHeld;
-    const clownChordWithinWindow = Math.abs(this.primaryHeldMs - this.secondaryHeldMs) <= 180 || (input.primaryPressed && input.secondaryPressed);
-    const clownChordStarted = !moonChordActive
-      && !spikeModeActive
-      && !spiritActive
-      && !tridentTransformationMouseConsumed
-      && !tridentChordSuppress
-      && !superBombChordSuppress
-      && !superBombMouseConsumed
-      && clownChordActive
-      && !this.clownChordHeld
-      && clownChordWithinWindow
-      && (input.primaryPressed || input.secondaryPressed);
-    if (clownChordStarted) {
-      this.recordAttack(this.combat.useClownKitSuper({
-        ownerId: this.localPlayer.state.id,
-        player: this.localPlayer.state,
-        aim,
-        now: time,
-        heldMs: Math.max(this.primaryHeldMs, this.secondaryHeldMs),
-        isNewPress: true,
-      }), "primary");
-    }
-    const clownChordSuppress = clownChordStarted || (clownChordActive && this.clownChordHeld);
-    if (clownChordStarted) {
-      this.clownChordHeld = true;
-    } else if (!clownChordActive) {
-      this.clownChordHeld = false;
-    }
 
     let clownMouseConsumed = false;
-    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && !superBombMouseConsumed && !clownChordSuppress && clownHasOpenHand) {
+    if (!moonChordActive && !spikeModeActive && !spiritActive && !tridentTransformationMouseConsumed && !tridentChordSuppress && !superBombChordSuppress && !superBombMouseConsumed && clownHasOpenHand) {
       if (clownPrimaryHandOpen && (input.primaryPressed || input.primaryHeld)) {
         this.recordAttack(this.combat.useClownKitPrimary({
           ownerId: this.localPlayer.state.id,
@@ -1031,7 +1000,7 @@ export class Game {
       }
     }
 
-    const mouseSuppressed = moonChordActive || spikeModeActive || spiritActive || tridentTransformationMouseConsumed || tridentChordSuppress || superBombChordSuppress || superBombMouseConsumed || clownChordSuppress || clownMouseConsumed;
+    const mouseSuppressed = moonChordActive || spikeModeActive || spiritActive || tridentTransformationMouseConsumed || tridentChordSuppress || superBombChordSuppress || superBombMouseConsumed || clownMouseConsumed;
     const primaryAction = mouseSuppressed ? null : resolveMouseWeaponAction("primary", this.loadout);
     if (primaryAction && (input.primaryPressed || input.primaryHeld || input.primaryReleased)) {
       this.handleWeaponAction(primaryAction.weaponId, primaryAction.action, {
@@ -1105,6 +1074,10 @@ export class Game {
   private useLoadoutSlot(slot: LoadoutSlotId, action: "primary" | "secondary", time: number): void {
     const weaponId = this.loadout[slot];
     if (!weaponId) {
+      return;
+    }
+    if ((slot === "frontStrap" || slot === "backStrap") && isPetWeaponId(weaponId)) {
+      this.recordAttack(this.combat.usePetItem(this.localPlayer.state.id, slot as PetSlot, weaponId, this.localPlayer.state, time), action);
       return;
     }
     const previousWeapon = this.combat.getPlayerInventory().equippedWeapon;
@@ -1557,16 +1530,18 @@ export class Game {
     const empowered = local?.statuses.some((status) => status.id === "empowered") ? 1.18 : 1;
     const holy = local?.statuses.some((status) => status.id === "holyBuff") ? 1.16 : 1;
     const spiritFocus = local?.statuses.some((status) => status.id === "spiritFocus") ? 1.1 : 1;
+    const deerAura = local?.statuses.some((status) => status.id === "petDeerAura") ? 1.12 : 1;
     const winded = local?.statuses.some((status) => status.id === "winded") ? 0.55 : 1;
     const angelWings = local?.statuses.some((status) => status.id === "angelWings") ?? false;
     const strappedWings = loadoutHasWeapon(this.loadout, "wings");
+    const clownRuntime = this.combat.getWeaponRuntimeState("clown-kit", this.localPlayer.state.id);
     const superBomb = this.combat.getSuperBombRuntime(this.localPlayer.state.id);
     const superBombMissingLeg = superBomb.missingLimbs.some((limb) => limb.limb === "leftLeg" || limb.limb === "rightLeg");
     const superLegs = loadoutHasWeapon(this.loadout, "super-legs") && !superBombMissingLeg && !superBomb.reforming;
     const superLegsMoveScale = superLegs ? 1.18 : 1;
     const superBombMoveScale = superBomb.reforming ? 0 : superBomb.weaknessScale * (superBombMissingLeg ? 0.24 : 1);
-    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * spiritFocus * winded * superLegsMoveScale * superBombMoveScale;
-    const jumpStatusScale = (empowered > 1 ? 1.06 : 1) * (spiritFocus > 1 ? 1.03 : 1) * (winded < 1 ? 0.72 : 1) * (superBombMissingLeg ? 0.72 : 1);
+    const movementScale = legSlow * legStagger * suppressed * poison * steadyLock * minigunSlow * empowered * holy * spiritFocus * deerAura * winded * superLegsMoveScale * superBombMoveScale;
+    const jumpStatusScale = (empowered > 1 ? 1.06 : 1) * (spiritFocus > 1 ? 1.03 : 1) * (deerAura > 1 ? 1.06 : 1) * (winded < 1 ? 0.72 : 1) * (superBombMissingLeg ? 0.72 : 1);
     const physics = {
       ...DEFAULT_PHYSICS,
       maxRunSpeed: DEFAULT_PHYSICS.maxRunSpeed * weight.moveSpeedMultiplier * movementScale,
@@ -1643,7 +1618,19 @@ export class Game {
             airAcceleration: eventPhysics.airAcceleration * 0.94,
           }
           : eventPhysics;
-    return weapon.id === "wings" || strappedWings || angelWings ? { ...transformedPhysics, wingFlight: WING_FLIGHT_CONFIG } : transformedPhysics;
+    const clownPhysics = clownRuntime.clownKitBackBalloon
+      ? {
+        ...transformedPhysics,
+        gravity: transformedPhysics.gravity * 0.58,
+        airAcceleration: transformedPhysics.airAcceleration * 0.88,
+        jumpVelocity: transformedPhysics.jumpVelocity * 1.12,
+        doubleJumpVelocity: transformedPhysics.doubleJumpVelocity * 1.04,
+        thirdJumpVelocity: transformedPhysics.thirdJumpVelocity ? transformedPhysics.thirdJumpVelocity * 1.02 : transformedPhysics.thirdJumpVelocity,
+        maxFallSpeed: clownRuntime.clownKitMaxFallSpeed,
+        heldJumpGravityScale: clownRuntime.clownKitGlideGravityScale,
+      }
+      : transformedPhysics;
+    return weapon.id === "wings" || strappedWings || angelWings ? { ...clownPhysics, wingFlight: WING_FLIGHT_CONFIG } : clownPhysics;
   }
 
   private applyLocalNeptuneWaterInput(input: InputFrame, dt: number): void {
@@ -1790,6 +1777,27 @@ export class Game {
     const bob = Math.round(Math.sin(performance.now() * 0.012 + state.x * 0.04) * 1);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
+    const back = -facing;
+    const balloonBob = Math.round(Math.sin(performance.now() * 0.006 + state.x * 0.025) * 4);
+    const balloonSway = Math.round(clampNumber(-state.velocityX * 0.035, -9, 9));
+    const balloonX = cx + back * 28 + balloonSway;
+    const balloonY = y - 20 + balloonBob;
+    ctx.save();
+    ctx.globalAlpha = 0.82;
+    ctx.strokeStyle = "rgba(255, 244, 168, 0.82)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + back * 9, y + 22);
+    ctx.quadraticCurveTo(cx + back * 18 + balloonSway * 0.4, y + 0 + balloonBob, balloonX, balloonY + 17);
+    ctx.stroke();
+    ctx.fillStyle = "#ff5fcf";
+    this.pixelRect(ctx, balloonX - 9, balloonY - 12, 18, 22);
+    this.pixelRect(ctx, balloonX - 13, balloonY - 7, 26, 14);
+    ctx.fillStyle = "#ffd84d";
+    this.pixelRect(ctx, balloonX - 3, balloonY + 10, 6, 5);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.72)";
+    this.pixelRect(ctx, balloonX - 5, balloonY - 8, 5, 7);
+    ctx.restore();
     ctx.fillStyle = "#ffffff";
     this.pixelRect(ctx, cx - 11, y + 9 + bob, 22, 12);
     ctx.fillStyle = "#05060a";
@@ -1994,6 +2002,30 @@ export class Game {
       ctx.fillStyle = "#ff5fcf";
       this.pixelRect(ctx, Math.round(x - size / 2 - 2), Math.round(y - size / 2 + 1), 3, 5);
       this.pixelRect(ctx, Math.round(x + size / 2 - 1), Math.round(y - size / 2 + 1), 3, 5);
+      return;
+    }
+    if (isPetWeaponId(weaponId)) {
+      const left = Math.round(x - size / 2);
+      const top = Math.round(y - size / 2);
+      ctx.fillStyle = colorForWeapon(weaponId);
+      this.pixelRect(ctx, left, top + 2, size, Math.max(4, size - 3));
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, left + Math.max(2, Math.round(size * 0.62)), top + 4, 2, 2);
+      if (weaponId === "pet-deer") {
+        ctx.fillStyle = "#5d3f29";
+        this.pixelRect(ctx, left + size - 2, top - 3, 2, 6);
+        this.pixelRect(ctx, left + size + 1, top - 2, 2, 5);
+      } else if (weaponId === "pet-parrot") {
+        ctx.fillStyle = "#ffd84d";
+        this.pixelRect(ctx, left + size - 1, top + 5, 4, 2);
+      } else if (weaponId === "pet-chipmunk") {
+        ctx.fillStyle = "#fff4a8";
+        this.pixelRect(ctx, left - 3, top + 1, 5, 5);
+      } else {
+        ctx.fillStyle = "#fff4a8";
+        this.pixelRect(ctx, left + 1, top, 3, 3);
+        this.pixelRect(ctx, left + size - 4, top, 3, 3);
+      }
       return;
     }
     ctx.fillStyle = colorForWeapon(weaponId);
@@ -2888,14 +2920,12 @@ export class Game {
     const jupiterSharkIds = new Set([...snapshot.jupiterSharks, ...tridentFloodSharks].map((shark) => shark.id));
     const marsCloneById = new Map(snapshot.marsClones.map((clone) => [clone.id, clone]));
     const neptuneCreatureById = new Map(snapshot.neptuneCreatures.map((creature) => [creature.id, creature]));
+    const petById = new Map(snapshot.pets.map((pet) => [pet.id, pet]));
     for (const flood of snapshot.tridentFloods) {
       this.drawTridentFlood(ctx, flood);
     }
     for (const splatter of snapshot.superBombSplatters) {
       this.drawSuperBombSplatter(ctx, splatter);
-    }
-    for (const stage of snapshot.clownStages) {
-      this.drawClownStage(ctx, stage);
     }
     for (const van of snapshot.vans) {
       this.drawVan(ctx, van);
@@ -2910,8 +2940,11 @@ export class Game {
         this.drawMarsCloneParticles(ctx, clone);
       }
     }
+    for (const pet of snapshot.pets) {
+      this.drawPet(ctx, pet);
+    }
     for (const combatant of snapshot.combatants) {
-      if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id) && !jupiterSharkIds.has(combatant.id)) {
+      if (combatant.id !== this.localPlayer.state.id && !this.remotes.has(combatant.id) && !jupiterSharkIds.has(combatant.id) && !petById.has(combatant.id)) {
         const zombie = snapshot.zombies.find((item) => item.id === combatant.id);
         const marsClone = marsCloneById.get(combatant.id);
         const neptuneCreature = neptuneCreatureById.get(combatant.id);
@@ -2994,34 +3027,108 @@ export class Game {
     }
   }
 
-  private drawClownStage(ctx: CanvasRenderingContext2D, stage: ClownStageState): void {
-    const x = Math.round(stage.x - this.camera.x);
-    const y = Math.round(stage.y - this.camera.y);
-    const progress = 1 - stage.timer / Math.max(0.01, stage.duration);
-    const pulse = 0.5 + Math.sin(stage.age * 7.5) * 0.5;
+  private drawPet(ctx: CanvasRenderingContext2D, pet: PetState): void {
+    const x = Math.round(pet.x - this.camera.x);
+    const y = Math.round(pet.y - this.camera.y);
+    const w = Math.round(pet.width);
+    const h = Math.round(pet.height);
+    const cx = x + Math.round(w / 2);
+    const cy = y + Math.round(h / 2);
+    const facing = pet.vx < -5 ? -1 : pet.vx > 5 ? 1 : 1;
+    const bob = Math.round(Math.sin((pet.age + pet.x * 0.01) * (pet.kind === "chipmunk" ? 18 : 8)) * (pet.kind === "parrot" ? 5 : 2));
+    const color = colorForWeapon(pet.weaponId);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = stage.visualOnly ? 0.62 : 0.88;
-    ctx.fillStyle = "rgba(4, 6, 12, 0.76)";
-    ctx.fillRect(x - 170, y - 86, 340, 96);
-    ctx.fillStyle = "#ff5fcf";
-    ctx.fillRect(x - 182, y - 92, 364, 8);
-    ctx.fillRect(x - 182, y + 10, 364, 10);
-    ctx.fillStyle = "#fff4a8";
-    for (let light = -150; light <= 150; light += 50) {
-      const flicker = Math.round(pulse * 4 + (light % 3));
-      ctx.fillRect(x + light - 6, y - 106 - flicker, 12, 12);
+    ctx.globalAlpha = pet.visualOnly ? 0.62 : 0.96;
+
+    if (pet.kind === "deer") {
+      ctx.strokeStyle = "rgba(255, 212, 138, 0.34)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 4, 70, 34, 0, 0, Math.PI * 2);
+      ctx.stroke();
     }
-    ctx.strokeStyle = stage.finalPulse ? "rgba(255, 244, 168, 0.72)" : "rgba(255, 95, 207, 0.48)";
-    ctx.lineWidth = stage.finalPulse ? 5 : 3;
-    ctx.beginPath();
-    ctx.ellipse(x, y - 48, 120 + progress * 180 + pulse * 12, 34 + progress * 70, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(stage.finalPulse ? "PUNCHLINE" : "HA HA", x, y - 44);
+
+    if (pet.kind === "bear") {
+      ctx.fillStyle = "#4d2f20";
+      this.pixelRect(ctx, x + 6, y + 11, w - 12, h - 14);
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 2, y + 15, w - 5, h - 22);
+      this.pixelRect(ctx, x + facing * 6 + Math.round(w / 2) - 14, y + 3, 28, 23);
+      ctx.fillStyle = "#6f442a";
+      this.pixelRect(ctx, x + facing * 6 + Math.round(w / 2) - 19, y + 1, 9, 9);
+      this.pixelRect(ctx, x + facing * 6 + Math.round(w / 2) + 10, y + 1, 9, 9);
+      ctx.fillStyle = "#120b08";
+      this.pixelRect(ctx, cx + facing * 12, y + 11, 3, 3);
+      this.pixelRect(ctx, cx + facing * 3, y + 13, 8, 5);
+      ctx.fillStyle = "#26170f";
+      this.pixelRect(ctx, x + 10, y + h - 9, 8, 9);
+      this.pixelRect(ctx, x + w - 18, y + h - 9, 8, 9);
+    } else if (pet.kind === "cat") {
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 4, y + 8 + bob, w - 8, h - 10);
+      this.pixelRect(ctx, x + facing * 5 + Math.round(w / 2) - 7, y + 2 + bob, 14, 12);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x + facing * 5 + Math.round(w / 2) - 8, y + bob, 4, 5);
+      this.pixelRect(ctx, x + facing * 5 + Math.round(w / 2) + 4, y + bob, 4, 5);
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, cx + facing * 7, y + 7 + bob, 2, 2);
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x - facing * 9, y + 9 + bob, 11, 3);
+    } else if (pet.kind === "dog") {
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 5, y + 9 + bob, w - 9, h - 10);
+      this.pixelRect(ctx, x + facing * 7 + Math.round(w / 2) - 8, y + 3 + bob, 16, 13);
+      ctx.fillStyle = "#5c341f";
+      this.pixelRect(ctx, x + facing * 7 + Math.round(w / 2) - 10, y + 5 + bob, 5, 10);
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, cx + facing * 10, y + 8 + bob, 2, 2);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x - facing * 8, y + 7 + bob, 9, 3);
+    } else if (pet.kind === "deer") {
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 6, y + 12 + bob, w - 12, h - 14);
+      this.pixelRect(ctx, x + facing * 8 + Math.round(w / 2) - 8, y + 5 + bob, 16, 13);
+      ctx.fillStyle = "#5d3f29";
+      this.pixelRect(ctx, cx + facing * 10, y - 3 + bob, 3, 10);
+      this.pixelRect(ctx, cx + facing * 15, y - 1 + bob, 3, 9);
+      this.pixelRect(ctx, cx + facing * 10, y - 3 + bob, facing * 11, 3);
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, cx + facing * 11, y + 9 + bob, 2, 2);
+    } else if (pet.kind === "parrot") {
+      ctx.fillStyle = "rgba(72, 216, 107, 0.28)";
+      this.pixelRect(ctx, x - 6, y + 2 + bob, w + 12, h + 7);
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 7, y + 8 + bob, w - 10, h - 6);
+      ctx.fillStyle = "#ffdf5a";
+      this.pixelRect(ctx, x + facing * 8 + Math.round(w / 2), y + 10 + bob, 7, 4);
+      ctx.fillStyle = "#5ad7ff";
+      this.pixelRect(ctx, x + (facing > 0 ? 1 : w - 10), y + 12 + bob, 12, 8);
+      ctx.fillStyle = "#ff6f91";
+      this.pixelRect(ctx, x - facing * 3 + Math.round(w / 2), y + h - 2 + bob, 8, 5);
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, cx + facing * 5, y + 11 + bob, 2, 2);
+    } else {
+      ctx.fillStyle = color;
+      this.pixelRect(ctx, x + 2, y + 7 + bob, w - 4, h - 7);
+      this.pixelRect(ctx, x + facing * 5 + Math.round(w / 2) - 5, y + 3 + bob, 10, 9);
+      ctx.fillStyle = "#fff4a8";
+      this.pixelRect(ctx, x - facing * 8, y + 4 + bob, 10, 10);
+      ctx.fillStyle = "#101018";
+      this.pixelRect(ctx, cx + facing * 5, y + 7 + bob, 2, 2);
+    }
+
+    if (pet.carryingWeaponId) {
+      this.drawTinyLoadoutItem(ctx, pet.carryingWeaponId, cx, y - 7, 7);
+    }
+
+    const hpWidth = Math.max(18, Math.min(46, w + 8));
+    const hpProgress = clampNumber(pet.hp / Math.max(1, pet.maxHp), 0, 1);
+    ctx.globalAlpha = pet.visualOnly ? 0.5 : 0.88;
+    ctx.fillStyle = "rgba(5, 6, 10, 0.82)";
+    this.pixelRect(ctx, cx - Math.round(hpWidth / 2), y - 10, hpWidth, 4);
+    ctx.fillStyle = hpProgress > 0.35 ? "#7cff6b" : "#ff6f91";
+    this.pixelRect(ctx, cx - Math.round(hpWidth / 2), y - 10, Math.max(1, Math.round(hpWidth * hpProgress)), 4);
     ctx.restore();
   }
 
@@ -4476,6 +4583,24 @@ export class Game {
     const superLegsText = hasSuperLegs
       ? `Super Legs jumps ${Math.min(this.localPlayer.state.jumpsUsed, 3)}/3${this.localPlayer.state.grounded ? " - reset" : ""}`
       : "";
+    const petStatusText = (["frontStrap", "backStrap"] as PetSlot[])
+      .map((slot) => {
+        const slotWeapon = this.loadout[slot];
+        if (!isPetWeaponId(slotWeapon)) {
+          return "";
+        }
+        const pet = this.combat.getPetRuntime(this.localPlayer.state.id, slot, slotWeapon);
+        const name = loadoutWeaponName(slotWeapon);
+        if (pet.active) {
+          return `${LOADOUT_SLOT_LABELS[slot]} ${name} ${Math.ceil(pet.hp)}/${pet.maxHp}`;
+        }
+        if (pet.cooldown > 0) {
+          return `${LOADOUT_SLOT_LABELS[slot]} ${name} ${pet.cooldown.toFixed(1)}s`;
+        }
+        return `${LOADOUT_SLOT_LABELS[slot]} ${name} ready`;
+      })
+      .filter(Boolean)
+      .join(" - ");
     const special = [
       teleport.pending ? `Teleport ${teleport.timer.toFixed(1)}s - right cancel` : "",
       lightning.charging ? `Lightning in ${lightning.chargeTimer.toFixed(1)}s` : "",
@@ -4507,8 +4632,9 @@ export class Game {
       superBomb.reforming ? `Reforming ${superBomb.reformTimer.toFixed(1)}s` : "",
       superBomb.weaknessStacks > 0 ? `Bomb weakness x${superBomb.weaknessStacks} - power ${Math.round(superBomb.weaknessScale * 100)}%` : "",
       clown.clownKitEquipped
-        ? `Clown Kit ${clown.clownKitUsable ? "open hand armed" : clown.clownKitDisabledReason ?? "needs open hand"}${clown.clownKitBalloonCooldown > 0 ? ` - balloon ${clown.clownKitBalloonCooldown.toFixed(1)}s` : ""}${clown.clownKitStageCooldown > 0 ? ` - stage ${clown.clownKitStageCooldown.toFixed(1)}s` : ""}${clown.clownKitBalloonCount > 0 ? ` - balloons ${clown.clownKitBalloonCount}` : ""}${clown.clownKitMonkeyCount > 0 ? ` - monkeys ${clown.clownKitMonkeyCount}` : ""}${clown.clownKitActiveStage ? " - performing" : ""}`
+        ? `Clown Kit ${clown.clownKitUsable ? "open hand armed" : clown.clownKitDisabledReason ?? "needs open hand"} - back balloon glide${clown.clownKitBalloonCooldown > 0 ? ` - balloon ${clown.clownKitBalloonCooldown.toFixed(1)}s` : ""}${clown.clownKitBalloonCount > 0 ? ` - balloons ${clown.clownKitBalloonCount}` : ""}${clown.clownKitMonkeyCount > 0 ? ` - monkeys ${clown.clownKitMonkeyCount}` : ""}`
         : "",
+      petStatusText,
       (loadoutHasWeapon(this.loadout, "van") || van.vanActive || van.vanStored || van.vanDriving || van.vanDestroyed)
         ? `Van HP ${Math.ceil(van.vanHealth)}/${van.vanMaxHealth} - Gas ${Math.ceil(van.vanGas)}/${van.vanMaxGas} - Speed ${van.vanSpeedLevel}${van.vanDriving ? " - Space exits" : " - Space enters"}${van.vanHonkCooldown > 0 ? ` - Honk ${van.vanHonkCooldown.toFixed(1)}s` : ""}${van.vanDestroyed ? " - wrecked" : van.vanStored ? " - stored" : ""}`
         : "",
@@ -5717,6 +5843,18 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff6f91";
     case "clown-kit":
       return "#ff5fcf";
+    case "pet-bear":
+      return "#9f6a3d";
+    case "pet-cat":
+      return "#c8c4d8";
+    case "pet-dog":
+      return "#d69a52";
+    case "pet-deer":
+      return "#ffd48a";
+    case "pet-parrot":
+      return "#48d86b";
+    case "pet-chipmunk":
+      return "#c98748";
     case "virgin-blood":
       return "#fff4a8";
     case "death-aura":
@@ -5803,6 +5941,13 @@ function weaponHudDetail(
   primaryHeldMs: number,
   fallback: string,
 ): string {
+  if (isPetWeaponId(id)) {
+    return runtime.petActive
+      ? `Pet active ${Math.ceil(runtime.petHp)}/${runtime.petMaxHp}`
+      : runtime.petCooldown > 0
+        ? `Pet cooldown ${runtime.petCooldown.toFixed(1)}s`
+        : "Q/E summons or recalls strap pet";
+  }
   switch (id) {
     case "slingshot":
       return `Pull ${Math.round(Math.min(primaryHeldMs / 850, 1) * 100)}% - bounce/scatter`;
@@ -5862,7 +6007,7 @@ function weaponHudDetail(
       if (!runtime.clownKitUsable) {
         return `Disabled - ${runtime.clownKitDisabledReason ?? "open hand required"}`;
       }
-      return `Finger gun - balloon ${runtime.clownKitBalloonCooldown.toFixed(1)}s - stage ${runtime.clownKitStageCooldown.toFixed(1)}s`;
+      return `Finger gun - back balloon glide - balloon ${runtime.clownKitBalloonCooldown.toFixed(1)}s`;
     case "super-legs":
       return "Run/jump boost - Space kicks - leg armor";
     case "virgin-blood":
@@ -5933,6 +6078,22 @@ function weaponHudDetail(
 }
 
 function weaponHelper(id: WeaponId): string {
+  if (isPetWeaponId(id)) {
+    switch (id) {
+      case "pet-bear":
+        return "Strap pet - Q/E summon - attacks anyone nearby, including you";
+      case "pet-cat":
+        return "Strap pet - Q/E summon - fast pounce marks targets";
+      case "pet-dog":
+        return "Strap pet - Q/E summon - protects and shares some damage";
+      case "pet-deer":
+        return "Strap pet - Q/E summon - movement aura and antler ram";
+      case "pet-parrot":
+        return "Strap pet - Q/E summon - weakly mimics simple attacks";
+      case "pet-chipmunk":
+        return "Strap pet - Q/E summon - fetches pickups and trips enemies";
+    }
+  }
   switch (id) {
     case "pistol":
       return "Tap shots - R reload/perfect - pistol stays equipped";
@@ -5969,7 +6130,7 @@ function weaponHelper(id: WeaponId): string {
     case "super-bomb":
       return "Strap only - empty hands: left pop, right limb bomb, both full body";
     case "clown-kit":
-      return "Head item - open hand: left finger gun, right balloons, both Comedy Stage";
+      return "Head item - open hand: left finger gun, right balloons, passive back balloon glide";
     case "super-legs":
       return "Leg gear only - Space combos kick without replacing jump";
     case "virgin-blood":

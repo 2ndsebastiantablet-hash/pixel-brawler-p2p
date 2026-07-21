@@ -45,7 +45,7 @@ describe("combat system", () => {
       legShape: "athletic",
       equippedWeapon: "pistol",
     });
-    expect(fighter.weaponInventory).toHaveLength(35);
+    expect(fighter.weaponInventory).toHaveLength(41);
     expect(fighter.weaponInventory).toContain("grabber");
     expect(fighter.weaponInventory).toContain("trident");
     expect(fighter.weaponInventory).toContain("mars");
@@ -4008,12 +4008,13 @@ describe("combat system", () => {
     combat.syncLocalPlayer(owner, "Clown", "#18dff5");
     combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never } as never);
     const api = combat as unknown as {
-      getClownKitRuntime(ownerId: string): { equipped: boolean; usable: boolean; disabledReason?: string; stageCooldown: number; balloonCount: number };
+      getClownKitRuntime(ownerId: string): { equipped: boolean; usable: boolean; disabledReason?: string; backBalloon: boolean; glideGravityScale: number; balloonCount: number };
       useClownKitPrimary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
     };
 
     combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never, rightHand: "pistol" } as never);
-    expect(api.getClownKitRuntime(owner.id)).toMatchObject({ equipped: true, usable: true, stageCooldown: 0, balloonCount: 0 });
+    expect(api.getClownKitRuntime(owner.id)).toMatchObject({ equipped: true, usable: true, backBalloon: true, balloonCount: 0 });
+    expect(api.getClownKitRuntime(owner.id).glideGravityScale).toBeLessThan(1);
     const fired = api.useClownKitPrimary({
       ownerId: owner.id,
       player: owner,
@@ -4110,11 +4111,11 @@ describe("combat system", () => {
     expect(snapshot.droppedWeapons.some((weapon) => weapon.weaponId === "pistol")).toBe(true);
   });
 
-  it("builds Clown Kit comedy stage with laugh waves and final cleanup", () => {
+  it("does not build a Clown Kit comedy stage or lock movement when both mouse buttons are held", () => {
     const combat = new CombatSystem({ mode: "network" });
     combat.start(createDefaultInventory());
-    const owner = { ...playerState, id: "clown-stage-user", x: 0, velocityX: 0, velocityY: 0 };
-    const victim = { ...playerState, id: "clown-stage-victim", x: 132, velocityX: 0, velocityY: 0 };
+    const owner = { ...playerState, id: "clown-no-stage-user", x: 0, velocityX: 0, velocityY: 0 };
+    const victim = { ...playerState, id: "clown-no-stage-victim", x: 132, velocityX: 0, velocityY: 0 };
     combat.syncLocalPlayer(owner, "Clown", "#18dff5");
     combat.syncRemotePlayer({
       id: victim.id,
@@ -4129,34 +4130,93 @@ describe("combat system", () => {
     });
     combat.setPlayerLoadout(owner.id, { head: "clown-kit" as never } as never);
     const api = combat as unknown as {
-      getClownKitRuntime(ownerId: string): { stageCooldown: number; activeStage: boolean };
-      useClownKitSuper(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+      getClownKitRuntime(ownerId: string): { activeStage?: boolean; stageCooldown?: number; backBalloon: boolean };
+      useClownKitPrimary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
+      useClownKitSecondary(context: { ownerId: string; player: typeof owner; aim: { x: number; y: number }; now: number; heldMs: number; isNewPress: boolean }): { kind: string; weaponId: string; label: string };
     };
 
-    expect(api.useClownKitSuper({ ownerId: owner.id, player: owner, aim: { x: 0, y: -1 }, now: 3000, heldMs: 0, isNewPress: true })).toMatchObject({
-      kind: "utility",
-      weaponId: "clown-kit",
-      label: "Comedy Stage",
-    });
-    let snapshot = combat.getSnapshot() as unknown as { clownStages: Array<{ ownerId: string; timer: number; duration: number; finalPulse: boolean }> };
-    expect(snapshot.clownStages).toEqual([expect.objectContaining({ ownerId: owner.id, duration: expect.any(Number), finalPulse: false })]);
-    expect(snapshot.clownStages[0].duration).toBeGreaterThanOrEqual(12);
-    expect(snapshot.clownStages[0].duration).toBeLessThanOrEqual(18);
-    expect(api.getClownKitRuntime(owner.id).stageCooldown).toBeGreaterThanOrEqual(60);
-    expect(api.getClownKitRuntime(owner.id).activeStage).toBe(true);
-    expect(combat.isMovementLocked(owner.id)).toBe(true);
-
-    const laughHpBefore = combat.getCombatant(victim.id)!.hp;
-    combat.update(2.15, [owner, victim]);
-    expect(combat.getCombatant(victim.id)!.hp).toBeLessThan(laughHpBefore);
-    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("clownLaugh" as never))).toBe(true);
-    expect(Math.abs(combat.getCombatant(victim.id)!.velocityX)).toBeGreaterThan(120);
-
-    combat.update(16.2, [owner, victim]);
-    snapshot = combat.getSnapshot() as unknown as typeof snapshot;
-    expect(snapshot.clownStages).toHaveLength(0);
-    expect(api.getClownKitRuntime(owner.id).activeStage).toBe(false);
+    expect(api.getClownKitRuntime(owner.id)).toMatchObject({ backBalloon: true });
+    expect("useClownKitSuper" in api).toBe(false);
+    expect(api.getClownKitRuntime(owner.id).stageCooldown).toBeUndefined();
+    expect(api.getClownKitRuntime(owner.id).activeStage).toBeUndefined();
+    api.useClownKitPrimary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 3000, heldMs: 0, isNewPress: true });
+    combat.getPlayerInventory().cooldowns["clown-kit"] = 0;
+    api.useClownKitSecondary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 3020, heldMs: 0, isNewPress: true });
+    const snapshot = combat.getSnapshot() as unknown as { clownStages?: unknown[] };
+    expect(snapshot.clownStages).toBeUndefined();
+    expect(combat.getCombatant(victim.id)?.statuses.some((status) => status.id === ("clownLaugh" as never))).toBe(false);
     expect(combat.isMovementLocked(owner.id)).toBe(false);
+  });
+
+  it("summons, recalls, damages, and cleans up strap pets without duplicates", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "pet-owner", x: 0, velocityX: 0, velocityY: 0 };
+    const target = combat.spawnTrainingDummy({ x: 86, y: playerState.y });
+    combat.syncLocalPlayer(owner, "Pet Owner", "#18dff5");
+    combat.setPlayerLoadout(owner.id, { frontStrap: "pet-bear" });
+    const api = combat as unknown as {
+      usePetItem(ownerId: string, slot: "frontStrap" | "backStrap", weaponId: "pet-bear", player: typeof owner, now: number): { kind: string; weaponId: string; label: string };
+      getPetRuntime(ownerId: string, slot: "frontStrap" | "backStrap", weaponId: "pet-bear"): { active: boolean; hp: number; maxHp: number; cooldown: number };
+    };
+
+    expect(api.usePetItem(owner.id, "frontStrap", "pet-bear", owner, 100)).toMatchObject({ kind: "utility", label: "Bear Summon" });
+    expect(api.usePetItem(owner.id, "frontStrap", "pet-bear", owner, 110)).toMatchObject({ kind: "utility", label: "Bear Recall" });
+    expect(api.usePetItem(owner.id, "frontStrap", "pet-bear", owner, 5200)).toMatchObject({ kind: "utility", label: "Bear Summon" });
+    expect((combat.getSnapshot() as unknown as { pets: Array<{ ownerId: string; kind: string; hp: number; maxHp: number }> }).pets).toEqual([
+      expect.objectContaining({ ownerId: owner.id, kind: "bear", maxHp: expect.any(Number) }),
+    ]);
+    for (let tick = 0; tick < 12; tick += 1) {
+      combat.update(0.18, [owner]);
+    }
+    expect(combat.getCombatant(target.id)!.hp).toBeLessThan(target.maxHp);
+    const pet = (combat.getSnapshot() as unknown as { pets: Array<{ id: string; hp: number }> }).pets[0];
+    combat.applyDamage({ sourceId: target.id, targetId: pet.id, weaponId: "pistol", damage: 999, knockback: { x: 0, y: -120 }, stun: 0.1, label: "Pet Test", skipHitLocationScaling: true });
+    expect((combat.getSnapshot() as unknown as { pets: unknown[] }).pets).toHaveLength(0);
+    expect(api.getPetRuntime(owner.id, "frontStrap", "pet-bear")).toMatchObject({ active: false, cooldown: expect.any(Number) });
+    expect(api.getPetRuntime(owner.id, "frontStrap", "pet-bear").cooldown).toBeGreaterThan(20);
+  });
+
+  it("gives each pet a simple distinct support or attack behavior", () => {
+    const combat = new CombatSystem({ mode: "network" });
+    combat.start(createDefaultInventory());
+    const owner = { ...playerState, id: "pet-suite-owner", x: 0, velocityX: 0, velocityY: 0 };
+    const target = combat.spawnTrainingDummy({ x: 104, y: playerState.y });
+    combat.syncLocalPlayer(owner, "Pet Suite", "#18dff5");
+    const api = combat as unknown as {
+      usePetItem(ownerId: string, slot: "frontStrap" | "backStrap", weaponId: "pet-cat" | "pet-dog" | "pet-deer" | "pet-parrot" | "pet-chipmunk", player: typeof owner, now: number): { kind: string; label: string };
+    };
+
+    combat.setPlayerLoadout(owner.id, { frontStrap: "pet-cat", backStrap: "pet-dog" });
+    api.usePetItem(owner.id, "frontStrap", "pet-cat", owner, 100);
+    api.usePetItem(owner.id, "backStrap", "pet-dog", owner, 120);
+    for (let tick = 0; tick < 14; tick += 1) {
+      combat.update(0.16, [owner]);
+    }
+    expect(combat.getCombatant(target.id)?.statuses.some((status) => status.id === ("petMarked" as never))).toBe(true);
+    const ownerHpBefore = combat.getCombatant(owner.id)!.hp;
+    combat.applyDamage({ sourceId: target.id, targetId: owner.id, weaponId: "pistol", damage: 20, knockback: { x: 0, y: 0 }, stun: 0.1, label: "Dog Share", skipHitLocationScaling: true });
+    expect(combat.getCombatant(owner.id)!.hp).toBeGreaterThan(ownerHpBefore - 20);
+
+    combat.setPlayerLoadout(owner.id, { frontStrap: "pet-deer", backStrap: "pet-parrot" });
+    api.usePetItem(owner.id, "frontStrap", "pet-deer", owner, 5200);
+    api.usePetItem(owner.id, "backStrap", "pet-parrot", owner, 5220);
+    combat.update(0.2, [owner]);
+    expect(combat.getCombatant(owner.id)?.statuses.some((status) => status.id === ("petDeerAura" as never))).toBe(true);
+    const projectileCount = combat.getSnapshot().projectiles.length;
+    combat.equip("pistol");
+    combat.usePrimary({ ownerId: owner.id, player: owner, aim: { x: 1, y: 0 }, now: 5600, heldMs: 0, isNewPress: true });
+    for (let tick = 0; tick < 12; tick += 1) {
+      combat.update(0.12, [owner]);
+    }
+    expect(combat.getSnapshot().projectiles.length).toBeGreaterThan(projectileCount + 1);
+
+    combat.setPlayerLoadout(owner.id, { frontStrap: "pet-chipmunk" });
+    api.usePetItem(owner.id, "frontStrap", "pet-chipmunk", owner, 9000);
+    for (let tick = 0; tick < 18; tick += 1) {
+      combat.update(0.12, [owner]);
+    }
+    expect(combat.getCombatant(target.id)?.statuses.some((status) => status.id === ("petStumble" as never))).toBe(true);
   });
 
   it("lets Neptune, Mars, Uranus, Jupiter, Moon, and Judgment Day stack while cleaning only each event's own state", () => {

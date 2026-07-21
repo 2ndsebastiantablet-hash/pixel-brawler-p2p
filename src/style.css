@@ -682,6 +682,50 @@ button {
     0 0 0 2px rgba(255, 95, 207, 0.32);
 }
 
+.loadout-clown-balloon {
+  left: calc(50% + 24px);
+  top: 18px;
+  z-index: 1;
+  width: 34px;
+  height: 42px;
+  border-radius: 50% 50% 45% 45%;
+  background:
+    radial-gradient(circle at 12px 10px, rgba(255, 255, 255, 0.8) 0 4px, transparent 5px),
+    #ff5fcf;
+  box-shadow: 0 0 0 2px rgba(255, 244, 168, 0.32);
+}
+
+.loadout-view.back .loadout-clown-balloon {
+  left: calc(50% - 58px);
+}
+
+.loadout-clown-balloon::after {
+  position: absolute;
+  left: 14px;
+  bottom: -5px;
+  width: 7px;
+  height: 7px;
+  content: "";
+  background: #ffd84d;
+}
+
+.loadout-clown-balloon-string {
+  left: calc(50% + 20px);
+  top: 56px;
+  z-index: 1;
+  width: 38px;
+  height: 48px;
+  border-left: 2px solid rgba(255, 244, 168, 0.72);
+  border-bottom: 2px solid rgba(255, 244, 168, 0.42);
+  border-radius: 0 0 0 70%;
+  transform: rotate(18deg);
+}
+
+.loadout-view.back .loadout-clown-balloon-string {
+  left: calc(50% - 32px);
+  transform: scaleX(-1) rotate(18deg);
+}
+
 .loadout-clown-mask {
   left: calc(50% - 14px);
   top: 34px;

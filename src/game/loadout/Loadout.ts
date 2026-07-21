@@ -12,6 +12,7 @@ export type LoadoutCategory =
   | "mobility"
   | "space"
   | "summons"
+  | "pets"
   | "consumables"
   | "utility";
 
@@ -91,6 +92,12 @@ const strapWeapons = new Set<WeaponId>([
   "wings",
   "grabber",
   "super-bomb",
+  "pet-bear",
+  "pet-cat",
+  "pet-dog",
+  "pet-deer",
+  "pet-parrot",
+  "pet-chipmunk",
   "moon",
   "jupiter",
   "uranus",
@@ -458,6 +465,9 @@ function categoryForWeapon(id: WeaponId): LoadoutCategory {
   }
   if (id === "clown-kit") {
     return "utility";
+  }
+  if (id === "pet-bear" || id === "pet-cat" || id === "pet-dog" || id === "pet-deer" || id === "pet-parrot" || id === "pet-chipmunk") {
+    return "pets";
   }
   if (id === "spikes" || id === "van" || id === "spirit-fighter" || id === "super-bomb") {
     return "body";

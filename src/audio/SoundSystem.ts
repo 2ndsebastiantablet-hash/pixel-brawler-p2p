@@ -96,8 +96,11 @@ export type SoundId =
   | "clown-finger"
   | "clown-balloon"
   | "clown-pop"
-  | "clown-stage"
-  | "clown-laugh"
+  | "pet-summon"
+  | "pet-attack"
+  | "pet-bond"
+  | "pet-recall"
+  | "pet-down"
   | "virgin-blood-activate"
   | "virgin-blood-revive"
   | "death-aura"
@@ -266,8 +269,11 @@ const SOUND_SHAPES: Record<SoundId, SoundShape> = {
   "clown-finger": { category: "weapon", frequency: 760, endFrequency: 1260, duration: 0.07, type: "square", minInterval: 0.08 },
   "clown-balloon": { category: "weapon", frequency: 340, endFrequency: 760, duration: 0.22, type: "sawtooth", minInterval: 0.18 },
   "clown-pop": { category: "combat", frequency: 920, endFrequency: 180, duration: 0.11, noise: true, minInterval: 0.08 },
-  "clown-stage": { category: "heavy", frequency: 180, endFrequency: 980, duration: 0.44, noise: true, minInterval: 0.6 },
-  "clown-laugh": { category: "combat", frequency: 520, endFrequency: 260, duration: 0.18, type: "square", minInterval: 0.22 },
+  "pet-summon": { category: "weapon", frequency: 360, endFrequency: 760, duration: 0.16, type: "triangle", minInterval: 0.18 },
+  "pet-attack": { category: "combat", frequency: 520, endFrequency: 160, duration: 0.1, noise: true, minInterval: 0.08 },
+  "pet-bond": { category: "combat", frequency: 680, endFrequency: 420, duration: 0.12, type: "sine", minInterval: 0.25 },
+  "pet-recall": { category: "weapon", frequency: 420, endFrequency: 180, duration: 0.12, type: "triangle", minInterval: 0.18 },
+  "pet-down": { category: "combat", frequency: 180, endFrequency: 70, duration: 0.18, noise: true, minInterval: 0.16 },
   "virgin-blood-activate": { category: "combat", frequency: 620, endFrequency: 260, duration: 0.32, type: "triangle", minInterval: 0.4 },
   "virgin-blood-revive": { category: "combat", frequency: 760, endFrequency: 180, duration: 0.42, noise: true, minInterval: 0.6 },
   "death-aura": { category: "combat", frequency: 96, endFrequency: 52, duration: 0.28, noise: true, minInterval: 0.32 },

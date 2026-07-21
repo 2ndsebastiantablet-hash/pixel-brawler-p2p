@@ -104,6 +104,8 @@ describe("lobby loadout menu", () => {
     expect(root.querySelector('[data-loadout-item="grabber"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="trident"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-item="super-bomb"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="pet-dog"]')).toBeInstanceOf(HTMLButtonElement);
+    expect(root.querySelector('[data-loadout-item="pet-bear"]')).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('[data-loadout-drop-slot="grabber"]')).toBeNull();
 
     root.querySelector<HTMLButtonElement>("[data-loadout-default]")?.click();
@@ -137,11 +139,12 @@ describe("lobby loadout menu", () => {
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="attachment"]'), "virgin-blood");
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="legs"]'), "super-legs");
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="head"]'), "clown-kit");
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="frontStrap"]'), "pet-dog");
     root.querySelector<HTMLButtonElement>("[data-offline]")?.click();
 
     expect(startOffline).toHaveBeenCalledWith(expect.objectContaining({
       loadout: expect.objectContaining({
-        frontStrap: "death-aura",
+        frontStrap: "pet-dog",
         backStrap: "wings",
         leftHand: "rocket",
         rightHand: "rocket",
@@ -394,6 +397,10 @@ describe("lobby loadout menu", () => {
 
     dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "clown-kit");
     expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Clown Kit");
+    expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
+
+    dispatchDrop(requireTarget(root, '[data-loadout-drop-slot="rightHand"]'), "pet-cat");
+    expect(root.querySelector("[data-loadout-error]")?.textContent).toContain("Cat");
     expect(root.querySelector('[data-loadout-drop-slot="rightHand"]')?.textContent).toContain("Hand");
   });
 

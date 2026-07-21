@@ -235,6 +235,21 @@ describe("loadout equipment slots", () => {
     expect(isSlotCompatible("clown-kit" as never, "attachment")).toBe(false);
     expect(isSlotCompatible("clown-kit" as never, "grabber" as never)).toBe(false);
     expect(isSlotCompatible("clown-kit" as never, "legs")).toBe(false);
+    for (const petId of ["pet-bear", "pet-cat", "pet-dog", "pet-deer", "pet-parrot", "pet-chipmunk"] as const) {
+      expect(isSlotCompatible(petId, "frontStrap")).toBe(true);
+      expect(isSlotCompatible(petId, "backStrap")).toBe(true);
+      expect(isSlotCompatible(petId, "leftHand")).toBe(false);
+      expect(isSlotCompatible(petId, "rightHand")).toBe(false);
+      expect(isSlotCompatible(petId, "attachment")).toBe(false);
+      expect(isSlotCompatible(petId, "grabber" as never)).toBe(false);
+      expect(isSlotCompatible(petId, "legs")).toBe(false);
+      expect(isSlotCompatible(petId, "head" as never)).toBe(false);
+      expect(LOADOUT_ITEMS.find((item) => item.id === petId)).toMatchObject({
+        category: "pets",
+        handedness: "strap",
+        compatibleSlots: ["frontStrap", "backStrap"],
+      });
+    }
     expect(isSlotCompatible("pistol", "head" as never)).toBe(false);
     expect(isSlotCompatible("wings", "head" as never)).toBe(false);
     expect(isSlotCompatible("grabber" as never, "frontStrap")).toBe(true);
@@ -353,6 +368,10 @@ describe("loadout equipment slots", () => {
       handedness: "head",
       compatibleSlots: ["head"],
     });
+    const withDog = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "pet-dog");
+    expect(withDog.frontStrap).toBe("pet-dog");
+    expect(loadoutHasWeapon(withDog, "pet-dog")).toBe(true);
+    expect(assignLoadoutItem(withDog, "rightHand", "pet-dog").rightHand).toBeUndefined();
     const withGrabber = assignLoadoutItem(DEFAULT_LOADOUT, "frontStrap", "grabber" as never);
     expect(withGrabber.frontStrap).toBe("grabber");
     expect(loadoutHasWeapon(withGrabber, "grabber" as never)).toBe(true);

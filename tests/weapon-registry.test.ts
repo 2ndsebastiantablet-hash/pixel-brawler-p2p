@@ -20,6 +20,12 @@ const enabledWeapons = [
   "trident",
   "super-bomb",
   "clown-kit",
+  "pet-bear",
+  "pet-cat",
+  "pet-dog",
+  "pet-deer",
+  "pet-parrot",
+  "pet-chipmunk",
   "virgin-blood",
   "death-aura",
   "rocket",
@@ -60,6 +66,12 @@ describe("weapon registry", () => {
       "trident",
       "super-bomb",
       "clown-kit",
+      "pet-bear",
+      "pet-cat",
+      "pet-dog",
+      "pet-deer",
+      "pet-parrot",
+      "pet-chipmunk",
       "virgin-blood",
       "death-aura",
       "rocket",
@@ -116,6 +128,12 @@ describe("weapon registry", () => {
     expect((inventory.ammo as Record<string, unknown>).trident).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>)["super-bomb"]).toBeUndefined();
     expect((inventory.ammo as Record<string, unknown>)["clown-kit"]).toBeUndefined();
+    for (const petId of ["pet-bear", "pet-cat", "pet-dog", "pet-deer", "pet-parrot", "pet-chipmunk"] as const) {
+      expect((inventory.ammo as Record<string, unknown>)[petId]).toBeUndefined();
+      expect(weaponRegistry.get(petId).kind).toBe("utility");
+      expect(weaponRegistry.get(petId).description).toContain("pet");
+      expect(weaponRegistry.get(petId).weight.label).toBe("Light");
+    }
     expect(inventory.ammo["virgin-blood"]).toBeUndefined();
     expect(inventory.ammo["death-aura"]).toBeUndefined();
     expect(inventory.ammo.rocket).toBeUndefined();
@@ -151,7 +169,8 @@ describe("weapon registry", () => {
     expect(weaponRegistry.get("super-bomb" as never).weight.label).toBe("Light");
     expect(weaponRegistry.get("clown-kit" as never).name).toBe("Clown Kit");
     expect(weaponRegistry.get("clown-kit" as never).description).toContain("Empty hand required");
-    expect(weaponRegistry.get("clown-kit" as never).description).toContain("comedy stage");
+    expect(weaponRegistry.get("clown-kit" as never).description).toContain("back balloon");
+    expect(weaponRegistry.get("clown-kit" as never).description).not.toContain("comedy stage");
     expect(weaponRegistry.get("clown-kit" as never).primary.damage).toBe(2);
     expect(weaponRegistry.get("clown-kit" as never).primary.knockback).toBeGreaterThanOrEqual(1200);
     expect(weaponRegistry.get("clown-kit" as never).weight.label).toBe("Light");

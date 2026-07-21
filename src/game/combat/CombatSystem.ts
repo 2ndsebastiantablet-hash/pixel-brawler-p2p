@@ -547,18 +547,38 @@ export interface ClownMonkeyState {
   visualOnly?: boolean;
 }
 
-export interface ClownStageState {
+export type PetKind = "bear" | "cat" | "dog" | "deer" | "parrot" | "chipmunk";
+export type PetSlot = "frontStrap" | "backStrap";
+
+export interface PetState {
   id: string;
   ownerId: string;
+  slot: PetSlot;
+  weaponId: PetWeaponId;
+  kind: PetKind;
   x: number;
   y: number;
-  timer: number;
-  duration: number;
+  vx: number;
+  vy: number;
+  width: number;
+  height: number;
+  hp: number;
+  maxHp: number;
   age: number;
-  pulseTimer: number;
-  pulseIndex: number;
-  finalPulse: boolean;
+  attackCooldown: number;
+  specialCooldown: number;
+  targetId?: string;
+  state: "follow" | "attack" | "fetch" | "recall";
+  carryingWeaponId?: WeaponId;
   visualOnly?: boolean;
+}
+
+export const PET_WEAPON_IDS = ["pet-bear", "pet-cat", "pet-dog", "pet-deer", "pet-parrot", "pet-chipmunk"] as const;
+
+export type PetWeaponId = typeof PET_WEAPON_IDS[number];
+
+export function isPetWeaponId(id: WeaponId | undefined): id is PetWeaponId {
+  return Boolean(id && (PET_WEAPON_IDS as readonly WeaponId[]).includes(id));
 }
 
 export type VanStateKind = "stored" | "emerging" | "active" | "absorbing" | "destroyed";
@@ -701,7 +721,7 @@ export interface CombatSnapshot {
   superBombReformations: SuperBombReformationState[];
   clownBalloons: ClownBalloonState[];
   clownMonkeys: ClownMonkeyState[];
-  clownStages: ClownStageState[];
+  pets: PetState[];
   vans: VanState[];
   damageNumbers: DamageNumber[];
   effects: CombatEffect[];
@@ -995,11 +1015,135 @@ const clownDogDamage = 8;
 const clownDogKnockback = 360;
 const clownMonkeyCount = 4;
 const clownMonkeySpeed = 310;
-const clownStageDuration = 15;
-const clownStageCooldown = 75;
-const clownStagePulseEvery = 2.1;
-const clownStageRadius = 360;
-const clownFinalRadius = 520;
+const clownBackBalloonGlideScale = 0.34;
+const clownBackBalloonMaxFallSpeed = 360;
+const petRecallCooldown = 4;
+const petParrotMimicDelay = 0.28;
+
+interface PetProfile {
+  kind: PetKind;
+  name: string;
+  hp: number;
+  width: number;
+  height: number;
+  speed: number;
+  followDistance: number;
+  attackRange: number;
+  damage: number;
+  knockback: number;
+  knockbackY: number;
+  stun: number;
+  cooldown: number;
+  deathCooldown: number;
+  color: string;
+  flying?: boolean;
+}
+
+const petProfiles: Record<PetKind, PetProfile> = {
+  bear: {
+    kind: "bear",
+    name: "Bear",
+    hp: 220,
+    width: 58,
+    height: 42,
+    speed: 145,
+    followDistance: 92,
+    attackRange: 58,
+    damage: 34,
+    knockback: 720,
+    knockbackY: -320,
+    stun: 0.58,
+    cooldown: 1.35,
+    deathCooldown: 42,
+    color: "#9f6a3d",
+  },
+  cat: {
+    kind: "cat",
+    name: "Cat",
+    hp: 54,
+    width: 26,
+    height: 18,
+    speed: 390,
+    followDistance: 64,
+    attackRange: 38,
+    damage: 7,
+    knockback: 260,
+    knockbackY: -170,
+    stun: 0.18,
+    cooldown: 0.62,
+    deathCooldown: 27,
+    color: "#c8c4d8",
+  },
+  dog: {
+    kind: "dog",
+    name: "Dog",
+    hp: 125,
+    width: 34,
+    height: 24,
+    speed: 260,
+    followDistance: 54,
+    attackRange: 42,
+    damage: 13,
+    knockback: 310,
+    knockbackY: -150,
+    stun: 0.22,
+    cooldown: 0.82,
+    deathCooldown: 34,
+    color: "#d69a52",
+  },
+  deer: {
+    kind: "deer",
+    name: "Deer",
+    hp: 95,
+    width: 40,
+    height: 34,
+    speed: 330,
+    followDistance: 112,
+    attackRange: 62,
+    damage: 18,
+    knockback: 470,
+    knockbackY: -430,
+    stun: 0.34,
+    cooldown: 1.08,
+    deathCooldown: 32,
+    color: "#ffd48a",
+  },
+  parrot: {
+    kind: "parrot",
+    name: "Parrot",
+    hp: 62,
+    width: 24,
+    height: 22,
+    speed: 300,
+    followDistance: 76,
+    attackRange: 520,
+    damage: 5,
+    knockback: 180,
+    knockbackY: -70,
+    stun: 0.12,
+    cooldown: 1.35,
+    deathCooldown: 30,
+    color: "#48d86b",
+    flying: true,
+  },
+  chipmunk: {
+    kind: "chipmunk",
+    name: "Chipmunk",
+    hp: 36,
+    width: 20,
+    height: 14,
+    speed: 640,
+    followDistance: 42,
+    attackRange: 44,
+    damage: 5,
+    knockback: 170,
+    knockbackY: -85,
+    stun: 0.58,
+    cooldown: 0.52,
+    deathCooldown: 25,
+    color: "#c98748",
+  },
+};
 
 interface PendingTeleport {
   ownerId: string;
@@ -1215,11 +1359,27 @@ export interface WeaponRuntimeState {
   clownKitEquipped: boolean;
   clownKitUsable: boolean;
   clownKitDisabledReason?: string;
+  clownKitBackBalloon: boolean;
+  clownKitGlideGravityScale: number;
+  clownKitMaxFallSpeed: number;
   clownKitBalloonCooldown: number;
-  clownKitStageCooldown: number;
   clownKitBalloonCount: number;
   clownKitMonkeyCount: number;
-  clownKitActiveStage: boolean;
+  petActive: boolean;
+  petCooldown: number;
+  petHp: number;
+  petMaxHp: number;
+  petKind?: PetKind;
+  petFront?: PetRuntimeState;
+  petBack?: PetRuntimeState;
+}
+
+export interface PetRuntimeState {
+  active: boolean;
+  cooldown: number;
+  hp: number;
+  maxHp: number;
+  kind?: PetKind;
 }
 
 export interface MacheteRuntimeState extends MacheteGrowthState {
@@ -1286,10 +1446,12 @@ export class CombatSystem {
   private readonly superBombSplatters: SuperBombSplatterState[] = [];
   private readonly superBombReformations = new Map<string, SuperBombReformationState>();
   private readonly clownBalloonCycle = new Map<string, number>();
-  private readonly clownStageCooldowns = new Map<string, number>();
   private readonly clownBalloons: ClownBalloonState[] = [];
   private readonly clownMonkeys: ClownMonkeyState[] = [];
-  private readonly clownStages: ClownStageState[] = [];
+  private readonly pets = new Map<string, PetState>();
+  private readonly petCooldowns = new Map<string, number>();
+  private readonly petCooldownStartedAt = new Map<string, number>();
+  private readonly petRecentOwnerAttacks = new Map<string, { damage: number; knockback: number; aim: Vec2; timer: number; weaponId: WeaponId }>();
   private readonly playerLoadouts = new Map<string, LoadoutState>();
   private readonly buffVisualTimers = new Map<string, number>();
   private readonly bodyContactCooldowns = new Map<string, number>();
@@ -1359,10 +1521,12 @@ export class CombatSystem {
     this.superBombSplatters.length = 0;
     this.superBombReformations.clear();
     this.clownBalloonCycle.clear();
-    this.clownStageCooldowns.clear();
     this.clownBalloons.length = 0;
     this.clownMonkeys.length = 0;
-    this.clownStages.length = 0;
+    this.pets.clear();
+    this.petCooldowns.clear();
+    this.petCooldownStartedAt.clear();
+    this.petRecentOwnerAttacks.clear();
     this.playerLoadouts.clear();
     this.buffVisualTimers.clear();
     this.bodyContactCooldowns.clear();
@@ -1473,7 +1637,13 @@ export class CombatSystem {
   }
 
   setPlayerLoadout(id: string, loadout: Partial<LoadoutState>): void {
-    this.playerLoadouts.set(id, normalizeLoadout(loadout));
+    const next = normalizeLoadout(loadout);
+    this.playerLoadouts.set(id, next);
+    for (const pet of [...this.pets.values()]) {
+      if (pet.ownerId === id && next[pet.slot] !== pet.weaponId) {
+        this.removePet(pet.id, "PET RECALLED", false);
+      }
+    }
   }
 
   getPlayerLoadout(id: string): LoadoutState | undefined {
@@ -1483,6 +1653,10 @@ export class CombatSystem {
 
   removeCombatant(id: string): void {
     this.releaseSpikeImpale(id);
+    if (this.pets.has(id)) {
+      this.removePet(id, "PET GONE", false);
+      return;
+    }
     if (this.marsClones.has(id)) {
       this.removeMarsClone(id, "CLONE GONE");
       return;
@@ -1519,8 +1693,14 @@ export class CombatSystem {
     this.superBombSuperCooldowns.delete(id);
     this.superBombWeaknessStacks.delete(id);
     this.clearClownKitStateForOwner(id, true);
-    this.clownStageCooldowns.delete(id);
     this.clownBalloonCycle.delete(id);
+    this.clearPetsForOwner(id, false);
+    for (const pet of this.pets.values()) {
+      if (pet.targetId === id) {
+        pet.targetId = undefined;
+      }
+    }
+    this.petRecentOwnerAttacks.delete(id);
     this.playerLoadouts.delete(id);
     removeWhere(this.crossShields, (shield) => shield.ownerId === id);
     for (const zombie of this.zombies.values()) {
@@ -1584,6 +1764,9 @@ export class CombatSystem {
     }
     if (this.inventory.equippedWeapon === "grabber") {
       return { kind: "blocked", weaponId: "grabber", label: "Grabber passive" };
+    }
+    if (isPetWeaponId(this.inventory.equippedWeapon)) {
+      return { kind: "blocked", weaponId: this.inventory.equippedWeapon, label: "Pet uses Q/E" };
     }
     if (this.inventory.equippedWeapon === "super-bomb") {
       return { kind: "blocked", weaponId: "super-bomb", label: "Empty hand mouse" };
@@ -1665,6 +1848,9 @@ export class CombatSystem {
     }
     if (weapon.id === "grabber") {
       return { kind: "blocked", weaponId: weapon.id, label: "Grabber passive" };
+    }
+    if (isPetWeaponId(weapon.id)) {
+      return { kind: "blocked", weaponId: weapon.id, label: "Pet uses Q/E" };
     }
     if (weapon.id === "super-bomb") {
       return { kind: "blocked", weaponId: weapon.id, label: "Empty hand mouse" };
@@ -2221,6 +2407,7 @@ export class CombatSystem {
       return { applied: false, remainingHp: target?.hp ?? 0 };
     }
 
+    const baseDamage = this.redirectDogBondDamage(request, target);
     const hitLocation = request.hitLocation ?? classifyHitLocation(target, request.hitY);
     const locationModifier = request.skipHitLocationScaling ? neutralLocationModifier : modifierForHitLocation(hitLocation);
     const effectiveStun = request.stun + locationModifier.stunBonus;
@@ -2260,9 +2447,10 @@ export class CombatSystem {
       * (steadyResist ? 0.25 : 1)
       * locationModifier.knockbackScale
       * (empoweredAttack ? empoweredKnockbackScale : 1)
-      * (holyAttack ? 1.16 : 1);
-    const verticalLift = request.damage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
-    const damage = Math.max(1, Math.round(request.damage * damageScale * locationModifier.damageScale));
+      * (holyAttack ? 1.16 : 1)
+      * (target.statuses.some((status) => status.id === "petMarked") && request.sourceId !== target.id ? 1.14 : 1);
+    const verticalLift = baseDamage >= 20 ? -26 : effectiveStun >= 0.3 ? -16 : 0;
+    const damage = Math.max(1, Math.round(baseDamage * damageScale * locationModifier.damageScale));
     target.hp = Math.max(0, target.hp - damage);
     this.recordDeathAuraSuffering(target.id, damage);
     const chainsawDeathSource = request.weaponId === "chainsaw" && request.label !== "Zombie Bite" && !request.sourceId.startsWith("zombie-") && !target.id.startsWith("zombie-");
@@ -2340,6 +2528,10 @@ export class CombatSystem {
       if (this.consumeVirginBloodRevive(target)) {
         return { applied: true, remainingHp: target.hp, hitLocation };
       }
+      if (this.isPetCombatant(target.id)) {
+        this.removePet(target.id, "PET DOWN", true);
+        return { applied: true, remainingHp: 0, hitLocation };
+      }
       if (chainsawDeathSource) {
         this.spawnZombieFromChainsaw(request.sourceId, target, this.getChainsawContribution(request.sourceId, target.id), {
           x: target.x,
@@ -2350,6 +2542,37 @@ export class CombatSystem {
     }
 
     return { applied: true, remainingHp: target.hp, hitLocation };
+  }
+
+  private redirectDogBondDamage(request: DamageRequest, target: Combatant): number {
+    if (request.sourceId === "status" || request.sourceId === target.id || request.damage <= 0 || this.isPetCombatant(target.id)) {
+      return request.damage;
+    }
+    const dog = [...this.pets.values()]
+      .filter((pet) => pet.kind === "dog" && pet.ownerId === target.id && !pet.visualOnly)
+      .map((pet) => {
+        const distance = Math.hypot((pet.x + pet.width / 2) - (target.x + target.width / 2), (pet.y + pet.height / 2) - (target.y + target.height / 2));
+        return { pet, distance };
+      })
+      .filter((item) => item.distance <= 230)
+      .sort((left, right) => left.distance - right.distance)[0]?.pet;
+    if (!dog) {
+      return request.damage;
+    }
+    const dogBody = this.combatants.get(dog.id);
+    if (!dogBody || dogBody.hp <= 0) {
+      return request.damage;
+    }
+    const shared = Math.min(dogBody.hp, Math.max(1, Math.round(request.damage * 0.25)));
+    dogBody.hp = Math.max(0, dogBody.hp - shared);
+    dog.hp = dogBody.hp;
+    target.statuses = upsertStatusEffect(target.statuses, createStatus("petBond"));
+    this.addEffect("aura", dog.x + dog.width / 2, dog.y + 12, target.x + target.width / 2, target.y + 18, petColor("dog"), "DOG BOND");
+    this.queueSound("pet-bond");
+    if (dogBody.hp <= 0) {
+      this.removePet(dog.id, "DOG DOWN", true);
+    }
+    return Math.max(1, request.damage - shared);
   }
 
   killCombatant(id: string, label = "VOID"): boolean {
@@ -2384,7 +2607,8 @@ export class CombatSystem {
     this.updateTridentTransformations(dt, players);
     this.updateSuperBombs(dt, players);
     this.updateCombatants(dt);
-    this.updateClownKit(dt, players);
+    this.updateClownKit(dt);
+    this.updatePets(dt);
     this.updateMoonEvents(dt, players);
     this.updateJupiterEvents(dt, players);
     this.updateUranusEvents(dt, players);
@@ -2446,7 +2670,6 @@ export class CombatSystem {
       || this.spikeImpales.has(ownerId)
       || this.superBombReformations.has(ownerId)
       || Boolean(this.getVanDrivenBy(ownerId))
-      || this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0)
       || Boolean(this.combatants.get(ownerId)?.statuses.some((status) => status.id === "neptuneStuck"))
       || [...this.tridentTransformations.values()].some((state) => state.heldTargetIds.includes(ownerId));
   }
@@ -2605,6 +2828,20 @@ export class CombatSystem {
     const grabberPunch = this.grabberPunches.get(ownerId);
     const tridentFlood = this.tridentFloods.find((flood) => flood.ownerId === ownerId && flood.timer > 0);
     const tridentTransformation = this.tridentTransformations.get(ownerId);
+    const clownKit = this.getClownKitRuntime(ownerId);
+    const petFront = ownerLoadout?.frontStrap && isPetWeaponId(ownerLoadout.frontStrap)
+      ? this.getPetRuntime(ownerId, "frontStrap", ownerLoadout.frontStrap)
+      : undefined;
+    const petBack = ownerLoadout?.backStrap && isPetWeaponId(ownerLoadout.backStrap)
+      ? this.getPetRuntime(ownerId, "backStrap", ownerLoadout.backStrap)
+      : undefined;
+    const focusedPet = isPetWeaponId(id)
+      ? ownerLoadout?.frontStrap === id
+        ? petFront ?? this.getPetRuntime(ownerId, "frontStrap", id)
+        : ownerLoadout?.backStrap === id
+          ? petBack ?? this.getPetRuntime(ownerId, "backStrap", id)
+          : this.getPetRuntime(ownerId, "frontStrap", id)
+      : { active: false, cooldown: 0, hp: 0, maxHp: 0 };
     return {
       charge: charge?.charge ?? 0,
       heat,
@@ -2734,14 +2971,22 @@ export class CombatSystem {
       superBombReforming: this.getSuperBombRuntime(ownerId).reforming,
       superBombReformTimer: this.getSuperBombRuntime(ownerId).reformTimer,
       superBombMissingLimbs: this.getSuperBombRuntime(ownerId).missingLimbs,
-      clownKitEquipped: this.getClownKitRuntime(ownerId).equipped,
-      clownKitUsable: this.getClownKitRuntime(ownerId).usable,
-      clownKitDisabledReason: this.getClownKitRuntime(ownerId).disabledReason,
-      clownKitBalloonCooldown: this.getClownKitRuntime(ownerId).balloonCooldown,
-      clownKitStageCooldown: this.getClownKitRuntime(ownerId).stageCooldown,
-      clownKitBalloonCount: this.getClownKitRuntime(ownerId).balloonCount,
-      clownKitMonkeyCount: this.getClownKitRuntime(ownerId).monkeyCount,
-      clownKitActiveStage: this.getClownKitRuntime(ownerId).activeStage,
+      clownKitEquipped: clownKit.equipped,
+      clownKitUsable: clownKit.usable,
+      clownKitDisabledReason: clownKit.disabledReason,
+      clownKitBackBalloon: clownKit.backBalloon,
+      clownKitGlideGravityScale: clownKit.glideGravityScale,
+      clownKitMaxFallSpeed: clownKit.maxFallSpeed,
+      clownKitBalloonCooldown: clownKit.balloonCooldown,
+      clownKitBalloonCount: clownKit.balloonCount,
+      clownKitMonkeyCount: clownKit.monkeyCount,
+      petActive: focusedPet.active,
+      petCooldown: focusedPet.cooldown,
+      petHp: focusedPet.hp,
+      petMaxHp: focusedPet.maxHp,
+      petKind: focusedPet.kind,
+      petFront,
+      petBack,
     };
   }
 
@@ -5627,6 +5872,10 @@ export class CombatSystem {
       this.spawnRemoteSuperBombVisual(event, aim);
       return;
     }
+    if (isPetWeaponId(event.weaponId)) {
+      this.spawnRemotePetVisual(event, aim);
+      return;
+    }
     if (event.weaponId === "super-legs") {
       this.addEffect("stomp", event.x, event.y, event.x + aim.x * 46, event.y + aim.y * 24, colorForWeapon("super-legs"), event.label);
       return;
@@ -5641,6 +5890,39 @@ export class CombatSystem {
       return;
     }
     this.projectiles.push(this.createRemoteVisualProjectile(event, aim, speed, profile.radius ?? 6, Math.max(0.16, profile.range / speed), event.label));
+  }
+
+  private spawnRemotePetVisual(event: CombatEventPacket, aim: Vec2): void {
+    if (!isPetWeaponId(event.weaponId)) {
+      return;
+    }
+    if (event.label === "Parrot Mimic") {
+      this.projectiles.push(this.createRemoteVisualProjectile(event, aim, 620, 5, 0.75, "Parrot Mimic"));
+      return;
+    }
+    const slot: PetSlot = event.action === "secondary" ? "backStrap" : "frontStrap";
+    if (event.label.includes("Recall") || event.label.includes("Down") || event.label.includes("GONE") || event.label.includes("RECALLED")) {
+      for (const pet of [...this.pets.values()]) {
+        if (pet.ownerId === event.ownerId && pet.weaponId === event.weaponId && pet.slot === slot) {
+          this.removePet(pet.id, event.label, 0, event.ts);
+        }
+      }
+      return;
+    }
+    if (!event.label.includes("Summon")) {
+      return;
+    }
+    const owner = this.combatants.get(event.ownerId);
+    if (!owner) {
+      return;
+    }
+    this.summonPet(event.ownerId, slot, event.weaponId, {
+      x: owner.x,
+      y: owner.y,
+      width: owner.width,
+      height: owner.height,
+      facing: event.ax < 0 ? -1 : 1,
+    }, event.ts, true);
   }
 
   private spawnRemoteCrossVisual(event: CombatEventPacket, aim: Vec2): void {
@@ -5998,7 +6280,7 @@ export class CombatSystem {
       superBombReformations: [...this.superBombReformations.values()].map((state) => ({ ...state })),
       clownBalloons: this.clownBalloons.map((state) => ({ ...state, affectedTargetIds: [...state.affectedTargetIds] })),
       clownMonkeys: this.clownMonkeys.map((state) => ({ ...state })),
-      clownStages: this.clownStages.map((state) => ({ ...state })),
+      pets: [...this.pets.values()].map((state) => ({ ...state })),
       vans: this.vans,
       damageNumbers: this.damageNumbers,
       effects: this.effects,
@@ -6051,6 +6333,7 @@ export class CombatSystem {
       }
       this.applyProjectileWeaponFeedback(weapon.id, slot, context, ammoBefore);
       this.recentEvents.push(this.createEvent(context.ownerId, weapon.id, slot, this.muzzle(context.player), normalize(context.aim), weapon.name, context.now));
+      this.recordPetMimicFromAttack(context.ownerId, chargedProfile, context.aim, weapon.id);
       return { kind: "fired", weaponId: weapon.id, label: weapon.name };
     }
 
@@ -6091,6 +6374,7 @@ export class CombatSystem {
       }, "Charged Slam");
     }
     this.recentEvents.push(this.createEvent(context.ownerId, weapon.id, slot, this.muzzle(context.player), normalize(context.aim), weapon.name, context.now));
+    this.recordPetMimicFromAttack(context.ownerId, chargedProfile, context.aim, weapon.id);
     return { kind: "hitbox", weaponId: weapon.id, label: weapon.name };
   }
 
@@ -10347,11 +10631,12 @@ export class CombatSystem {
     equipped: boolean;
     usable: boolean;
     disabledReason?: string;
+    backBalloon: boolean;
+    glideGravityScale: number;
+    maxFallSpeed: number;
     balloonCooldown: number;
-    stageCooldown: number;
     balloonCount: number;
     monkeyCount: number;
-    activeStage: boolean;
   } {
     const equipped = this.hasClownKit(ownerId);
     const disabledReason = this.clownKitDisabledReason(ownerId);
@@ -10359,11 +10644,12 @@ export class CombatSystem {
       equipped,
       usable: equipped && !disabledReason,
       disabledReason,
+      backBalloon: equipped,
+      glideGravityScale: clownBackBalloonGlideScale,
+      maxFallSpeed: clownBackBalloonMaxFallSpeed,
       balloonCooldown: this.inventory.cooldowns["clown-kit"] ?? 0,
-      stageCooldown: this.clownStageCooldowns.get(ownerId) ?? 0,
       balloonCount: this.clownBalloons.filter((balloon) => balloon.ownerId === ownerId).length,
       monkeyCount: this.clownMonkeys.filter((monkey) => monkey.ownerId === ownerId).length,
-      activeStage: this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0),
     };
   }
 
@@ -10460,55 +10746,7 @@ export class CombatSystem {
     return { kind: "utility", weaponId, label };
   }
 
-  useClownKitSuper(context: WeaponUseContext): WeaponUseResult {
-    const weaponId: WeaponId = "clown-kit";
-    const blocked = this.validateClownKitUse(context.ownerId, true);
-    if (blocked) {
-      return { kind: "blocked", weaponId, label: blocked };
-    }
-    if ((this.clownStageCooldowns.get(context.ownerId) ?? 0) > 0) {
-      return { kind: "blocked", weaponId, label: "Stage cooldown" };
-    }
-    const owner = this.combatants.get(context.ownerId);
-    if (!owner) {
-      return { kind: "blocked", weaponId, label: "No clown" };
-    }
-    removeWhere(this.clownStages, (stage) => stage.ownerId === context.ownerId);
-    const center = { x: owner.x + owner.width / 2, y: DEFAULT_PHYSICS.groundY };
-    this.clownStages.push({
-      id: this.makeId("clown-stage"),
-      ownerId: context.ownerId,
-      x: center.x,
-      y: center.y,
-      timer: clownStageDuration,
-      duration: clownStageDuration,
-      age: 0,
-      pulseTimer: 0.35,
-      pulseIndex: 0,
-      finalPulse: false,
-    });
-    this.clownStageCooldowns.set(context.ownerId, clownStageCooldown);
-    owner.statuses = upsertStatusEffect(owner.statuses, createStatus("clownPerforming"));
-    owner.velocityX = 0;
-    owner.velocityY = 0;
-    this.addEffect("aura", center.x, center.y - 54, center.x, center.y - 190, "#ff5fcf", "COMEDY STAGE");
-    this.addEffect("shockwave", center.x - 120, center.y, center.x + 120, center.y, "#fff4a8", "STAGE BUILDS");
-    this.queueSound("clown-stage");
-    this.recentEvents.push(this.createEvent(context.ownerId, weaponId, "primary", center, { x: 0, y: -1 }, "Comedy Stage", context.now, {
-      range: clownStageRadius,
-    }));
-    return { kind: "utility", weaponId, label: "Comedy Stage" };
-  }
-
-  private updateClownKit(dt: number, players: PlayerPhysicsState[]): void {
-    for (const [ownerId, cooldown] of [...this.clownStageCooldowns.entries()]) {
-      const next = Math.max(0, cooldown - dt);
-      if (next <= 0) {
-        this.clownStageCooldowns.delete(ownerId);
-      } else {
-        this.clownStageCooldowns.set(ownerId, next);
-      }
-    }
+  private updateClownKit(dt: number): void {
     for (const balloon of [...this.clownBalloons]) {
       balloon.age += dt;
       balloon.timer = Math.max(0, balloon.timer - dt);
@@ -10527,9 +10765,6 @@ export class CombatSystem {
       if (monkey.timer <= 0) {
         this.popClownMonkey(monkey);
       }
-    }
-    for (const stage of [...this.clownStages]) {
-      this.updateClownStage(stage, dt, players);
     }
   }
 
@@ -10640,87 +10875,6 @@ export class CombatSystem {
     }
   }
 
-  private updateClownStage(stage: ClownStageState, dt: number, players: PlayerPhysicsState[]): void {
-    stage.age += dt;
-    stage.timer = Math.max(0, stage.timer - dt);
-    stage.pulseTimer -= dt;
-    const owner = this.combatants.get(stage.ownerId);
-    const ownerPlayer = players.find((player) => player.id === stage.ownerId);
-    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
-      this.finishClownStage(stage);
-      return;
-    }
-    owner.x = stage.x - owner.width / 2;
-    owner.y = DEFAULT_PHYSICS.groundY - owner.height;
-    owner.velocityX = 0;
-    owner.velocityY = 0;
-    owner.statuses = upsertStatusEffect(owner.statuses, { ...createStatus("clownPerforming"), duration: stage.timer });
-    if (ownerPlayer) {
-      ownerPlayer.x = owner.x;
-      ownerPlayer.y = owner.y;
-      ownerPlayer.velocityX = 0;
-      ownerPlayer.velocityY = 0;
-      ownerPlayer.grounded = true;
-    }
-    while (stage.pulseTimer <= 0 && stage.timer > 0) {
-      stage.pulseTimer += clownStagePulseEvery;
-      stage.pulseIndex += 1;
-      this.applyClownLaughWave(stage, false);
-    }
-    if (stage.timer <= 0) {
-      this.applyClownLaughWave(stage, true);
-      this.finishClownStage(stage);
-    }
-  }
-
-  private applyClownLaughWave(stage: ClownStageState, finalPulse: boolean): void {
-    const radius = finalPulse ? clownFinalRadius : clownStageRadius;
-    const damage = finalPulse ? 8 : 3 + Math.min(2, stage.pulseIndex);
-    const knockback = finalPulse ? 480 : 220 + stage.pulseIndex * 18;
-    for (const target of this.combatants.values()) {
-      if (target.id === stage.ownerId || target.hp <= 0 || target.respawnTimer > 0) {
-        continue;
-      }
-      const center = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
-      const distance = Math.hypot(center.x - stage.x, center.y - (stage.y - 50));
-      if (distance > radius + Math.max(target.width, target.height) * 0.4) {
-        continue;
-      }
-      const direction = normalize({ x: center.x - stage.x || 1, y: center.y - (stage.y - 50) || -0.1 });
-      const previousInvulnerable = target.invulnerable;
-      target.invulnerable = 0;
-      const hit = this.applyDamage({
-        sourceId: stage.ownerId,
-        targetId: target.id,
-        weaponId: "clown-kit",
-        damage,
-        knockback: { x: direction.x * knockback, y: -160 - (finalPulse ? 120 : 0) },
-        stun: finalPulse ? 0.38 : 0.18,
-        label: finalPulse ? "FINAL PUNCHLINE" : "LAUGH WAVE",
-        status: "clownLaugh",
-        skipHitLocationScaling: true,
-        skipSourceScaling: true,
-      });
-      if (!hit.applied) {
-        target.invulnerable = previousInvulnerable;
-      }
-      target.statuses = upsertStatusEffect(target.statuses, createStatus("clownLaugh"));
-    }
-    stage.finalPulse = finalPulse || stage.finalPulse;
-    this.addEffect("shockwave", stage.x, stage.y - 48, stage.x + radius, stage.y - 48, finalPulse ? "#fff4a8" : colorForWeapon("clown-kit"), finalPulse ? "FINAL PUNCHLINE" : "HA!");
-    this.queueSound("clown-laugh");
-  }
-
-  private finishClownStage(stage: ClownStageState): void {
-    removeWhere(this.clownStages, (candidate) => candidate.id === stage.id);
-    const owner = this.combatants.get(stage.ownerId);
-    if (owner) {
-      owner.statuses = owner.statuses.filter((status) => status.id !== "clownPerforming");
-      this.addEffect("spark", stage.x - 60, stage.y - 30, stage.x + 60, stage.y - 90, "#fff4a8", "CONFETTI");
-    }
-    this.queueSound("clown-pop");
-  }
-
   private clearClownKitStateForOwner(ownerId: string, dropItems: boolean): void {
     for (const monkey of [...this.clownMonkeys]) {
       if (monkey.ownerId === ownerId) {
@@ -10739,11 +10893,6 @@ export class CombatSystem {
         removeWhere(balloon.affectedTargetIds, (targetId) => targetId === ownerId);
       }
     }
-    for (const stage of [...this.clownStages]) {
-      if (stage.ownerId === ownerId) {
-        this.finishClownStage(stage);
-      }
-    }
   }
 
   private hasClownKit(ownerId: string): boolean {
@@ -10758,9 +10907,6 @@ export class CombatSystem {
     if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
       return "No clown";
     }
-    if (this.clownStages.some((stage) => stage.ownerId === ownerId && stage.timer > 0)) {
-      return "performing";
-    }
     const loadout = this.playerLoadouts.get(ownerId);
     if (loadout?.leftHand && loadout?.rightHand) {
       return "hand occupied";
@@ -10768,13 +10914,10 @@ export class CombatSystem {
     return undefined;
   }
 
-  private validateClownKitUse(ownerId: string, allowStageCheck = false): string | undefined {
+  private validateClownKitUse(ownerId: string): string | undefined {
     const disabled = this.clownKitDisabledReason(ownerId);
     if (disabled === "hand occupied") {
       return "Empty hand required";
-    }
-    if (allowStageCheck && disabled === "performing") {
-      return "Stage active";
     }
     return disabled;
   }
@@ -10895,6 +11038,527 @@ export class CombatSystem {
       })
       .filter((item) => item.distance <= 760)
       .sort((left, right) => left.distance - right.distance)[0]?.target;
+  }
+
+  getPetRuntime(ownerId: string, slot: PetSlot, weaponId: PetWeaponId): PetRuntimeState {
+    const active = this.activePetFor(ownerId, slot, weaponId);
+    if (active) {
+      return {
+        active: true,
+        cooldown: 0,
+        hp: active.hp,
+        maxHp: active.maxHp,
+        kind: active.kind,
+      };
+    }
+    const profile = petProfileForWeapon(weaponId);
+    return {
+      active: false,
+      cooldown: this.petCooldownRemaining(this.petCooldownKey(ownerId, slot, weaponId)),
+      hp: 0,
+      maxHp: profile.hp,
+      kind: profile.kind,
+    };
+  }
+
+  usePetItem(ownerId: string, slot: PetSlot, weaponId: WeaponId, player: PlayerPhysicsState, now: number): WeaponUseResult {
+    if (!isPetWeaponId(weaponId)) {
+      return { kind: "blocked", weaponId, label: "Not a pet" };
+    }
+    const equipped = this.playerLoadouts.get(ownerId)?.[slot];
+    if (equipped !== weaponId) {
+      return { kind: "blocked", weaponId, label: "Pet not equipped" };
+    }
+    const profile = petProfileForWeapon(weaponId);
+    const active = this.activePetFor(ownerId, slot, weaponId);
+    if (active) {
+      this.removePet(active.id, `${profile.name} Recall`, petRecallCooldown, now);
+      return { kind: "utility", weaponId, label: `${profile.name} Recall` };
+    }
+    const key = this.petCooldownKey(ownerId, slot, weaponId);
+    const cooldown = this.petCooldownRemaining(key, now);
+    if (cooldown > 0) {
+      return { kind: "blocked", weaponId, label: `${profile.name} cooldown` };
+    }
+    const owner = this.combatants.get(ownerId);
+    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0) {
+      return { kind: "blocked", weaponId, label: "No owner" };
+    }
+    this.summonPet(ownerId, slot, weaponId, player, now);
+    return { kind: "utility", weaponId, label: `${profile.name} Summon` };
+  }
+
+  private updatePets(dt: number): void {
+    const now = performanceNow();
+    for (const key of [...this.petCooldowns.keys()]) {
+      if (this.petCooldownRemaining(key, now) <= 0) {
+        this.petCooldowns.delete(key);
+        this.petCooldownStartedAt.delete(key);
+      }
+    }
+    for (const [ownerId, mimic] of [...this.petRecentOwnerAttacks.entries()]) {
+      const nextTimer = mimic.timer - dt;
+      if (nextTimer <= -1.4) {
+        this.petRecentOwnerAttacks.delete(ownerId);
+      } else {
+        this.petRecentOwnerAttacks.set(ownerId, { ...mimic, timer: nextTimer });
+      }
+    }
+    for (const pet of [...this.pets.values()]) {
+      this.updatePet(pet, dt, now);
+    }
+  }
+
+  private updatePet(pet: PetState, dt: number, now: number): void {
+    const owner = this.combatants.get(pet.ownerId);
+    const body = this.combatants.get(pet.id);
+    if (!owner || owner.hp <= 0 || owner.respawnTimer > 0 || !body) {
+      this.removePet(pet.id, `${petProfile(pet.kind).name} Recall`, 0, now);
+      return;
+    }
+    if (body.hp <= 0 || pet.hp <= 0) {
+      this.removePet(pet.id, `${petProfile(pet.kind).name} Down`, petProfile(pet.kind).deathCooldown, now);
+      return;
+    }
+    pet.hp = Math.min(pet.maxHp, body.hp);
+    pet.age += dt;
+    pet.attackCooldown = Math.max(0, pet.attackCooldown - dt);
+    pet.specialCooldown = Math.max(0, pet.specialCooldown - dt);
+
+    if (pet.kind === "dog") {
+      this.updateDogSupport(pet, owner, dt);
+    }
+    if (pet.kind === "deer") {
+      this.updateDeerSupport(pet, owner, dt);
+    }
+    if (pet.kind === "parrot") {
+      this.updateParrotPet(pet, owner, dt, now);
+      this.syncPetCombatant(pet);
+      return;
+    }
+    if (pet.kind === "chipmunk" && this.updateChipmunkFetch(pet, owner, dt)) {
+      this.syncPetCombatant(pet);
+      return;
+    }
+
+    const target = this.findPetTarget(pet, pet.kind === "bear", pet.kind === "chipmunk" ? 1500 : 760);
+    if (target) {
+      pet.targetId = target.id;
+      this.movePetTowardCombatant(pet, target, dt);
+      this.tryPetMelee(pet, target);
+    } else {
+      pet.targetId = undefined;
+      this.movePetTowardOwner(pet, owner, dt);
+    }
+    this.syncPetCombatant(pet);
+  }
+
+  private summonPet(ownerId: string, slot: PetSlot, weaponId: PetWeaponId, player: Pick<PlayerPhysicsState, "x" | "y" | "width" | "height" | "facing">, now: number, visualOnly = false): PetState {
+    const profile = petProfileForWeapon(weaponId);
+    for (const existing of [...this.pets.values()]) {
+      if (existing.ownerId === ownerId && existing.slot === slot) {
+        this.removePet(existing.id, `${petProfile(existing.kind).name} Recall`, 0, now);
+      }
+    }
+    const facing = player.facing || 1;
+    const side = slot === "frontStrap" ? facing : -facing;
+    const spawnX = player.x + player.width / 2 + side * (profile.kind === "bear" ? 86 : 54) - profile.width / 2;
+    const spawnY = profile.flying
+      ? player.y - 36
+      : Math.min(player.y + player.height - profile.height, DEFAULT_PHYSICS.groundY - profile.height);
+    const pet: PetState = {
+      id: visualOnly ? `remote-pet-${ownerId}-${slot}-${weaponId}` : this.makeId(`pet-${profile.kind}`),
+      ownerId,
+      slot,
+      weaponId,
+      kind: profile.kind,
+      x: spawnX,
+      y: spawnY,
+      vx: facing * 80,
+      vy: profile.flying ? -40 : -80,
+      width: profile.width,
+      height: profile.height,
+      hp: profile.hp,
+      maxHp: profile.hp,
+      age: 0,
+      attackCooldown: 0.15,
+      specialCooldown: 0,
+      state: "follow",
+      visualOnly,
+    };
+    this.pets.set(pet.id, pet);
+    this.combatants.set(pet.id, {
+      id: pet.id,
+      name: profile.name,
+      x: pet.x,
+      y: pet.y,
+      width: pet.width,
+      height: pet.height,
+      spawnX: pet.x,
+      spawnY: pet.y,
+      hp: pet.hp,
+      maxHp: pet.maxHp,
+      velocityX: pet.vx,
+      velocityY: pet.vy,
+      hitstun: 0,
+      invulnerable: 0,
+      respawnTimer: 0,
+      color: profile.color,
+      statuses: [],
+    });
+    this.addEffect("aura", pet.x + pet.width / 2, pet.y + pet.height / 2, pet.x + pet.width / 2, pet.y - 42, profile.color, `${profile.name.toUpperCase()} PET`);
+    if (!visualOnly) {
+      this.queueSound("pet-summon");
+      this.recentEvents.push(this.createEvent(ownerId, weaponId, slot === "frontStrap" ? "primary" : "secondary", {
+        x: pet.x + pet.width / 2,
+        y: pet.y + pet.height / 2,
+      }, { x: facing, y: 0 }, `${profile.name} Summon`, now));
+    }
+    return pet;
+  }
+
+  private removePet(id: string, label: string, cooldown: number | boolean = 0, now = performanceNow()): void {
+    const pet = this.pets.get(id);
+    if (!pet) {
+      return;
+    }
+    const profile = petProfile(pet.kind);
+    this.pets.delete(id);
+    this.combatants.delete(id);
+    for (const candidate of this.pets.values()) {
+      if (candidate.targetId === id) {
+        candidate.targetId = undefined;
+      }
+    }
+    const cooldownSeconds = typeof cooldown === "boolean"
+      ? cooldown ? profile.deathCooldown : 0
+      : cooldown;
+    if (cooldownSeconds > 0 && !pet.visualOnly) {
+      this.setPetCooldown(this.petCooldownKey(pet.ownerId, pet.slot, pet.weaponId), cooldownSeconds, now);
+    }
+    this.addEffect(cooldownSeconds > petRecallCooldown ? "blood" : "spark", pet.x + pet.width / 2, pet.y + pet.height / 2, pet.x + pet.width / 2, pet.y - 30, profile.color, label.toUpperCase());
+    if (!pet.visualOnly) {
+      this.queueSound(cooldownSeconds > petRecallCooldown ? "pet-down" : "pet-recall");
+      this.recentEvents.push(this.createEvent(pet.ownerId, pet.weaponId, pet.slot === "frontStrap" ? "primary" : "secondary", {
+        x: pet.x + pet.width / 2,
+        y: pet.y + pet.height / 2,
+      }, { x: 0, y: -1 }, label, now));
+    }
+  }
+
+  private clearPetsForOwner(ownerId: string, cooldown: boolean): void {
+    for (const pet of [...this.pets.values()]) {
+      if (pet.ownerId === ownerId) {
+        this.removePet(pet.id, `${petProfile(pet.kind).name} Recall`, cooldown, performanceNow());
+      }
+    }
+    for (const key of [...this.petCooldowns.keys()]) {
+      if (key.startsWith(`${ownerId}:`)) {
+        this.petCooldowns.delete(key);
+        this.petCooldownStartedAt.delete(key);
+      }
+    }
+  }
+
+  private isPetCombatant(id: string): boolean {
+    return this.pets.has(id);
+  }
+
+  private activePetFor(ownerId: string, slot: PetSlot, weaponId: PetWeaponId): PetState | undefined {
+    return [...this.pets.values()].find((pet) => pet.ownerId === ownerId && pet.slot === slot && pet.weaponId === weaponId);
+  }
+
+  private petCooldownKey(ownerId: string, slot: PetSlot, weaponId: PetWeaponId): string {
+    return `${ownerId}:${slot}:${weaponId}`;
+  }
+
+  private setPetCooldown(key: string, seconds: number, now: number): void {
+    this.petCooldowns.set(key, seconds);
+    this.petCooldownStartedAt.set(key, now);
+  }
+
+  private petCooldownRemaining(key: string, now = performanceNow()): number {
+    const seconds = this.petCooldowns.get(key) ?? 0;
+    if (seconds <= 0) {
+      return 0;
+    }
+    const startedAt = this.petCooldownStartedAt.get(key) ?? now;
+    return Math.max(0, seconds - Math.max(0, now - startedAt) / 1000);
+  }
+
+  private updateDogSupport(pet: PetState, owner: Combatant, dt: number): void {
+    const distance = Math.hypot(pet.x + pet.width / 2 - (owner.x + owner.width / 2), pet.y + pet.height / 2 - (owner.y + owner.height / 2));
+    if (distance <= 118) {
+      owner.statuses = upsertStatusEffect(owner.statuses, createStatus("petBond"));
+      if (owner.hp < owner.maxHp && owner.hitstun <= 0.02 && owner.invulnerable <= 0.02 && pet.attackCooldown <= 0.2) {
+        owner.hp = Math.min(owner.maxHp, owner.hp + dt * 0.85);
+      }
+    }
+  }
+
+  private updateDeerSupport(pet: PetState, owner: Combatant, dt: number): void {
+    const distance = Math.hypot(pet.x + pet.width / 2 - (owner.x + owner.width / 2), pet.y + pet.height / 2 - (owner.y + owner.height / 2));
+    if (distance <= 230) {
+      owner.statuses = upsertStatusEffect(owner.statuses, createStatus("petDeerAura"));
+      if (pet.specialCooldown <= 0) {
+        this.addEffect("aura", owner.x + owner.width / 2, owner.y + 18, pet.x + pet.width / 2, pet.y + 12, petColor("deer"), "DEER AURA");
+        pet.specialCooldown = 0.9 + dt;
+      }
+    }
+  }
+
+  private updateParrotPet(pet: PetState, owner: Combatant, dt: number, now: number): void {
+    const orbit = Math.sin(pet.age * 3.4) * 22;
+    const targetPoint = {
+      x: owner.x + owner.width / 2 - owner.velocityX * 0.04 + orbit,
+      y: owner.y - 58 + Math.cos(pet.age * 4.2) * 10,
+    };
+    this.movePetTowardPoint(pet, targetPoint.x, targetPoint.y, dt, 1.15, true);
+    const mimic = this.petRecentOwnerAttacks.get(pet.ownerId);
+    if (mimic) {
+      if (mimic.timer <= 0) {
+        this.spawnParrotMimic(pet, owner, mimic, now);
+        this.petRecentOwnerAttacks.delete(pet.ownerId);
+        pet.attackCooldown = Math.max(pet.attackCooldown, petProfiles.parrot.cooldown);
+      }
+      return;
+    }
+    if (pet.attackCooldown <= 0) {
+      const target = this.findPetTarget(pet, false, petProfiles.parrot.attackRange);
+      if (target) {
+        this.tryPetMelee(pet, target, {
+          ...petProfiles.parrot,
+          damage: 3,
+          knockback: 120,
+          cooldown: 1.5,
+        });
+      }
+    }
+  }
+
+  private updateChipmunkFetch(pet: PetState, owner: Combatant, dt: number): boolean {
+    const center = { x: pet.x + pet.width / 2, y: pet.y + pet.height / 2 };
+    const ownerCenter = { x: owner.x + owner.width / 2, y: owner.y + owner.height / 2 };
+    const dropped = this.droppedWeapons
+      .filter((item) => item.pickupable)
+      .map((item) => ({ item, distance: Math.hypot(item.x - center.x, item.y - center.y) }))
+      .filter((item) => item.distance <= 420)
+      .sort((left, right) => left.distance - right.distance)[0]?.item;
+    const ammo = this.ammoPickups
+      .map((item) => ({ item, distance: Math.hypot(item.x - center.x, item.y - center.y) }))
+      .filter((item) => item.distance <= 420)
+      .sort((left, right) => left.distance - right.distance)[0]?.item;
+    const target = dropped ?? ammo;
+    if (!target) {
+      return false;
+    }
+    pet.state = "fetch";
+    this.movePetTowardPoint(pet, target.x, target.y, dt, 1.25, false);
+    if (Math.hypot(target.x - center.x, target.y - center.y) <= 22) {
+      target.x = ownerCenter.x + Math.sign(owner.velocityX || owner.spawnX - pet.x || 1) * 18;
+      target.y = ownerCenter.y + 4;
+      if ("weaponId" in target) {
+        pet.carryingWeaponId = target.weaponId;
+      }
+      this.addEffect("pickup", pet.x + pet.width / 2, pet.y, ownerCenter.x, ownerCenter.y, petColor("chipmunk"), "FETCH");
+      this.queueSound("weapon-pickup");
+    }
+    return true;
+  }
+
+  private movePetTowardOwner(pet: PetState, owner: Combatant, dt: number): void {
+    const profile = petProfile(pet.kind);
+    const side = pet.slot === "frontStrap" ? -1 : 1;
+    const targetX = owner.x + owner.width / 2 + side * profile.followDistance - pet.width / 2;
+    const targetY = profile.flying ? owner.y - 54 : DEFAULT_PHYSICS.groundY - pet.height;
+    this.movePetTowardPoint(pet, targetX, targetY, dt, 0.9, Boolean(profile.flying));
+  }
+
+  private movePetTowardCombatant(pet: PetState, target: Combatant, dt: number): void {
+    const profile = petProfile(pet.kind);
+    const targetX = target.x + target.width / 2 - pet.width / 2;
+    const targetY = profile.flying ? target.y - 22 : DEFAULT_PHYSICS.groundY - pet.height;
+    this.movePetTowardPoint(pet, targetX, targetY, dt, pet.kind === "cat" || pet.kind === "chipmunk" ? 1.15 : 1, Boolean(profile.flying));
+  }
+
+  private movePetTowardPoint(pet: PetState, targetX: number, targetY: number, dt: number, speedScale: number, flying: boolean): void {
+    const profile = petProfile(pet.kind);
+    const dx = targetX - pet.x;
+    const dy = targetY - pet.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const direction = { x: dx / distance, y: dy / distance };
+    const speed = profile.speed * speedScale;
+    pet.vx = approach(pet.vx, direction.x * speed, speed * 5.2 * dt);
+    if (flying) {
+      pet.vy = approach(pet.vy, direction.y * speed, speed * 5.2 * dt);
+    } else {
+      pet.vy += DEFAULT_PHYSICS.gravity * 0.72 * dt;
+      if (Math.abs(dx) > 8 && pet.y >= DEFAULT_PHYSICS.groundY - pet.height - 1 && (pet.kind === "cat" || pet.kind === "deer")) {
+        pet.vy = Math.min(pet.vy, pet.kind === "cat" ? -260 : -190);
+      }
+    }
+    pet.x += pet.vx * dt;
+    pet.y += pet.vy * dt;
+    if (!flying) {
+      const floor = DEFAULT_PHYSICS.groundY - pet.height;
+      if (pet.y > floor) {
+        pet.y = floor;
+        pet.vy = 0;
+      }
+    }
+    pet.x = clamp(pet.x, DEFAULT_PHYSICS.platformLeft - 80, DEFAULT_PHYSICS.platformRight + 80);
+  }
+
+  private findPetTarget(pet: PetState, includeOwner: boolean, maxDistance = 760): Combatant | undefined {
+    const center = { x: pet.x + pet.width / 2, y: pet.y + pet.height / 2 };
+    return [...this.combatants.values()]
+      .filter((target) => target.hp > 0 && target.respawnTimer <= 0 && target.id !== pet.id)
+      .filter((target) => includeOwner || target.id !== pet.ownerId)
+      .filter((target) => includeOwner || this.pets.get(target.id)?.ownerId !== pet.ownerId)
+      .map((target) => ({
+        target,
+        distance: Math.hypot(target.x + target.width / 2 - center.x, target.y + target.height / 2 - center.y),
+      }))
+      .filter((item) => item.distance <= maxDistance)
+      .sort((left, right) => left.distance - right.distance)[0]?.target;
+  }
+
+  private tryPetMelee(pet: PetState, target: Combatant, override?: Partial<PetProfile>): void {
+    const profile = { ...petProfile(pet.kind), ...override };
+    if (pet.visualOnly || pet.attackCooldown > 0 || target.hp <= 0 || target.respawnTimer > 0) {
+      return;
+    }
+    const petCenter = { x: pet.x + pet.width / 2, y: pet.y + pet.height / 2 };
+    const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+    const distance = Math.hypot(targetCenter.x - petCenter.x, targetCenter.y - petCenter.y);
+    if (distance > profile.attackRange + Math.max(target.width, target.height) * 0.35) {
+      return;
+    }
+    const direction = normalize({ x: targetCenter.x - petCenter.x || 1, y: targetCenter.y - petCenter.y || -0.1 });
+    const previousInvulnerable = target.invulnerable;
+    target.invulnerable = 0;
+    const status: StatusEffectId | undefined = pet.kind === "cat"
+      ? "petMarked"
+      : pet.kind === "chipmunk"
+        ? "petStumble"
+        : pet.kind === "bear" && distance <= 34
+          ? "daze"
+          : undefined;
+    const knockback = { x: direction.x * profile.knockback, y: profile.knockbackY };
+    const label = `${profile.name} ${pet.kind === "deer" ? "Ram" : pet.kind === "chipmunk" ? "Trip" : "Hit"}`;
+    let hit: DamageResult;
+    if (pet.kind === "chipmunk" && target.hp <= 1) {
+      target.velocityX += knockback.x * COMBAT_TUNING.enemyKnockbackMultiplier;
+      target.velocityY += knockback.y * COMBAT_TUNING.enemyKnockbackMultiplier;
+      target.hitstun = Math.max(target.hitstun, profile.stun);
+      target.invulnerable = Math.max(0.24, profile.stun * 1.2);
+      target.statuses = upsertStatusEffect(target.statuses, createStatus("petStumble"));
+      this.recentEvents.push(this.createEvent(pet.id, pet.weaponId, "hit", targetCenter, direction, label, performanceNow(), {
+        targetId: target.id,
+        damage: 0,
+        kx: knockback.x,
+        ky: knockback.y,
+        stun: profile.stun,
+        status: "petStumble",
+      }));
+      hit = { applied: true, remainingHp: target.hp };
+    } else {
+      hit = this.applyDamage({
+        sourceId: pet.id,
+        targetId: target.id,
+        weaponId: pet.weaponId,
+        damage: profile.damage,
+        knockback,
+        stun: profile.stun,
+        label,
+        status,
+        skipHitLocationScaling: true,
+        skipSourceScaling: true,
+      });
+    }
+    if (!hit.applied) {
+      target.invulnerable = previousInvulnerable;
+    }
+    pet.attackCooldown = profile.cooldown;
+    if (pet.kind === "cat") {
+      pet.vx -= direction.x * 220;
+      pet.vy = Math.min(pet.vy, -160);
+    }
+    this.addEffect(pet.kind === "deer" ? "stomp" : pet.kind === "chipmunk" ? "trip" : "spark", targetCenter.x, targetCenter.y, targetCenter.x + direction.x * 34, targetCenter.y - 18, profile.color, profile.name.toUpperCase());
+    this.queueSound("pet-attack");
+  }
+
+  private spawnParrotMimic(
+    pet: PetState,
+    owner: Combatant,
+    mimic: { damage: number; knockback: number; aim: Vec2; weaponId: WeaponId },
+    now: number,
+  ): void {
+    const aim = normalize(mimic.aim.x || mimic.aim.y ? mimic.aim : { x: Math.sign(owner.velocityX || 1), y: -0.08 });
+    const start = { x: pet.x + pet.width / 2, y: pet.y + pet.height / 2 };
+    const friendlyPetIds = [...this.pets.values()]
+      .filter((candidate) => candidate.ownerId === pet.ownerId)
+      .map((candidate) => candidate.id);
+    for (const offset of [-0.08, 0.08]) {
+      const featherAim = normalize({ x: aim.x, y: aim.y + offset });
+      this.projectiles.push({
+        id: this.makeId("pet-parrot-mimic"),
+        ownerId: pet.ownerId,
+        weaponId: pet.weaponId,
+        x: start.x,
+        y: start.y - 12 + offset * 80,
+        vx: featherAim.x * 620,
+        vy: featherAim.y * 620,
+        radius: 4,
+        damage: Math.max(1, Math.round(mimic.damage * 0.24)),
+        knockback: { x: featherAim.x * Math.max(60, mimic.knockback * 0.2), y: featherAim.y * Math.max(55, mimic.knockback * 0.16) - 50 },
+        stun: 0.08,
+        age: 0,
+        lifetime: 2.2,
+        gravity: 0,
+        bounces: 0,
+        pierce: 1,
+        label: "Parrot Mimic",
+        color: petColor("parrot"),
+        trailColor: "#fff4a8",
+        hits: [...friendlyPetIds],
+      });
+    }
+    this.addEffect("muzzle", start.x, start.y, start.x + aim.x * 42, start.y + aim.y * 24, petColor("parrot"), "ECHO");
+    this.queueSound("pet-attack");
+    this.recentEvents.push(this.createEvent(pet.ownerId, pet.weaponId, "primary", start, aim, "Parrot Mimic", now));
+  }
+
+  private recordPetMimicFromAttack(ownerId: string, profile: AttackProfile, aim: Vec2, weaponId: WeaponId): void {
+    if (profile.damage <= 0 || isPetWeaponId(weaponId)) {
+      return;
+    }
+    const hasParrot = [...this.pets.values()].some((pet) => pet.ownerId === ownerId && pet.kind === "parrot" && !pet.visualOnly);
+    if (!hasParrot) {
+      return;
+    }
+    this.petRecentOwnerAttacks.set(ownerId, {
+      damage: profile.damage,
+      knockback: profile.knockback,
+      aim: normalize(aim.x || aim.y ? aim : { x: 1, y: 0 }),
+      timer: petParrotMimicDelay,
+      weaponId,
+    });
+  }
+
+  private syncPetCombatant(pet: PetState): void {
+    const combatant = this.combatants.get(pet.id);
+    if (!combatant) {
+      return;
+    }
+    combatant.x = pet.x;
+    combatant.y = pet.y;
+    combatant.width = pet.width;
+    combatant.height = pet.height;
+    combatant.velocityX = pet.vx;
+    combatant.velocityY = pet.vy;
+    combatant.hp = Math.min(combatant.hp, pet.maxHp);
+    pet.hp = combatant.hp;
   }
 
   private useTridentCreatureAbility(context: WeaponUseContext, slot: "primary" | "secondary", state: TridentTransformationState): WeaponUseResult {
@@ -13161,6 +13825,18 @@ function colorForWeapon(id: WeaponId): string {
       return "#ff6f91";
     case "clown-kit":
       return "#ff5fcf";
+    case "pet-bear":
+      return petColor("bear");
+    case "pet-cat":
+      return petColor("cat");
+    case "pet-dog":
+      return petColor("dog");
+    case "pet-deer":
+      return petColor("deer");
+    case "pet-parrot":
+      return petColor("parrot");
+    case "pet-chipmunk":
+      return petColor("chipmunk");
     case "hands":
       return "#b8ffd0";
     case "super-legs":
@@ -13168,6 +13844,35 @@ function colorForWeapon(id: WeaponId): string {
     default:
       return "#ffffff";
   }
+}
+
+function petKindForWeapon(id: PetWeaponId): PetKind {
+  switch (id) {
+    case "pet-bear":
+      return "bear";
+    case "pet-cat":
+      return "cat";
+    case "pet-dog":
+      return "dog";
+    case "pet-deer":
+      return "deer";
+    case "pet-parrot":
+      return "parrot";
+    case "pet-chipmunk":
+      return "chipmunk";
+  }
+}
+
+function petProfile(kind: PetKind): PetProfile {
+  return petProfiles[kind];
+}
+
+function petProfileForWeapon(id: PetWeaponId): PetProfile {
+  return petProfile(petKindForWeapon(id));
+}
+
+function petColor(kind: PetKind): string {
+  return petProfile(kind).color;
 }
 
 function macheteRedness(state: MacheteGrowthState): number {
@@ -13346,10 +14051,14 @@ function createStatus(id: StatusEffectId): StatusEffect {
       return { id, label: "Flower Stun", duration: 5, stacks: 1 };
     case "clownDistortion":
       return { id, label: "Balloon Distortion", duration: clownBalloonDuration, stacks: 1 };
-    case "clownLaugh":
-      return { id, label: "Laughing", duration: 3.5, stacks: 1, tickDamage: 1, tickEvery: 0.7, tickTimer: 0.7 };
-    case "clownPerforming":
-      return { id, label: "Performing", duration: clownStageDuration, stacks: 1 };
+    case "petMarked":
+      return { id, label: "Pet Mark", duration: 6.5, stacks: 1 };
+    case "petStumble":
+      return { id, label: "Stumbled", duration: 0.65, stacks: 1 };
+    case "petDeerAura":
+      return { id, label: "Deer Aura", duration: 0.4, stacks: 1 };
+    case "petBond":
+      return { id, label: "Dog Bond", duration: 0.65, stacks: 1 };
     case "neptuneStuck":
       return {
         id,

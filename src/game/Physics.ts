@@ -38,6 +38,8 @@ export interface PhysicsConfig {
   doubleJumpVelocity: number;
   thirdJumpVelocity?: number;
   maxAirJumps?: number;
+  maxFallSpeed?: number;
+  heldJumpGravityScale?: number;
   coyoteTime: number;
   jumpBufferTime: number;
   slideSpeed: number;
@@ -329,7 +331,13 @@ export function stepPlayer(
       }
       next.velocityY = clamp(next.velocityY, wings.maxRiseSpeed, wings.maxFallSpeed);
     } else {
-      next.velocityY += config.gravity * dt;
+      const heldFallScale = config.heldJumpGravityScale && input.jumpHeld && next.velocityY > 0
+        ? config.heldJumpGravityScale
+        : 1;
+      next.velocityY += config.gravity * heldFallScale * dt;
+      if (typeof config.maxFallSpeed === "number") {
+        next.velocityY = Math.min(next.velocityY, config.maxFallSpeed);
+      }
     }
   }
   next.x += next.velocityX * dt;

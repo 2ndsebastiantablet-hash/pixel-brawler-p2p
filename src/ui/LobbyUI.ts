@@ -497,13 +497,17 @@ export class LobbyUI {
       figure.append(arm);
     }
     if (hasClownKit) {
+      const balloon = document.createElement("span");
+      balloon.className = "loadout-clown-balloon";
+      const string = document.createElement("span");
+      string.className = "loadout-clown-balloon-string";
       const mask = document.createElement("span");
       mask.className = "loadout-clown-mask";
       const leftGlove = document.createElement("span");
       leftGlove.className = "loadout-clown-glove left";
       const rightGlove = document.createElement("span");
       rightGlove.className = "loadout-clown-glove right";
-      figure.append(mask, leftGlove, rightGlove);
+      figure.append(balloon, string, mask, leftGlove, rightGlove);
     }
 
     for (const target of targets) {
@@ -672,6 +676,7 @@ export class LobbyUI {
       { id: "mobility", label: "Move" },
       { id: "space", label: "Space" },
       { id: "summons", label: "Summon" },
+      { id: "pets", label: "Pets" },
       { id: "consumables", label: "Items" },
       { id: "utility", label: "Utility" },
     ];
@@ -695,10 +700,11 @@ export class LobbyUI {
     const search = root.querySelector<HTMLInputElement>("[data-loadout-search]")?.value.trim().toLowerCase() ?? "";
     container.replaceChildren();
     const items = LOADOUT_ITEMS.filter((item) => {
+      const matchesCategory = this.selectedLoadoutCategory === "all" || item.category === this.selectedLoadoutCategory;
       const matchesSearch = !search
         || item.name.toLowerCase().includes(search)
         || item.summary.toLowerCase().includes(search);
-      return matchesSearch;
+      return matchesCategory && matchesSearch;
     });
 
     for (const item of items) {
@@ -1143,6 +1149,18 @@ function colorForLoadoutItem(id: WeaponId): string {
       return "#f2f2f2";
     case "clown-kit":
       return "#ff5fcf";
+    case "pet-bear":
+      return "#9f6a3d";
+    case "pet-cat":
+      return "#c8c4d8";
+    case "pet-dog":
+      return "#d69a52";
+    case "pet-deer":
+      return "#ffd48a";
+    case "pet-parrot":
+      return "#48d86b";
+    case "pet-chipmunk":
+      return "#c98748";
     case "van":
       return "#f2f2f2";
     case "hands":
